@@ -345,6 +345,7 @@ export class Game3D {
 
     this.buildSkyAndAtmosphere(theme, this.arenaHalfSize);
     this.buildArena(mapCfg);
+    this.rebuildHitboxList();
     this.minimap?.setMap(mapCfg);
     this.renderer.shadowMap.needsUpdate = true;
   }
@@ -1094,10 +1095,10 @@ export class Game3D {
   }
 
   spawnTracerEffect(origin, hitPoint, colorHex = 0xfef08a, isPlayerHit = false, hitNormal = null) {
-    const start = new THREE.Vector3(origin.x, origin.y, origin.z);
-    const end = new THREE.Vector3(hitPoint.x, hitPoint.y, hitPoint.z);
+    this.tmpVec3A.set(origin.x, origin.y, origin.z);
+    this.tmpVec3B.set(hitPoint.x, hitPoint.y, hitPoint.z);
 
-    const geo = new THREE.BufferGeometry().setFromPoints([start, end]);
+    const geo = new THREE.BufferGeometry().setFromPoints([this.tmpVec3A, this.tmpVec3B]);
     const mat = new THREE.LineBasicMaterial({
       color: colorHex,
       transparent: true,
@@ -1112,19 +1113,25 @@ export class Game3D {
       transparent: true,
       opacity: 1
     });
-    const spark = new THREE.Mesh(this.sharedHitOrbGeo, sparkMat);
-    spark.position.copy(end);
+    if (!this.sparkMeshPool) this.sparkMeshPool = [];
+    const spark = this.sparkMeshPool.pop() || new THREE.Mesh(this.sharedHitOrbGeo, sparkMat);
+    spark.geometry = this.sharedHitOrbGeo;
+    spark.material = sparkMat;
+    spark.position.copy(this.tmpVec3B);
     spark.scale.setScalar(isPlayerHit ? 1.45 : 0.95);
     this.scene.add(spark);
 
     const particles = [];
     const pCount = isPlayerHit ? 5 : 3;
+    const nx = hitNormal ? hitNormal.x : 0;
+    const ny = hitNormal ? hitNormal.y : 1;
+    const nz = hitNormal ? hitNormal.z : 0;
     for (let i = 0; i < pCount; i++) {
-      const pMesh = new THREE.Mesh(this.sharedSparkGeo, sparkMat);
-      pMesh.position.copy(end);
-      const nx = hitNormal ? hitNormal.x : 0;
-      const ny = hitNormal ? hitNormal.y : 1;
-      const nz = hitNormal ? hitNormal.z : 0;
+      const pMesh = this.sparkMeshPool.pop() || new THREE.Mesh(this.sharedSparkGeo, sparkMat);
+      pMesh.geometry = this.sharedSparkGeo;
+      pMesh.material = sparkMat;
+      pMesh.scale.setScalar(1);
+      pMesh.position.copy(this.tmpVec3B);
       particles.push({
         mesh: pMesh,
         vx: nx * 3.5 + (Math.random() - 0.5) * 5.5,
@@ -1292,7 +1299,9 @@ export class Game3D {
     const isMovingWhileShooting = horizSpeed > 0.95 || !this.onGround;
     const spreadAmount = isMelee ? 0 : this.computeEffectiveSpread(cfg);
 
-    this.rebuildHitboxList();
+    if (this.rayTargets.length === 0) {
+      this.rebuildHitboxList();
+    }
     const hits = [];
     let primaryHitPoint = null;
 
@@ -1716,6 +1725,7 @@ export class Game3D {
     this.position.y += this.velocity.y * dt;
 
     const radius = MATCH_CONFIG.PLAYER_RADIUS;
+    const radiusSq = radius * radius;
     const playerHeight = this.prone
       ? (MATCH_CONFIG.PLAYER_PRONE_HEIGHT || 0.58)
       : this.isSliding
@@ -1728,24 +1738,24 @@ export class Game3D {
 
     for (let i = 0; i < obstacles.length; i++) {
       const box = obstacles[i];
-      const halfW = box.w / 2;
-      const halfH = box.h / 2;
-      const halfD = box.d / 2;
+      const minX = box.minX !== undefined ? box.minX : box.x - box.w * 0.5;
+      const maxX = box.maxX !== undefined ? box.maxX : box.x + box.w * 0.5;
+      if (this.position.x + radius <= minX || this.position.x - radius >= maxX) continue;
 
-      const minX = box.x - halfW;
-      const maxX = box.x + halfW;
-      const minZ = box.z - halfD;
-      const maxZ = box.z + halfD;
-      const topY = box.y + halfH;
-      const bottomY = box.y - halfH;
+      const minZ = box.minZ !== undefined ? box.minZ : box.z - box.d * 0.5;
+      const maxZ = box.maxZ !== undefined ? box.maxZ : box.z + box.d * 0.5;
+      if (this.position.z + radius <= minZ || this.position.z - radius >= maxZ) continue;
 
-      const closestX = Math.max(minX, Math.min(this.position.x, maxX));
-      const closestZ = Math.max(minZ, Math.min(this.position.z, maxZ));
+      const topY = box.maxY !== undefined ? box.maxY : box.y + box.h * 0.5;
+      const bottomY = box.minY !== undefined ? box.minY : box.y - box.h * 0.5;
+
+      const closestX = this.position.x < minX ? minX : this.position.x > maxX ? maxX : this.position.x;
+      const closestZ = this.position.z < minZ ? minZ : this.position.z > maxZ ? maxZ : this.position.z;
       const dx = this.position.x - closestX;
       const dz = this.position.z - closestZ;
       const distSq = dx * dx + dz * dz;
 
-      if (distSq < radius * radius) {
+      if (distSq < radiusSq) {
         if (this.position.y + 0.52 >= topY && this.velocity.y <= 2.2) {
           if (topY > highestFloor) {
             highestFloor = topY;
@@ -2257,9 +2267,16 @@ export class Game3D {
         } else {
           this.scene.remove(fx.line);
           this.scene.remove(fx.spark);
+          if (this.sparkMeshPool && this.sparkMeshPool.length < 64) {
+            this.sparkMeshPool.push(fx.spark);
+          }
           if (fx.particles) {
             for (let p = 0; p < fx.particles.length; p++) {
-              this.scene.remove(fx.particles[p].mesh);
+              const pm = fx.particles[p].mesh;
+              this.scene.remove(pm);
+              if (this.sparkMeshPool && this.sparkMeshPool.length < 64) {
+                this.sparkMeshPool.push(pm);
+              }
             }
           }
           fx.geo.dispose();

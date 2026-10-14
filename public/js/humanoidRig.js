@@ -236,18 +236,17 @@ export function createRemotePlayerMesh(playerData, options = {}) {
   upperBodyGroup.add(headGroup);
 
   // Generous Headshot Collider Capsule enveloping the entire cranium & helmet
-  const headGeo = new THREE.CapsuleGeometry(0.185, 0.14, 12, 16);
+  const headGeo = new THREE.CapsuleGeometry(0.195, 0.15, 10, 14);
   const headMesh = new THREE.Mesh(headGeo, suitMat);
-  headMesh.position.set(0, 0.21, 0); // World y = 1.75
+  headMesh.position.set(0, 0.22, 0); // World y = 1.76
   headMesh.castShadow = true;
   tagHeadHitbox(headMesh);
   headGroup.add(headMesh);
 
   // Smooth Contoured Ballistic Helmet Shell
-  const helmetDome = new THREE.Mesh(new THREE.SphereGeometry(0.196, 18, 14), armorMat);
+  const helmetDome = new THREE.Mesh(new THREE.SphereGeometry(0.196, 16, 12), armorMat);
   helmetDome.scale.set(0.96, 1.04, 1.08);
   helmetDome.position.set(0, 0.24, 0.01);
-  tagHeadHitbox(helmetDome);
 
   // Aerodynamic Crown Ridge & Forehead NVG Shroud
   const helmetCrest = new THREE.Mesh(new THREE.CapsuleGeometry(0.032, 0.22, 8, 12), mainMat);
@@ -261,11 +260,10 @@ export function createRemotePlayerMesh(playerData, options = {}) {
 
   // Wrap-Around Curved Panoramic Glowing Visor (Faces -Z forward)
   const visorMesh = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.186, 0.178, 0.092, 18, 1, false, Math.PI * 0.60, Math.PI * 0.80),
+    new THREE.CylinderGeometry(0.186, 0.178, 0.092, 16, 1, false, Math.PI * 0.60, Math.PI * 0.80),
     visorMat
   );
   visorMesh.position.set(0, 0.23, -0.02);
-  tagHeadHitbox(visorMesh);
 
   // Sculpted Jawline, Cheek Guards & Tactical Respirator Mask
   const jawMask = new THREE.Mesh(new THREE.CylinderGeometry(0.135, 0.102, 0.13, 14), armorMat);

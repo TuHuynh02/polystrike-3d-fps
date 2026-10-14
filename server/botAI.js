@@ -19,35 +19,39 @@ const BOT_NAMES = [
   '[BOT] Frost'
 ];
 
+const _botEye = { x: 0, y: 0, z: 0 };
+const _otherEye = { x: 0, y: 0, z: 0 };
+
 /**
  * Resolves 3D circle-vs-AABB horizontal collision and floor height for Server Bots
  */
 export function resolveEntityPhysics(entity, radius = 0.45, mapCfg = null) {
   const cfg = mapCfg || getMapConfig();
   const obstacles = cfg.obstacles;
+  const radiusSq = radius * radius;
   let groundY = 0;
 
   for (let i = 0; i < obstacles.length; i++) {
     const box = obstacles[i];
-    const halfW = box.w / 2;
-    const halfH = box.h / 2;
-    const halfD = box.d / 2;
+    const minX = box.minX !== undefined ? box.minX : box.x - box.w * 0.5;
+    const maxX = box.maxX !== undefined ? box.maxX : box.x + box.w * 0.5;
+    if (entity.x + radius <= minX || entity.x - radius >= maxX) continue;
 
-    const minX = box.x - halfW;
-    const maxX = box.x + halfW;
-    const minZ = box.z - halfD;
-    const maxZ = box.z + halfD;
-    const topY = box.y + halfH;
-    const bottomY = box.y - halfH;
+    const minZ = box.minZ !== undefined ? box.minZ : box.z - box.d * 0.5;
+    const maxZ = box.maxZ !== undefined ? box.maxZ : box.z + box.d * 0.5;
+    if (entity.z + radius <= minZ || entity.z - radius >= maxZ) continue;
+
+    const topY = box.maxY !== undefined ? box.maxY : box.y + box.h * 0.5;
+    const bottomY = box.minY !== undefined ? box.minY : box.y - box.h * 0.5;
 
     // Check if entity is horizontally within or touching box
-    const closestX = Math.max(minX, Math.min(entity.x, maxX));
-    const closestZ = Math.max(minZ, Math.min(entity.z, maxZ));
+    const closestX = entity.x < minX ? minX : entity.x > maxX ? maxX : entity.x;
+    const closestZ = entity.z < minZ ? minZ : entity.z > maxZ ? maxZ : entity.z;
     const dx = entity.x - closestX;
     const dz = entity.z - closestZ;
     const distSq = dx * dx + dz * dz;
 
-    if (distSq < radius * radius) {
+    if (distSq < radiusSq) {
       // Can step up onto this surface if topY is at most 0.55m above current foot y
       if (entity.y + 0.55 >= topY && bottomY <= entity.y + 1.6) {
         if (topY > groundY) {
@@ -147,12 +151,11 @@ export function createBotEntity(index, spawnPoint, mapCfg = null) {
  * Updates all bots in a room for one tick (dt in seconds)
  */
 export function updateRoomBots(room, dt, now, callbacks) {
-  const allPlayers = Array.from(room.players.values());
   const mapCfg = getMapConfig(room.mapId);
   const waypoints = mapCfg.botWaypoints;
   const obstacles = mapCfg.obstacles;
 
-  for (const bot of allPlayers) {
+  for (const bot of room.players.values()) {
     if (!bot.isBot) continue;
 
     if (!bot.alive) {
@@ -189,24 +192,27 @@ export function updateRoomBots(room, dt, now, callbacks) {
 
       // Find nearest visible enemy (skipping players with active spawn invulnerability)
       let bestTarget = null;
-      let bestDist = Infinity;
-      const botEye = { x: bot.x, y: bot.y + 1.5, z: bot.z };
+      let bestDist = weaponCfg.range * 0.9;
+      _botEye.x = bot.x;
+      _botEye.y = bot.y + 1.5;
+      _botEye.z = bot.z;
 
-      for (const other of allPlayers) {
+      for (const other of room.players.values()) {
         if (other.id === bot.id || !other.alive) continue;
         if (other.invulnerableUntil && now < other.invulnerableUntil) continue;
         const dx = other.x - bot.x;
         const dy = other.y - bot.y;
         const dz = other.z - bot.z;
         const dist = Math.hypot(dx, dy, dz);
-        if (dist > weaponCfg.range * 0.9) continue;
+        // Reject candidates farther than current best visible target BEFORE running raycast LOS
+        if (dist >= bestDist) continue;
 
-        const otherEye = { x: other.x, y: other.y + 1.35, z: other.z };
-        if (hasLineOfSight(botEye, otherEye, obstacles)) {
-          if (dist < bestDist) {
-            bestDist = dist;
-            bestTarget = other;
-          }
+        _otherEye.x = other.x;
+        _otherEye.y = other.y + 1.35;
+        _otherEye.z = other.z;
+        if (hasLineOfSight(_botEye, _otherEye, obstacles)) {
+          bestDist = dist;
+          bestTarget = other;
         }
       }
       bot.targetId = bestTarget ? bestTarget.id : null;
@@ -282,10 +288,15 @@ export function updateRoomBots(room, dt, now, callbacks) {
         bot.ammo > 0 &&
         now - bot.lastShotAt >= Math.max(weaponCfg.fireRateMs * 1.65, 230)
       ) {
-        const botEye = { x: bot.x, y: bot.y + 1.5, z: bot.z };
-        const targetChest = { x: target.x, y: target.y + 1.25, z: target.z };
+        _botEye.x = bot.x;
+        _botEye.y = bot.y + 1.5;
+        _botEye.z = bot.z;
+        _otherEye.x = target.x;
+        _otherEye.y = target.y + 1.25;
+        _otherEye.z = target.z;
 
-        if (hasLineOfSight(botEye, targetChest, obstacles)) {
+        if (hasLineOfSight(_botEye, _otherEye, obstacles)) {
+          const botEye = { x: _botEye.x, y: _botEye.y, z: _botEye.z };
           bot.lastShotAt = now;
           bot.ammo = Math.max(0, bot.ammo - 1);
           if (bot.ammoByWeapon) bot.ammoByWeapon[bot.weapon] = bot.ammo;

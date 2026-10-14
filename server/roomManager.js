@@ -443,6 +443,11 @@ export class RoomManager {
       x: spawn.x,
       y: spawn.y || 0,
       z: spawn.z,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      lastMoveAt: now,
+      lastMoveSeq: 0,
       yaw: spawn.yaw || 0,
       pitch: 0,
       crouching: false,
@@ -643,9 +648,17 @@ export class RoomManager {
   }
 
   handlePlayerMove(room, player, payload) {
-    if (!room || !player || !player.alive || room.state !== 'PLAYING') return;
+    if (!room || !player || !player.alive || room.state !== 'PLAYING' || !payload) return;
+
+    if (typeof payload.seq === 'number') {
+      if (player.lastMoveSeq && payload.seq <= player.lastMoveSeq && (player.lastMoveSeq - payload.seq) < 1000) {
+        return; // Drop out-of-order movement packet
+      }
+      player.lastMoveSeq = payload.seq;
+    }
 
     const now = Date.now();
+    player.lastMoveAt = now;
     this.syncPlayerReloadState(player, now);
 
     const mapCfg = getMapConfig(room.mapId);
@@ -658,6 +671,16 @@ export class RoomManager {
     }
     if (typeof payload.z === 'number' && Number.isFinite(payload.z)) {
       player.z = Math.max(-limit, Math.min(limit, payload.z));
+    }
+    const maxSpeed = (MATCH_CONFIG.SLIDE_INITIAL_SPEED || 11.2) * 1.35;
+    if (typeof payload.vx === 'number' && Number.isFinite(payload.vx)) {
+      player.vx = Math.max(-maxSpeed, Math.min(maxSpeed, payload.vx));
+    }
+    if (typeof payload.vy === 'number' && Number.isFinite(payload.vy)) {
+      player.vy = Math.max(-30, Math.min(25, payload.vy));
+    }
+    if (typeof payload.vz === 'number' && Number.isFinite(payload.vz)) {
+      player.vz = Math.max(-maxSpeed, Math.min(maxSpeed, payload.vz));
     }
     if (typeof payload.yaw === 'number' && Number.isFinite(payload.yaw)) {
       player.yaw = payload.yaw;
@@ -1128,6 +1151,9 @@ export class RoomManager {
     player.x = sp.x;
     player.y = sp.y || 0;
     player.z = sp.z;
+    player.vx = 0;
+    player.vy = 0;
+    player.vz = 0;
     player.yaw = sp.yaw || 0;
     player.pitch = 0;
     player.crouching = false;
@@ -1283,20 +1309,28 @@ export class RoomManager {
     const now = Date.now();
     const list = [];
     for (const p of room.players.values()) {
+      if (!p.alive || (!p.isBot && p.lastMoveAt && now - p.lastMoveAt > 120)) {
+        p.vx = 0;
+        p.vy = 0;
+        p.vz = 0;
+      }
       const invulnerable = Boolean(p.alive && p.invulnerableUntil && now < p.invulnerableUntil);
       list.push({
         id: p.id,
         name: p.name,
         isBot: p.isBot,
         color: p.color,
-        x: Number(p.x.toFixed(2)),
-        y: Number(p.y.toFixed(2)),
-        z: Number(p.z.toFixed(2)),
-        yaw: Number(p.yaw.toFixed(3)),
-        pitch: Number(p.pitch.toFixed(3)),
+        x: Math.round(p.x * 100) / 100,
+        y: Math.round(p.y * 100) / 100,
+        z: Math.round(p.z * 100) / 100,
+        vx: Math.round((p.vx || 0) * 100) / 100,
+        vy: Math.round((p.vy || 0) * 100) / 100,
+        vz: Math.round((p.vz || 0) * 100) / 100,
+        yaw: Math.round(p.yaw * 1000) / 1000,
+        pitch: Math.round(p.pitch * 1000) / 1000,
         crouching: Boolean(p.crouching),
         prone: Boolean(p.prone),
-        lean: Number((p.lean || 0).toFixed(2)),
+        lean: Math.round((p.lean || 0) * 100) / 100,
         weapon: p.weapon,
         ammo: p.ammo,
         reserveAmmo: p.reserveAmmo ?? 0,
@@ -1318,6 +1352,9 @@ export class RoomManager {
     this.lastTickAt = now;
 
     for (const room of this.rooms.values()) {
+      // Skip idle rooms with zero human players to save 100% CPU when no match is active
+      if (this.getHumanCount(room) === 0) continue;
+
       if (room.state === 'ENDED') {
         if (now >= room.nextMatchAt) {
           this.startNewMatch(room);
@@ -1343,11 +1380,15 @@ export class RoomManager {
         }
       }
 
+      if (!room._botCallbacks) {
+        room._botCallbacks = {
+          onRespawnPlayer: (bot) => this.respawnPlayer(room, bot),
+          onBotShoot: (bot, shotPayload) => this.handleShoot(room, bot, shotPayload)
+        };
+      }
+
       // Update Bot AI movement & shooting
-      updateRoomBots(room, dt, now, {
-        onRespawnPlayer: (bot) => this.respawnPlayer(room, bot),
-        onBotShoot: (bot, shotPayload) => this.handleShoot(room, bot, shotPayload)
-      });
+      updateRoomBots(room, dt, now, room._botCallbacks);
 
       // Update Health Pack pickups & 5s Dropped Weapons expiration
       this.updateHealthPacks(room, now);

@@ -145,6 +145,21 @@ let nextMatchInterval = null;
 let spawnShieldInterval = null;
 let spawnShieldTimeout = null;
 
+const hudCache = {
+  hp: -1,
+  timerSec: -1,
+  kills: -1,
+  deaths: -1,
+  streak: -1,
+  leaderText: '',
+  speed: '',
+  stance: '',
+  chGap: -1,
+  chAiming: null,
+  chMoving: null,
+  chRecoiling: null
+};
+
 // Restore saved player name if available
 const savedName = localStorage.getItem('polystrike_name');
 if (savedName) {
@@ -249,14 +264,35 @@ const game = new Game3D(canvasContainer, {
     const moveBonusPx = isMoving ? 10 : 0;
     const kickPx = Math.round((crosshairKick || 0) * 280);
     const gapPx = Math.max(2, Math.min(44, Math.round(effectiveSpread * 340) + moveBonusPx + kickPx));
-    crosshair.style.setProperty('--ch-gap', `${gapPx}px`);
-    crosshair.classList.toggle('aiming', Boolean(isAiming));
-    crosshair.classList.toggle('moving', Boolean(isMoving));
-    crosshair.classList.toggle('recoiling', kickPx >= 3);
+    const aimingBool = Boolean(isAiming);
+    const movingBool = Boolean(isMoving);
+    const recoilingBool = kickPx >= 3;
+
+    if (hudCache.chGap !== gapPx) {
+      hudCache.chGap = gapPx;
+      crosshair.style.setProperty('--ch-gap', `${gapPx}px`);
+    }
+    if (hudCache.chAiming !== aimingBool) {
+      hudCache.chAiming = aimingBool;
+      crosshair.classList.toggle('aiming', aimingBool);
+    }
+    if (hudCache.chMoving !== movingBool) {
+      hudCache.chMoving = movingBool;
+      crosshair.classList.toggle('moving', movingBool);
+    }
+    if (hudCache.chRecoiling !== recoilingBool) {
+      hudCache.chRecoiling = recoilingBool;
+      crosshair.classList.toggle('recoiling', recoilingBool);
+    }
   },
   onMovementHudUpdate: (stance, speed) => {
-    if (hudSpeed) hudSpeed.textContent = speed.toFixed(1);
-    if (hudStance) {
+    const speedStr = speed.toFixed(1);
+    if (hudSpeed && hudCache.speed !== speedStr) {
+      hudCache.speed = speedStr;
+      hudSpeed.textContent = speedStr;
+    }
+    if (hudStance && hudCache.stance !== stance) {
+      hudCache.stance = stance;
       const labels = {
         WALK: '🏃 WALK',
         SPRINT: '⚡ SPRINT',
@@ -362,9 +398,12 @@ async function copyInviteLinkToClipboard() {
   }
 }
 
-// Helper: Update HUD Health
+// Helper: Update HUD Health (diff-cached to avoid redundant style recalculations)
 function updateHpHud(hp) {
   const cleanHp = Math.max(0, Math.min(100, Math.round(hp)));
+  if (hudCache.hp === cleanHp) return;
+  hudCache.hp = cleanHp;
+
   hudHpValue.textContent = String(cleanHp);
   hudHpBar.style.width = `${ cleanHp }%`;
 
@@ -1000,7 +1039,11 @@ socket.on('mapChanged', (data) => {
 
 socket.on('stateUpdate', (snapshot) => {
   if (!game.inMatch) return;
-  hudTimer.textContent = formatTime(snapshot.timeRemaining);
+  const remSec = Math.max(0, Math.floor(snapshot.timeRemaining || 0));
+  if (hudCache.timerSec !== remSec) {
+    hudCache.timerSec = remSec;
+    hudTimer.textContent = formatTime(remSec);
+  }
   latestPlayers = snapshot.players || [];
   game.syncPlayersState(latestPlayers);
   if (Array.isArray(snapshot.droppedWeapons)) {
@@ -1014,15 +1057,28 @@ socket.on('stateUpdate', (snapshot) => {
       topPlayer = p;
     }
     if (p.id === game.localId) {
-      hudKills.textContent = String(p.kills);
-      hudDeaths.textContent = String(p.deaths);
-      hudStreak.textContent = String(p.streak);
+      if (hudCache.kills !== p.kills) {
+        hudCache.kills = p.kills;
+        hudKills.textContent = String(p.kills);
+      }
+      if (hudCache.deaths !== p.deaths) {
+        hudCache.deaths = p.deaths;
+        hudDeaths.textContent = String(p.deaths);
+      }
+      if (hudCache.streak !== p.streak) {
+        hudCache.streak = p.streak;
+        hudStreak.textContent = String(p.streak);
+      }
       updateHpHud(p.hp);
     }
   }
 
   if (topPlayer) {
-    hudLeader.textContent = `Dẫn đầu: ${ topPlayer.name } (${ topPlayer.kills }/${ hudKillLimit.textContent } Kills)`;
+    const nextLeaderText = `Dẫn đầu: ${ topPlayer.name } (${ topPlayer.kills }/${ hudKillLimit.textContent } Kills)`;
+    if (hudCache.leaderText !== nextLeaderText) {
+      hudCache.leaderText = nextLeaderText;
+      hudLeader.textContent = nextLeaderText;
+    }
   }
 
   if (!scoreboardModal.classList.contains('hidden')) {

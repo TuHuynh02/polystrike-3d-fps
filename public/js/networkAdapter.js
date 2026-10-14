@@ -58,29 +58,6 @@ class PeerRoomSocketAdapter {
     };
 
     this.roomManager = new RoomManager(ioMock);
-
-    // Enrich serializePlayers so remote clients receive authoritative vx, vy, vz for smooth dead-reckoning
-    const origSerializePlayers = this.roomManager.serializePlayers.bind(this.roomManager);
-    this.roomManager.serializePlayers = (room) => {
-      const now = Date.now();
-      const list = origSerializePlayers(room);
-      if (!room || !room.players) return list;
-      for (let i = 0; i < list.length; i++) {
-        const item = list[i];
-        const p = room.players.get(item.id);
-        if (!p) continue;
-        if (!p.isBot && p.lastMoveAt && now - p.lastMoveAt > 120) {
-          p.vx = 0;
-          p.vy = 0;
-          p.vz = 0;
-        }
-        item.vx = Number((p.vx || 0).toFixed(2));
-        item.vy = Number((p.vy || 0).toFixed(2));
-        item.vz = Number((p.vz || 0).toFixed(2));
-      }
-      return list;
-    };
-
     this.roomManager.createRoom('PUB001', true, MATCH_CONFIG.DEFAULT_BOTS);
   }
 
@@ -129,23 +106,6 @@ class PeerRoomSocketAdapter {
 
   _applyMoveWithVelocity(room, player, payload) {
     if (!room || !player || !payload || typeof payload !== 'object') return;
-    if (typeof payload.seq === 'number') {
-      if (player.lastMoveSeq && payload.seq <= player.lastMoveSeq && (player.lastMoveSeq - payload.seq) < 1000) {
-        return; // Drop out-of-order movement packet
-      }
-      player.lastMoveSeq = payload.seq;
-    }
-    player.lastMoveAt = Date.now();
-    const maxSpeed = (MATCH_CONFIG.SLIDE_INITIAL_SPEED || 11.2) * 1.35;
-    if (typeof payload.vx === 'number' && Number.isFinite(payload.vx)) {
-      player.vx = Math.max(-maxSpeed, Math.min(maxSpeed, payload.vx));
-    }
-    if (typeof payload.vy === 'number' && Number.isFinite(payload.vy)) {
-      player.vy = Math.max(-30, Math.min(25, payload.vy));
-    }
-    if (typeof payload.vz === 'number' && Number.isFinite(payload.vz)) {
-      player.vz = Math.max(-maxSpeed, Math.min(maxSpeed, payload.vz));
-    }
     this.roomManager.handlePlayerMove(room, player, payload);
   }
 

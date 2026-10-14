@@ -673,6 +673,27 @@ export const MAPS = {
 export const MAP_ORDER = ['cyber_citadel', 'cargo_dock', 'desert_outpost', 'neon_lab'];
 export const DEFAULT_MAP_ID = 'cyber_citadel';
 
+// Precompute static AABB bounds once at load time to avoid per-frame/per-raycast arithmetic
+for (const mapId of MAP_ORDER) {
+  const obstacles = MAPS[mapId]?.obstacles;
+  if (!Array.isArray(obstacles)) continue;
+  for (let i = 0; i < obstacles.length; i++) {
+    const box = obstacles[i];
+    const halfW = box.w * 0.5;
+    const halfH = box.h * 0.5;
+    const halfD = box.d * 0.5;
+    box.halfW = halfW;
+    box.halfH = halfH;
+    box.halfD = halfD;
+    box.minX = box.x - halfW;
+    box.maxX = box.x + halfW;
+    box.minY = box.y - halfH;
+    box.maxY = box.y + halfH;
+    box.minZ = box.z - halfD;
+    box.maxZ = box.z + halfD;
+  }
+}
+
 export function getMapConfig(mapId) {
   return MAPS[mapId] || MAPS[DEFAULT_MAP_ID];
 }
@@ -682,3 +703,4 @@ export const HEALTH_PACK_SPAWNS = MAPS[DEFAULT_MAP_ID].healthPacks;
 export const SPAWN_POINTS = MAPS[DEFAULT_MAP_ID].spawnPoints;
 export const BOT_WAYPOINTS = MAPS[DEFAULT_MAP_ID].botWaypoints;
 export const MAP_OBSTACLES = MAPS[DEFAULT_MAP_ID].obstacles;
+
