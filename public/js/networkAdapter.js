@@ -972,9 +972,11 @@ export async function createNetworkClient() {
       clearTimeout(timeoutId);
 
       if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
+        const baseServerUrl = customServer ? customServer.replace(/\/$/, '') : '.';
+        const healthUrl = `${baseServerUrl}/healthz`;
         const rawSocket = customServer
-          ? window.io(customServer, { transports: ['websocket', 'polling'] })
-          : window.io({ transports: ['websocket', 'polling'] });
+          ? window.io(customServer, { transports: ['websocket', 'polling'], upgrade: true })
+          : window.io({ transports: ['websocket', 'polling'], upgrade: true });
         const origEmit = rawSocket.emit.bind(rawSocket);
         rawSocket.emit = (event, payload, ack) => {
           if (event === 'playerMove' && rawSocket.volatile) {
@@ -983,6 +985,12 @@ export async function createNetworkClient() {
           }
           return origEmit(event, payload, ack);
         };
+
+        // Keep Render.com HTTP router awake every 4 minutes while a player has the game open
+        setInterval(() => {
+          fetch(healthUrl, { cache: 'no-store' }).catch(() => {});
+        }, 240_000);
+
         return {
           mode: 'online-server',
           socket: rawSocket,

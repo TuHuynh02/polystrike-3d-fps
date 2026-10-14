@@ -1392,8 +1392,12 @@ export class RoomManager {
       this.updateHealthPacks(room, now);
       this.updateDroppedWeapons(room, now);
 
-      // Broadcast compact state snapshot
-      this.io.to(room.code).emit('stateUpdate', {
+      // Broadcast compact state snapshot (use volatile on Socket.IO to prevent TCP bufferbloat)
+      room.stateSeq = ((room.stateSeq || 0) + 1) | 0;
+      const roomTarget = this.io.to(room.code);
+      const emitter = roomTarget.volatile || roomTarget;
+      emitter.emit('stateUpdate', {
+        seq: room.stateSeq,
         timeRemaining,
         droppedWeapons: room.droppedWeapons,
         players: this.serializePlayers(room)

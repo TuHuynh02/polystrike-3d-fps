@@ -12,10 +12,21 @@ const ROOT_DIR = path.resolve(__dirname, '..');
 
 const app = express();
 const server = http.createServer(app);
+
+// Disable Nagle's algorithm (TCP_NODELAY) on all sockets for immediate 30Hz FPS packet delivery
+server.on('connection', (tcpSocket) => {
+  tcpSocket.setNoDelay(true);
+});
+
 const io = new SocketIOServer(server, {
   cors: {
     origin: '*'
-  }
+  },
+  transports: ['websocket', 'polling'],
+  perMessageDeflate: false,
+  httpCompression: false,
+  pingInterval: 10000,
+  pingTimeout: 8000
 });
 
 // Serve static assets
@@ -25,6 +36,11 @@ app.use('/server', express.static(path.join(ROOT_DIR, 'server')));
 app.use('/vendor/three', express.static(path.join(ROOT_DIR, 'node_modules/three/build')));
 
 const roomManager = new RoomManager(io);
+
+// Render.com Health Check Endpoint
+app.get('/healthz', (_req, res) => {
+  res.status(200).json({ status: 'ok', uptime: Math.floor(process.uptime()) });
+});
 
 // REST endpoint for active rooms summary
 app.get('/api/rooms', (_req, res) => {
