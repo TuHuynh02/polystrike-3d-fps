@@ -6,6 +6,14 @@ import {
   WEAPON_ORDER,
   getMapConfig
 } from '../shared/constants.js';
+import { buildSkyAndAtmosphere, buildArena } from './arenaBuilder.js';
+import { createWeaponMesh } from './weaponModels.js';
+import {
+  createPlayerNameSprite,
+  createRemotePlayerMesh,
+  animateHumanoidRig
+} from './humanoidRig.js';
+import { TacticalMinimap } from './minimap.js';
 
 export class Game3D {
   constructor(container, callbacks) {
@@ -90,7 +98,7 @@ export class Game3D {
     this.rayTargets = [];
     this.remotePlayers = new Map(); // id -> RemotePlayerObject
     this.pickupMeshes = new Map();  // pickupId -> { group, crossGroup, ringMesh, padMat }
-    this.droppedWeaponMeshes = new Map(); // dropId -> { group, gunGroup, ringMesh, labelInfo, data }
+    this.droppedWeaponMeshes = new Map(); // dropId -> { group, gunSpinGroup, ringMat }
     this.nearbyDrop = null;
     this.activeEffects = [];        // Tracers, spark bursts, floating damage numbers
     this.activeShells = [];         // Ejected 3D brass shell casings
@@ -157,12 +165,13 @@ export class Game3D {
     this.isMouseDown = false;
     this.isAiming = false;
 
-    // Recoil Pattern, Bloom & Camera Punch state
+    // Crosshair-Only Recoil & Spread state (Zero Camera Shake when shooting)
     this.currentBloom = 0;
     this.effectiveSpread = WEAPONS.rifle.spread;
     this.recoilShotIndex = 0;
     this.recoilOffset = 0;
     this.boltKickOffset = 0;
+    this.crosshairRecoilKick = 0;
     this.accumulatedRecoilPitch = 0;
     this.accumulatedRecoilYaw = 0;
     this.punchPitch = 0;
@@ -196,6 +205,9 @@ export class Game3D {
     this.lastFrameTime = performance.now();
     this.lastMoveSentAt = 0;
     this.lastHudMoveUpdateAt = 0;
+
+    // Top-left Tactical Mini Map / Radar
+    this.minimap = new TacticalMinimap();
 
     // Build 3D environment, weapon viewmodels & lobby 3D humanoid operator showcase
     this.setupLights();
@@ -333,1075 +345,19 @@ export class Game3D {
 
     this.buildSkyAndAtmosphere(theme, this.arenaHalfSize);
     this.buildArena(mapCfg);
+    this.minimap?.setMap(mapCfg);
     this.renderer.shadowMap.needsUpdate = true;
   }
 
   buildSkyAndAtmosphere(theme = {}, halfSize = 60) {
-    // 1. High-Resolution Procedural Sky Dome with Horizon Nebula, Planet/Moon & Stars
-    const skyCanvas = document.createElement('canvas');
-    skyCanvas.width = 1024;
-    skyCanvas.height = 512;
-    const ctx = skyCanvas.getContext('2d');
-
-    const grad = ctx.createLinearGradient(0, 0, 0, 512);
-    grad.addColorStop(0.0, theme.skyTop || '#020617');
-    grad.addColorStop(0.45, theme.skyMid || '#0b1736');
-    grad.addColorStop(0.84, theme.skyHorizon || '#1e3a8a');
-    grad.addColorStop(1.0, theme.floorBase || '#091224');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 1024, 512);
-
-    // Subtle atmospheric nebula clouds in mid-sky
-    for (let c = 0; c < 6; c++) {
-      const cx = 100 + c * 165;
-      const cy = 180 + (c % 2) * 55;
-      const nebGrad = ctx.createRadialGradient(cx, cy, 10, cx, cy, 140);
-      nebGrad.addColorStop(0, theme.gridStroke || 'rgba(56, 189, 248, 0.16)');
-      nebGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-      ctx.fillStyle = nebGrad;
-      ctx.fillRect(cx - 140, cy - 140, 280, 280);
-    }
-
-    // Starfield in upper sky hemisphere
-    for (let i = 0; i < 340; i++) {
-      const sx = Math.random() * 1024;
-      const sy = Math.random() * 310;
-      const r = Math.random() < 0.16 ? 1.8 : 0.95;
-      ctx.fillStyle = Math.random() < 0.35
-        ? (theme.gridStroke || 'rgba(56, 189, 248, 0.9)')
-        : 'rgba(248, 250, 252, 0.8)';
-      ctx.beginPath();
-      ctx.arc(sx, sy, r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // Glowing low-orbit sci-fi sun / moon disc on the horizon
-    const sunGrad = ctx.createRadialGradient(260, 315, 8, 260, 315, 72);
-    sunGrad.addColorStop(0, 'rgba(255, 255, 255, 0.92)');
-    sunGrad.addColorStop(0.32, theme.gridStroke || 'rgba(56, 189, 248, 0.55)');
-    sunGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-    ctx.fillStyle = sunGrad;
-    ctx.beginPath();
-    ctx.arc(260, 315, 72, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Glowing horizon laser grid band
-    ctx.strokeStyle = theme.gridStroke || 'rgba(56, 189, 248, 0.35)';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(0, 422);
-    ctx.lineTo(1024, 422);
-    ctx.stroke();
-
-    const skyTex = new THREE.CanvasTexture(skyCanvas);
-    const skyGeo = new THREE.SphereGeometry(310, 32, 20);
-    const skyMat = new THREE.MeshBasicMaterial({
-      map: skyTex,
-      side: THREE.BackSide,
-      fog: false
-    });
-    const skyDome = new THREE.Mesh(skyGeo, skyMat);
-    this.scene.add(skyDome);
-    this.skyObjects.push(skyDome);
-
-    // 2. Multi-Tiered Architectural Megacity / Industrial Skyline around Arena
-    const towerMat = new THREE.MeshStandardMaterial({
-      color: 0x091122,
-      roughness: 0.65,
-      metalness: 0.45
-    });
-    const towerTrimMat = new THREE.MeshStandardMaterial({
-      color: 0x16243d,
-      roughness: 0.45,
-      metalness: 0.65
-    });
-    const neonStripMat = new THREE.MeshBasicMaterial({ color: theme.accentHex || 0x38bdf8 });
-    const amberStripMat = new THREE.MeshBasicMaterial({ color: theme.secondaryHex || 0xf59e0b });
-    this.arenaMaterials.add(towerMat);
-    this.arenaMaterials.add(towerTrimMat);
-    this.arenaMaterials.add(neonStripMat);
-    this.arenaMaterials.add(amberStripMat);
-
-    const sharedSkyBoxGeo = new THREE.BoxGeometry(1, 1, 1);
-    const sharedSpireGeo = new THREE.CylinderGeometry(0.18, 0.55, 1, 6);
-    this.arenaGeometries.add(sharedSkyBoxGeo);
-    this.arenaGeometries.add(sharedSpireGeo);
-
-    const towerCount = 32;
-    const ringRadius = halfSize + 24;
-    for (let i = 0; i < towerCount; i++) {
-      const angle = (i / towerCount) * Math.PI * 2;
-      const dist = ringRadius + (i % 3) * 14;
-      const tx = Math.cos(angle) * dist;
-      const tz = Math.sin(angle) * dist;
-      const th = 32 + ((i * 11) % 44);
-      const tw = 9 + (i % 4) * 3.2;
-      const activeNeonMat = i % 3 === 0 ? amberStripMat : neonStripMat;
-
-      // Lower fortress base tier
-      const baseTier = new THREE.Mesh(sharedSkyBoxGeo, towerTrimMat);
-      baseTier.scale.set(tw * 1.28, th * 0.42, tw * 1.28);
-      baseTier.position.set(tx, (th * 0.42) / 2 - 2, tz);
-      this.scene.add(baseTier);
-      this.arenaDecorMeshes.push(baseTier);
-
-      // Main stepped skyscraper shaft
-      const tower = new THREE.Mesh(sharedSkyBoxGeo, towerMat);
-      tower.scale.set(tw, th, tw);
-      tower.position.set(tx, th / 2 - 2, tz);
-      this.scene.add(tower);
-      this.arenaDecorMeshes.push(tower);
-
-      // Upper crown collar + dual neon horizon bands
-      const crown = new THREE.Mesh(sharedSkyBoxGeo, activeNeonMat);
-      crown.scale.set(tw + 0.45, 0.9, tw + 0.45);
-      crown.position.set(tx, th - 4.2, tz);
-      this.scene.add(crown);
-      this.arenaDecorMeshes.push(crown);
-
-      const midBand = new THREE.Mesh(sharedSkyBoxGeo, activeNeonMat);
-      midBand.scale.set(tw + 0.3, 0.5, tw + 0.3);
-      midBand.position.set(tx, th * 0.58, tz);
-      this.scene.add(midBand);
-      this.arenaDecorMeshes.push(midBand);
-
-      // Vertical neon architectural fin on front face
-      const vFin = new THREE.Mesh(sharedSkyBoxGeo, activeNeonMat);
-      vFin.scale.set(0.65, th * 0.72, tw + 0.35);
-      vFin.position.set(tx, th * 0.48, tz);
-      this.scene.add(vFin);
-      this.arenaDecorMeshes.push(vFin);
-
-      // Rooftop comms antenna spire & beacon on every 2nd skyscraper
-      if (i % 2 === 0) {
-        const spireH = 10 + (i % 3) * 4;
-        const spire = new THREE.Mesh(sharedSpireGeo, towerTrimMat);
-        spire.scale.set(1, spireH, 1);
-        spire.position.set(tx, th - 2 + spireH / 2, tz);
-        this.scene.add(spire);
-        this.arenaDecorMeshes.push(spire);
-
-        const beacon = new THREE.Mesh(sharedSkyBoxGeo, activeNeonMat);
-        beacon.scale.set(1.1, 1.1, 1.1);
-        beacon.position.set(tx, th - 2 + spireH, tz);
-        this.scene.add(beacon);
-        this.arenaDecorMeshes.push(beacon);
-      }
-    }
-
-    // 3. Floating Atmospheric Dust & Energy Motes inside Arena
-    const pCount = 280;
-    const span = halfSize * 1.9;
-    const positions = new Float32Array(pCount * 3);
-    for (let i = 0; i < pCount; i++) {
-      positions[i * 3] = (Math.random() - 0.5) * span;
-      positions[i * 3 + 1] = 0.8 + Math.random() * 16;
-      positions[i * 3 + 2] = (Math.random() - 0.5) * span;
-    }
-    const pGeo = new THREE.BufferGeometry();
-    pGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const pMat = new THREE.PointsMaterial({
-      color: theme.accentHex || 0x38bdf8,
-      size: 0.2,
-      transparent: true,
-      opacity: 0.52,
-      depthWrite: false
-    });
-    this.ambientParticles = new THREE.Points(pGeo, pMat);
-    this.scene.add(this.ambientParticles);
-    this.skyObjects.push(this.ambientParticles);
+    buildSkyAndAtmosphere(this, theme, halfSize);
   }
 
-  createGridTexture(theme = {}, halfSize = 60) {
-    const canvas = document.createElement('canvas');
-    canvas.width = 1024;
-    canvas.height = 1024;
-    const ctx = canvas.getContext('2d');
-
-    ctx.fillStyle = theme.floorBase || '#0f172a';
-    ctx.fillRect(0, 0, 1024, 1024);
-
-    // Alternating industrial composite deck plates with beveled seams
-    ctx.fillStyle = theme.floorAlt || '#131e36';
-    ctx.fillRect(8, 8, 496, 496);
-    ctx.fillRect(520, 520, 496, 496);
-
-    // Subtle diagonal anti-slip tread lines inside tiles
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.032)';
-    ctx.lineWidth = 3;
-    for (let d = -1024; d < 1024; d += 32) {
-      ctx.beginPath();
-      ctx.moveTo(d, 0);
-      ctx.lineTo(d + 1024, 1024);
-      ctx.stroke();
-    }
-
-    // Sub-grid architectural panel lines
-    ctx.strokeStyle = 'rgba(15, 23, 42, 0.9)';
-    ctx.lineWidth = 4;
-    for (let i = 0; i <= 1024; i += 128) {
-      ctx.beginPath();
-      ctx.moveTo(i, 0);
-      ctx.lineTo(i, 1024);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(0, i);
-      ctx.lineTo(1024, i);
-      ctx.stroke();
-    }
-
-    // Highlighted metallic expansion joint border
-    ctx.strokeStyle = theme.gridStroke || 'rgba(56, 189, 248, 0.34)';
-    ctx.lineWidth = 6;
-    ctx.strokeRect(4, 4, 1016, 1016);
-    ctx.strokeRect(512, 4, 508, 508);
-
-    // Corner tie-down bolts & tactical yellow/cyan intersection markers
-    ctx.fillStyle = 'rgba(245, 158, 11, 0.65)';
-    ctx.fillRect(500, 500, 24, 24);
-    ctx.fillStyle = 'rgba(148, 163, 184, 0.45)';
-    for (const bx of [28, 488, 540, 996]) {
-      for (const by of [28, 488, 540, 996]) {
-        ctx.fillRect(bx - 5, by - 5, 10, 10);
-      }
-    }
-
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.wrapT = THREE.RepeatWrapping;
-    const maxAniso = this.renderer.capabilities.getMaxAnisotropy?.() || 4;
-    tex.anisotropy = Math.min(8, maxAniso);
-    const repeats = Math.round(halfSize / 2);
-    tex.repeat.set(repeats, repeats);
-    this.arenaTextures.add(tex);
-    return tex;
-  }
-
-  createFloorBumpTexture(halfSize = 60) {
-    const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 512;
-    const ctx = canvas.getContext('2d');
-
-    ctx.fillStyle = '#808080';
-    ctx.fillRect(0, 0, 512, 512);
-
-    // Recessed panel seams
-    ctx.strokeStyle = '#262626';
-    ctx.lineWidth = 4;
-    for (let i = 0; i <= 512; i += 64) {
-      ctx.beginPath();
-      ctx.moveTo(i, 0);
-      ctx.lineTo(i, 512);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(0, i);
-      ctx.lineTo(512, i);
-      ctx.stroke();
-    }
-
-    // Raised anti-slip diamond plate ribs
-    ctx.strokeStyle = '#b8b8b8';
-    ctx.lineWidth = 2;
-    for (let y = 8; y < 512; y += 16) {
-      for (let x = 8; x < 512; x += 16) {
-        ctx.beginPath();
-        ctx.moveTo(x, y);
-        ctx.lineTo(x + 6, y + 6);
-        ctx.stroke();
-      }
-    }
-
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.wrapT = THREE.RepeatWrapping;
-    const repeats = Math.round(halfSize / 2);
-    tex.repeat.set(repeats, repeats);
-    this.arenaTextures.add(tex);
-    return tex;
-  }
-
-  createObstacleTexture(hexColor, type = 'wall') {
-    const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 512;
-    const ctx = canvas.getContext('2d');
-
-    const base = new THREE.Color(hexColor);
-    ctx.fillStyle = `#${ base.getHexString() }`;
-    ctx.fillRect(0, 0, 512, 512);
-
-    // Subtle vertical metallic gradient for realistic ambient occlusion
-    const vGrad = ctx.createLinearGradient(0, 0, 0, 512);
-    vGrad.addColorStop(0.0, 'rgba(255, 255, 255, 0.12)');
-    vGrad.addColorStop(0.5, 'rgba(0, 0, 0, 0.0)');
-    vGrad.addColorStop(1.0, 'rgba(0, 0, 0, 0.28)');
-    ctx.fillStyle = vGrad;
-    ctx.fillRect(0, 0, 512, 512);
-
-    if (type === 'container') {
-      // Deep corrugated shipping container vertical ribs
-      for (let x = 0; x < 512; x += 24) {
-        ctx.fillStyle = x % 48 === 0 ? 'rgba(0, 0, 0, 0.32)' : 'rgba(255, 255, 255, 0.14)';
-        ctx.fillRect(x, 22, 12, 468);
-      }
-      // Heavy structural steel perimeter frame
-      ctx.strokeStyle = 'rgba(15, 23, 42, 0.85)';
-      ctx.lineWidth = 28;
-      ctx.strokeRect(0, 0, 512, 512);
-
-      // Industrial stencil stripe & cargo serial markings
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.55)';
-      ctx.fillRect(36, 212, 440, 74);
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-      ctx.lineWidth = 3;
-      ctx.strokeRect(36, 212, 440, 74);
-
-      ctx.fillStyle = 'rgba(248, 250, 252, 0.88)';
-      ctx.font = '900 32px Segoe UI, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('POLY-CARGO // HVY-08', 256, 260);
-
-      // Caution hazard chevrons along bottom rail
-      ctx.fillStyle = 'rgba(250, 204, 21, 0.75)';
-      for (let hx = 40; hx < 460; hx += 36) {
-        ctx.fillRect(hx, 468, 18, 14);
-      }
-    } else if (type === 'crate') {
-      // Heavy tactical supply crate outer frame
-      ctx.strokeStyle = 'rgba(15, 23, 42, 0.86)';
-      ctx.lineWidth = 36;
-      ctx.strokeRect(18, 18, 476, 476);
-
-      // Recessed inner armor panel
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
-      ctx.fillRect(64, 64, 384, 384);
-
-      // Structural X-bracing with highlight bevel
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.26)';
-      ctx.lineWidth = 22;
-      ctx.beginPath();
-      ctx.moveTo(64, 64);
-      ctx.lineTo(448, 448);
-      ctx.moveTo(448, 64);
-      ctx.lineTo(64, 448);
-      ctx.stroke();
-
-      // Center stenciled badge plate
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
-      ctx.fillRect(156, 210, 200, 92);
-      ctx.strokeStyle = 'rgba(250, 204, 21, 0.8)';
-      ctx.lineWidth = 4;
-      ctx.strokeRect(156, 210, 200, 92);
-      ctx.fillStyle = '#facc15';
-      ctx.font = 'bold 26px Segoe UI, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('TAC-SUPPLY', 256, 265);
-
-      // Corner hex bolts
-      ctx.fillStyle = '#e2e8f0';
-      [42, 470].forEach((cx) => {
-        [42, 470].forEach((cy) => {
-          ctx.fillRect(cx - 8, cy - 8, 16, 16);
-        });
-      });
-    } else if (type === 'pillar') {
-      // High-tech monolith armor plates & vertical energy conduit channels
-      ctx.strokeStyle = 'rgba(56, 189, 248, 0.72)';
-      ctx.lineWidth = 10;
-      ctx.strokeRect(26, 26, 460, 460);
-
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.6)';
-      ctx.fillRect(60, 40, 392, 432);
-
-      // Glowing vertical circuit traces
-      ctx.strokeStyle = 'rgba(56, 189, 248, 0.85)';
-      ctx.lineWidth = 8;
-      ctx.beginPath();
-      ctx.moveTo(180, 26);
-      ctx.lineTo(180, 486);
-      ctx.moveTo(332, 26);
-      ctx.lineTo(332, 486);
-      ctx.stroke();
-
-      // Horizontal armor ribs
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.18)';
-      for (let py = 80; py < 460; py += 90) {
-        ctx.fillRect(36, py, 440, 14);
-      }
-    } else {
-      // Fortified concrete / composite bunker wall & platform paneling
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
-      ctx.lineWidth = 12;
-      ctx.strokeRect(6, 6, 500, 500);
-
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
-      ctx.lineWidth = 8;
-      ctx.strokeRect(28, 28, 456, 456);
-
-      // Interlocking architectural panel seams
-      ctx.beginPath();
-      ctx.moveTo(28, 256);
-      ctx.lineTo(484, 256);
-      ctx.moveTo(256, 28);
-      ctx.lineTo(256, 484);
-      ctx.stroke();
-
-      // Hazard warning stripe along lower base
-      ctx.fillStyle = 'rgba(245, 158, 11, 0.55)';
-      for (let wx = 36; wx < 476; wx += 48) {
-        ctx.fillRect(wx, 452, 24, 18);
-      }
-    }
-
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.wrapT = THREE.RepeatWrapping;
-    const maxAniso = this.renderer.capabilities.getMaxAnisotropy?.() || 4;
-    tex.anisotropy = Math.min(8, maxAniso);
-    this.arenaTextures.add(tex);
-    return tex;
-  }
-
-  createObstacleBumpTexture(type = 'wall') {
-    const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 256;
-    const ctx = canvas.getContext('2d');
-
-    ctx.fillStyle = '#808080';
-    ctx.fillRect(0, 0, 256, 256);
-
-    if (type === 'container') {
-      for (let x = 0; x < 256; x += 12) {
-        ctx.fillStyle = x % 24 === 0 ? '#303030' : '#d0d0d0';
-        ctx.fillRect(x, 10, 6, 236);
-      }
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 14;
-      ctx.strokeRect(0, 0, 256, 256);
-    } else if (type === 'crate') {
-      ctx.strokeStyle = '#e0e0e0';
-      ctx.lineWidth = 18;
-      ctx.strokeRect(8, 8, 240, 240);
-      ctx.fillStyle = '#404040';
-      ctx.fillRect(32, 32, 192, 192);
-      ctx.strokeStyle = '#c8c8c8';
-      ctx.lineWidth = 12;
-      ctx.beginPath();
-      ctx.moveTo(32, 32);
-      ctx.lineTo(224, 224);
-      ctx.moveTo(224, 32);
-      ctx.lineTo(32, 224);
-      ctx.stroke();
-    } else {
-      ctx.strokeStyle = '#d8d8d8';
-      ctx.lineWidth = 8;
-      ctx.strokeRect(6, 6, 244, 244);
-      ctx.strokeStyle = '#282828';
-      ctx.lineWidth = 4;
-      ctx.strokeRect(16, 16, 224, 224);
-      ctx.beginPath();
-      ctx.moveTo(16, 128);
-      ctx.lineTo(240, 128);
-      ctx.moveTo(128, 16);
-      ctx.lineTo(128, 240);
-      ctx.stroke();
-    }
-
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.wrapT = THREE.RepeatWrapping;
-    this.arenaTextures.add(tex);
-    return tex;
-  }
-
-  buildArena(mapCfg) {
-    const halfSize = mapCfg.arenaHalfSize || 60;
-    const span = halfSize * 2;
-    const theme = mapCfg.theme || {};
-
-    // Ground Floor (120x120m to 128x128m) with high-res anisotropic diffuse & bump relief
-    const floorGeo = new THREE.PlaneGeometry(span, span);
-    const floorMat = new THREE.MeshStandardMaterial({
-      map: this.createGridTexture(theme, halfSize),
-      bumpMap: this.createFloorBumpTexture(halfSize),
-      bumpScale: 0.04,
-      roughness: 0.62,
-      metalness: 0.32
-    });
-    this.arenaMaterials.add(floorMat);
-    const floorMesh = new THREE.Mesh(floorGeo, floorMat);
-    floorMesh.rotation.x = -Math.PI / 2;
-    floorMesh.receiveShadow = true;
-    this.scene.add(floorMesh);
-    this.worldMeshes.push(floorMesh);
-
-    const bumpCache = new Map();
-    const getBump = (type = 'wall') => {
-      if (!bumpCache.has(type)) {
-        bumpCache.set(type, this.createObstacleBumpTexture(type));
-      }
-      return bumpCache.get(type);
-    };
-
-    const matCache = new Map();
-    const getMat = (colorHex, type = 'wall') => {
-      const key = `${ colorHex }_${ type }`;
-      if (!matCache.has(key)) {
-        const isMetal = type === 'container' || type === 'pillar';
-        const m = new THREE.MeshStandardMaterial({
-          map: this.createObstacleTexture(colorHex, type),
-          bumpMap: getBump(type),
-          bumpScale: isMetal ? 0.05 : 0.035,
-          roughness: isMetal ? 0.36 : 0.54,
-          metalness: isMetal ? 0.62 : 0.26
-        });
-        this.arenaMaterials.add(m);
-        matCache.set(key, m);
-      }
-      return matCache.get(key);
-    };
-
-    // Shared architectural structural materials & unit geometries for multi-part 3D prefabs
-    const darkSteelMat = new THREE.MeshStandardMaterial({
-      color: 0x0f172a,
-      roughness: 0.35,
-      metalness: 0.78
-    });
-    const gunmetalFrameMat = new THREE.MeshStandardMaterial({
-      color: 0x1e293b,
-      roughness: 0.42,
-      metalness: 0.68
-    });
-    const brushedChromeMat = new THREE.MeshStandardMaterial({
-      color: 0x94a3b8,
-      roughness: 0.24,
-      metalness: 0.88
-    });
-    const hazardMat = new THREE.MeshStandardMaterial({
-      color: 0xf59e0b,
-      roughness: 0.4,
-      metalness: 0.35,
-      emissive: 0xd97706,
-      emissiveIntensity: 0.2
-    });
-    const trimAccentMat = new THREE.MeshBasicMaterial({ color: theme.accentHex || 0x38bdf8 });
-    const trimSecondaryMat = new THREE.MeshBasicMaterial({ color: theme.secondaryHex || 0xf59e0b });
-
-    this.arenaMaterials.add(darkSteelMat);
-    this.arenaMaterials.add(gunmetalFrameMat);
-    this.arenaMaterials.add(brushedChromeMat);
-    this.arenaMaterials.add(hazardMat);
-    this.arenaMaterials.add(trimAccentMat);
-    this.arenaMaterials.add(trimSecondaryMat);
-
-    // Reusable unit geometries (tracked in arenaGeometries so disposeMapResources frees them once)
-    const unitBoxGeo = new THREE.BoxGeometry(1, 1, 1);
-    const unitCylGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, 10);
-    const unitOctGeo = new THREE.OctahedronGeometry(0.55, 0);
-    this.arenaGeometries.add(unitBoxGeo);
-    this.arenaGeometries.add(unitCylGeo);
-    this.arenaGeometries.add(unitOctGeo);
-
-    // Batch all static decorative boxes & cylinders into THREE.InstancedMesh by (geometry, material)
-    // to collapse ~1,500 separate draw calls into ~8 instanced draw calls for locked 60 FPS on any GPU
-    const decorBatches = new Map();
-    const registerInstancedItem = (geo, mat, x, y, z, sx, sy, sz, rx = 0, ry = 0, rz = 0, castShadow = false) => {
-      let groupMap = decorBatches.get(geo);
-      if (!groupMap) {
-        groupMap = new Map();
-        decorBatches.set(geo, groupMap);
-      }
-      let batch = groupMap.get(mat);
-      if (!batch) {
-        batch = { items: [], castShadow: false };
-        groupMap.set(mat, batch);
-      }
-      if (castShadow) batch.castShadow = true;
-      const item = {
-        x,
-        y,
-        z,
-        sx,
-        sy,
-        sz,
-        rotation: { x: rx, y: ry, z: rz }
-      };
-      batch.items.push(item);
-      return item;
-    };
-
-    const addDecorBox = (x, y, z, w, h, d, mat, castShadow = false) =>
-      registerInstancedItem(unitBoxGeo, mat, x, y, z, w, h, d, 0, 0, 0, castShadow);
-
-    const addDecorCyl = (x, y, z, radius, len, mat, axis = 'y') => {
-      const rx = axis === 'z' ? Math.PI / 2 : 0;
-      const rz = axis === 'x' ? Math.PI / 2 : 0;
-      return registerInstancedItem(unitCylGeo, mat, x, y, z, radius * 2, len, radius * 2, rx, 0, rz, false);
-    };
-
-    // Helper to build a detailed 3D corrugated shipping container assembly
-    const buildContainerDetails = (cx, cy, cz, cw, ch, cd, mainMat, isUpperStack = false) => {
-      const alongZ = cd >= cw;
-      const halfW = cw / 2;
-      const halfH = ch / 2;
-      const halfD = cd / 2;
-
-      // 1. Heavy steel exoskeleton top & bottom long rails + 4 vertical corner posts
-      const railThick = 0.16;
-      for (const sy of [-1, 1]) {
-        const ry = cy + sy * (halfH - 0.05);
-        addDecorBox(cx, ry, cz - halfD, cw + 0.08, railThick, railThick, darkSteelMat);
-        addDecorBox(cx, ry, cz + halfD, cw + 0.08, railThick, railThick, darkSteelMat);
-        addDecorBox(cx - halfW, ry, cz, railThick, railThick, cd + 0.08, darkSteelMat);
-        addDecorBox(cx + halfW, ry, cz, railThick, railThick, cd + 0.08, darkSteelMat);
-      }
-
-      // 8 ISO Corner Castings (oversized steel blocks with twist-lock appearance)
-      const castSize = 0.34;
-      for (const sx of [-1, 1]) {
-        for (const sy of [-1, 1]) {
-          for (const sz of [-1, 1]) {
-            addDecorBox(
-              cx + sx * (halfW - 0.04),
-              cy + sy * (halfH - 0.04),
-              cz + sz * (halfD - 0.04),
-              castSize,
-              castSize,
-              castSize,
-              brushedChromeMat
-            );
-          }
-        }
-      }
-
-      // 2. Protruding 3D vertical corrugated ribs along the long sides
-      const longSpan = alongZ ? cd : cw;
-      const ribCount = Math.max(4, Math.floor((longSpan - 1.0) / 0.85));
-      for (let r = 0; r < ribCount; r++) {
-        const offset = -longSpan / 2 + 0.65 + (r / Math.max(1, ribCount - 1)) * (longSpan - 1.3);
-        if (alongZ) {
-          addDecorBox(cx - halfW - 0.03, cy, cz + offset, 0.08, ch - 0.36, 0.22, mainMat);
-          addDecorBox(cx + halfW + 0.03, cy, cz + offset, 0.08, ch - 0.36, 0.22, mainMat);
-        } else {
-          addDecorBox(cx + offset, cy, cz - halfD - 0.03, 0.22, ch - 0.36, 0.08, mainMat);
-          addDecorBox(cx + offset, cy, cz + halfD + 0.03, 0.22, ch - 0.36, 0.08, mainMat);
-        }
-      }
-
-      // 3. Double Cargo Doors with 4 Vertical Chrome Locking Rods & Latches on both ends
-      for (const endSign of [-1, 1]) {
-        if (alongZ) {
-          const ez = cz + endSign * (halfD + 0.025);
-          // Center door rubber seal seam
-          addDecorBox(cx, cy, ez, 0.08, ch - 0.3, 0.06, darkSteelMat);
-          // 4 vertical chrome locking bars
-          for (const barX of [-cw * 0.28, -cw * 0.11, cw * 0.11, cw * 0.28]) {
-            addDecorCyl(cx + barX, cy, ez + endSign * 0.03, 0.032, ch - 0.34, brushedChromeMat, 'y');
-            addDecorBox(cx + barX, cy - 0.15, ez + endSign * 0.05, 0.12, 0.08, 0.08, hazardMat);
-          }
-        } else {
-          const ex = cx + endSign * (halfW + 0.025);
-          addDecorBox(ex, cy, cz, 0.06, ch - 0.3, 0.08, darkSteelMat);
-          for (const barZ of [-cd * 0.28, -cd * 0.11, cd * 0.11, cd * 0.28]) {
-            addDecorCyl(ex + endSign * 0.03, cy, cz + barZ, 0.032, ch - 0.34, brushedChromeMat, 'y');
-            addDecorBox(ex + endSign * 0.05, cy - 0.15, cz + barZ, 0.08, 0.08, 0.12, hazardMat);
-          }
-        }
-      }
-
-      // 4. Rooftop Industrial Ventilation / Refrigeration Unit & Glowing Beacon Strip
-      if (!isUpperStack) {
-        addDecorBox(cx, cy + halfH + 0.14, cz, cw * 0.55, 0.26, cd * 0.35, gunmetalFrameMat);
-      } else {
-        addDecorBox(cx, cy + halfH + 0.06, cz, cw * 0.82, 0.1, cd * 0.82, trimAccentMat);
-      }
-    };
-
-    const stackColors = [0x0284c7, 0xe11d48, 0xd97706, 0x10b981, 0x6366f1];
-    let containerIdx = 0;
-
-    for (const obs of mapCfg.obstacles) {
-      const mainMat = getMat(obs.color, obs.type);
-      const geo = new THREE.BoxGeometry(obs.w, obs.h, obs.d);
-      this.arenaGeometries.add(geo);
-      const mesh = new THREE.Mesh(geo, mainMat);
-      mesh.position.set(obs.x, obs.y, obs.z);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      mesh.updateMatrix();
-      mesh.matrixAutoUpdate = false;
-      this.scene.add(mesh);
-      this.worldMeshes.push(mesh);
-
-      const halfW = obs.w / 2;
-      const halfH = obs.h / 2;
-      const halfD = obs.d / 2;
-      const topY = obs.y + halfH;
-      const botY = obs.y - halfH;
-
-      if (obs.type === 'container') {
-        buildContainerDetails(obs.x, obs.y, obs.z, obs.w, obs.h, obs.d, mainMat, false);
-
-        // Stack a 2nd-story shipping container on ground-level full-size containers
-        // to make the arena architecture twice as tall and imposing without changing ground collision!
-        if (obs.y < 2.2 && Math.max(obs.w, obs.d) >= 7.5) {
-          const upperColor = stackColors[containerIdx % stackColors.length];
-          containerIdx++;
-          const upperMat = getMat(upperColor, 'container');
-          const upperH = 3.1;
-          const upperY = topY + upperH / 2 + 0.06;
-
-          const upperCore = addDecorBox(obs.x, upperY, obs.z, obs.w * 0.96, upperH, obs.d * 0.96, upperMat, true);
-          // Slight realistic dockyard stacking rotation on every 2nd container
-          if (containerIdx % 2 === 0) {
-            upperCore.rotation.y = 0.035;
-          }
-          buildContainerDetails(obs.x, upperY, obs.z, obs.w * 0.96, upperH, obs.d * 0.96, upperMat, true);
-        }
-      } else if (obs.type === 'crate') {
-        // Multi-part 3D Tactical Supply Crate: heavy top & bottom armor collars, 4 corner exo-columns, glowing latch LEDs
-        addDecorBox(obs.x, topY - 0.08, obs.z, obs.w + 0.1, 0.18, obs.d + 0.1, darkSteelMat);
-        addDecorBox(obs.x, botY + 0.08, obs.z, obs.w + 0.1, 0.18, obs.d + 0.1, darkSteelMat);
-
-        for (const sx of [-1, 1]) {
-          for (const sz of [-1, 1]) {
-            addDecorBox(
-              obs.x + sx * (halfW - 0.04),
-              obs.y,
-              obs.z + sz * (halfD - 0.04),
-              0.22,
-              obs.h + 0.04,
-              0.22,
-              gunmetalFrameMat
-            );
-          }
-        }
-
-        // Top armored lid handles & glowing status LED bar
-        addDecorBox(obs.x, topY + 0.05, obs.z, obs.w * 0.68, 0.08, obs.d * 0.68, gunmetalFrameMat);
-        addDecorBox(obs.x, obs.y + 0.05, obs.z - halfD - 0.03, obs.w * 0.45, 0.09, 0.04, trimSecondaryMat);
-        addDecorBox(obs.x, obs.y + 0.05, obs.z + halfD + 0.03, obs.w * 0.45, 0.09, 0.04, trimSecondaryMat);
-      } else if (obs.type === 'pillar') {
-        // Multi-part 3D Cyber Monolith Pillar + Towering Upper Energy Spire
-        addDecorBox(obs.x, botY + 0.25, obs.z, obs.w + 0.55, 0.5, obs.d + 0.55, darkSteelMat);
-        addDecorBox(obs.x, botY + 0.62, obs.z, obs.w + 0.28, 0.28, obs.d + 0.28, gunmetalFrameMat);
-        addDecorBox(obs.x, topY - 0.22, obs.z, obs.w + 0.45, 0.44, obs.d + 0.45, darkSteelMat);
-
-        // 4 Vertical Glowing Plasma Conduits & Corner Ribs
-        for (const sx of [-1, 1]) {
-          for (const sz of [-1, 1]) {
-            addDecorBox(
-              obs.x + sx * halfW,
-              obs.y,
-              obs.z + sz * halfD,
-              0.28,
-              obs.h,
-              0.28,
-              gunmetalFrameMat
-            );
-          }
-        }
-        addDecorBox(obs.x, obs.y, obs.z - halfD - 0.04, 0.22, obs.h * 0.82, 0.08, trimAccentMat);
-        addDecorBox(obs.x, obs.y, obs.z + halfD + 0.04, 0.22, obs.h * 0.82, 0.08, trimAccentMat);
-        addDecorBox(obs.x - halfW - 0.04, obs.y, obs.z, 0.08, obs.h * 0.82, 0.22, trimAccentMat);
-        addDecorBox(obs.x + halfW + 0.04, obs.y, obs.z, 0.08, obs.h * 0.82, 0.22, trimAccentMat);
-
-        // Towering Upper Energy Spire extending 10m into the sky above every pillar
-        const spireH = Math.abs(obs.x) < 2 && Math.abs(obs.z) < 2 ? 12.5 : 8.5;
-        addDecorBox(obs.x, topY + spireH / 2, obs.z, obs.w * 0.52, spireH, obs.d * 0.52, darkSteelMat, true);
-        addDecorBox(obs.x, topY + spireH / 2, obs.z, obs.w * 0.24, spireH + 1.5, obs.d * 0.24, trimAccentMat);
-        addDecorBox(obs.x, topY + spireH * 0.45, obs.z, obs.w * 0.88, 0.38, obs.d * 0.88, trimSecondaryMat);
-        addDecorBox(obs.x, topY + spireH * 0.82, obs.z, obs.w * 0.72, 0.32, obs.d * 0.72, trimAccentMat);
-
-        if (Math.abs(obs.x) < 2 && Math.abs(obs.z) < 2) {
-          for (let r = 0; r < 3; r++) {
-            const ringGeo = new THREE.TorusGeometry(2.5 + r * 0.65, 0.09, 10, 28);
-            this.arenaGeometries.add(ringGeo);
-            const ring = new THREE.Mesh(ringGeo, r % 2 === 0 ? trimAccentMat : trimSecondaryMat);
-            ring.position.set(obs.x, topY + 1.2 + r * 2.2, obs.z);
-            this.scene.add(ring);
-            this.arenaDecorMeshes.push(ring);
-            this.citadelRings.push(ring);
-          }
-        }
-      } else if (obs.type === 'platform') {
-        // Multi-part Fortified Combat Deck: Steel Girder Fascia, Corner Bastion Bollards & Glowing Edge Trim
-        const isCenter = Math.abs(obs.x) < 2 && Math.abs(obs.z) < 2;
-        const activeTrim = isCenter ? trimAccentMat : trimSecondaryMat;
-
-        // Overhanging armored top deck rim
-        addDecorBox(obs.x, topY - 0.14, obs.z, obs.w + 0.36, 0.28, obs.d + 0.36, darkSteelMat);
-        // Glowing neon top & bottom perimeter strips
-        addDecorBox(obs.x, topY - 0.04, obs.z, obs.w + 0.42, 0.09, obs.d + 0.42, activeTrim);
-        addDecorBox(obs.x, botY + 0.12, obs.z, obs.w + 0.25, 0.22, obs.d + 0.25, gunmetalFrameMat);
-
-        // 4 Corner Bastion Columns with glowing top tactical beacons (below platform deck + 0.55m corner bollards)
-        for (const sx of [-1, 1]) {
-          for (const sz of [-1, 1]) {
-            const bx = obs.x + sx * (halfW - 0.35);
-            const bz = obs.z + sz * (halfD - 0.35);
-            addDecorBox(bx, obs.y + 0.28, bz, 0.85, obs.h + 0.56, 0.85, darkSteelMat);
-            addDecorBox(bx, topY + 0.34, bz, 0.52, 0.18, 0.52, activeTrim);
-          }
-        }
-      } else if (obs.type === 'step') {
-        // Industrial Stair Tread Nosing & Side Neon Guide Strips
-        addDecorBox(obs.x, topY - 0.03, obs.z, obs.w + 0.04, 0.06, obs.d + 0.04, brushedChromeMat);
-      } else if (obs.type === 'wall') {
-        const isPerimeter = Math.max(obs.w, obs.d) > 80;
-        if (isPerimeter) {
-          // Upgrade Perimeter Walls into towering 16m Fortified Megawalls with Buttresses & Energy Barriers
-          const alongX = obs.w > obs.d;
-          const upperWallH = 6.5;
-          const upperWallY = topY + upperWallH / 2;
-
-          // Upper fortified parapet wall
-          addDecorBox(obs.x, upperWallY, obs.z, obs.w, upperWallH, obs.d * 1.35, gunmetalFrameMat);
-          // Glowing horizontal energy conduit bands at y = 4.5m, 9.0m, and 15.2m
-          addDecorBox(obs.x, 4.5, obs.z, obs.w + 0.1, 0.22, obs.d + 0.28, trimAccentMat);
-          addDecorBox(obs.x, 9.1, obs.z, obs.w + 0.1, 0.28, obs.d + 0.34, trimSecondaryMat);
-          addDecorBox(obs.x, topY + upperWallH - 0.2, obs.z, obs.w + 0.1, 0.32, obs.d + 0.38, trimAccentMat);
-
-          // Heavy structural buttress ribs every 12m along the perimeter wall
-          const wallSpan = alongX ? obs.w : obs.d;
-          for (let offset = -wallSpan / 2 + 8; offset <= wallSpan / 2 - 8; offset += 12) {
-            if (alongX) {
-              const inwardSign = obs.z > 0 ? -1 : 1;
-              addDecorBox(obs.x + offset, 7.5, obs.z + inwardSign * 0.55, 1.4, 15.0, 1.2, darkSteelMat);
-              addDecorBox(obs.x + offset, 12.5, obs.z + inwardSign * 0.9, 0.35, 6.0, 0.35, trimAccentMat);
-            } else {
-              const inwardSign = obs.x > 0 ? -1 : 1;
-              addDecorBox(obs.x + inwardSign * 0.55, 7.5, obs.z + offset, 1.2, 15.0, 1.4, darkSteelMat);
-              addDecorBox(obs.x + inwardSign * 0.9, 12.5, obs.z + offset, 0.35, 6.0, 0.35, trimAccentMat);
-            }
-          }
-        } else {
-          // Interior Tactical Bunker Wall: Heavy Base Curb, Top Armored Cap, End Pilasters & Waist Strip
-          addDecorBox(obs.x, botY + 0.16, obs.z, obs.w + 0.22, 0.32, obs.d + 0.22, darkSteelMat);
-          addDecorBox(obs.x, topY - 0.12, obs.z, obs.w + 0.26, 0.26, obs.d + 0.26, darkSteelMat);
-          addDecorBox(obs.x, topY + 0.04, obs.z, obs.w * 0.92, 0.08, obs.d * 0.92, brushedChromeMat);
-          addDecorBox(obs.x, obs.y + 0.2, obs.z, obs.w + 0.06, 0.12, obs.d + 0.06, trimAccentMat);
-
-          const alongX = obs.w >= obs.d;
-          for (const endSign of [-1, 1]) {
-            if (alongX) {
-              addDecorBox(obs.x + endSign * (halfW - 0.2), obs.y, obs.z, 0.45, obs.h + 0.08, obs.d + 0.28, gunmetalFrameMat);
-            } else {
-              addDecorBox(obs.x, obs.y, obs.z + endSign * (halfD - 0.2), obs.w + 0.28, obs.h + 0.08, 0.45, gunmetalFrameMat);
-            }
-          }
-        }
-      }
-    }
-
-    // 4 Giant Corner Perimeter Watchtowers (at +-halfSize, +-halfSize)
-    for (const sx of [-1, 1]) {
-      for (const sz of [-1, 1]) {
-        const cx = sx * (halfSize - 0.5);
-        const cz = sz * (halfSize - 0.5);
-        addDecorBox(cx, 12, cz, 5.5, 24, 5.5, darkSteelMat);
-        addDecorBox(cx, 21.5, cz, 7.2, 3.2, 7.2, gunmetalFrameMat);
-        addDecorBox(cx, 23.4, cz, 7.6, 0.45, 7.6, trimSecondaryMat);
-        addDecorBox(cx, 25.5, cz, 1.4, 4.0, 1.4, trimAccentMat);
-      }
-    }
-
-    // Map-Specific Heroic Architectural Landmarks (Overhead Cranes, Radar Dishes, Particle Accelerators, Archways)
-    this.buildMapLandmarks(
-      mapCfg.id,
-      halfSize,
-      addDecorBox,
-      addDecorCyl,
-      darkSteelMat,
-      gunmetalFrameMat,
-      brushedChromeMat,
-      hazardMat,
-      trimAccentMat,
-      trimSecondaryMat
-    );
-
-    // Materialize all collected decorative pieces into GPU InstancedMeshes (~8 draw calls instead of ~1,500)
-    const dummy = new THREE.Object3D();
-    for (const [geo, groupMap] of decorBatches.entries()) {
-      for (const [mat, batch] of groupMap.entries()) {
-        const count = batch.items.length;
-        if (count === 0) continue;
-        const instMesh = new THREE.InstancedMesh(geo, mat, count);
-        instMesh.castShadow = batch.castShadow;
-        instMesh.receiveShadow = batch.castShadow;
-        for (let i = 0; i < count; i++) {
-          const it = batch.items[i];
-          dummy.position.set(it.x, it.y, it.z);
-          dummy.rotation.set(it.rotation.x, it.rotation.y, it.rotation.z);
-          dummy.scale.set(it.sx, it.sy, it.sz);
-          dummy.updateMatrix();
-          instMesh.setMatrixAt(i, dummy.matrix);
-        }
-        instMesh.instanceMatrix.needsUpdate = true;
-        instMesh.frustumCulled = false;
-        instMesh.updateMatrix();
-        instMesh.matrixAutoUpdate = false;
-        this.scene.add(instMesh);
-        this.arenaDecorMeshes.push(instMesh);
-      }
-    }
-
-    const ringGeo = new THREE.RingGeometry(7.2, 7.65, 4);
-    this.arenaGeometries.add(ringGeo);
-    const ringMat = new THREE.MeshBasicMaterial({
-      color: theme.accentHex || 0x38bdf8,
-      side: THREE.DoubleSide
-    });
-    this.arenaMaterials.add(ringMat);
-    const ringMesh = new THREE.Mesh(ringGeo, ringMat);
-    ringMesh.rotation.x = -Math.PI / 2;
-    ringMesh.rotation.z = Math.PI / 4;
-    ringMesh.position.set(0, 2.43, 0);
-    ringMesh.updateMatrix();
-    ringMesh.matrixAutoUpdate = false;
-    this.scene.add(ringMesh);
-    this.arenaDecorMeshes.push(ringMesh);
-
-    this.rebuildHitboxList();
-  }
-
-  buildMapLandmarks(
-    mapId,
-    halfSize,
-    addDecorBox,
-    addDecorCyl,
-    darkSteelMat,
-    gunmetalFrameMat,
-    brushedChromeMat,
-    hazardMat,
-    trimAccentMat,
-    trimSecondaryMat
-  ) {
-    if (mapId === 'cargo_dock') {
-      // 2 Massive Industrial Port Gantry Cranes spanning West & East Dockyards (23m tall!)
-      for (const sideSign of [-1, 1]) {
-        const gx = sideSign * 38;
-        // 4 Heavy A-frame Gantry Support Legs rooted on the crane platform edges
-        for (const lz of [-7.4, 7.4]) {
-          addDecorBox(gx - 5.2, 11.5, lz, 1.1, 21.0, 1.1, hazardMat, true);
-          addDecorBox(gx + 5.2, 11.5, lz, 1.1, 21.0, 1.1, hazardMat, true);
-          // Cross-bracing struts
-          addDecorBox(gx, 10.5, lz, 11.2, 0.65, 0.65, darkSteelMat);
-          addDecorBox(gx, 16.5, lz, 11.2, 0.65, 0.65, darkSteelMat);
-          addDecorBox(gx, 21.5, lz, 12.2, 1.1, 1.3, gunmetalFrameMat);
-        }
-        // Overhead Horizontal Crane Bridge & Cantilever Boom extending toward center
-        const boomX = gx - sideSign * 6.5;
-        addDecorBox(boomX, 22.4, 0, 28.0, 1.4, 16.2, darkSteelMat, true);
-        addDecorBox(boomX, 23.2, -7.4, 28.5, 0.35, 0.45, trimAccentMat);
-        addDecorBox(boomX, 23.2, 7.4, 28.5, 0.35, 0.45, trimAccentMat);
-
-        // Crane Operator Cabin & Hoist Trolley
-        const cabX = gx - sideSign * 14.0;
-        addDecorBox(cabX, 20.6, 0, 3.8, 2.2, 3.4, gunmetalFrameMat);
-        addDecorBox(cabX, 20.4, 0, 4.0, 0.8, 3.6, trimSecondaryMat);
-
-        // Steel Hoist Cables & Suspended Shipping Container high in the air (y = 13.2m)
-        addDecorCyl(cabX, 17.2, -2.6, 0.06, 6.2, brushedChromeMat, 'y');
-        addDecorCyl(cabX, 17.2, 2.6, 0.06, 6.2, brushedChromeMat, 'y');
-        addDecorBox(cabX, 14.8, 0, 3.6, 0.45, 7.6, hazardMat);
-        addDecorBox(cabX, 13.0, 0, 3.4, 3.0, 8.2, gunmetalFrameMat, true);
-        addDecorBox(cabX, 13.0, 0, 3.55, 0.45, 8.3, trimAccentMat);
-      }
-    } else if (mapId === 'desert_outpost') {
-      // Central Rotating Solar Radar Dish & Communications Array atop Command Tower
-      const dishGroup = new THREE.Group();
-      dishGroup.position.set(0, 13.8, 0);
-
-      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.65, 4.2, 10), darkSteelMat);
-      this.arenaGeometries.add(mast.geometry);
-      dishGroup.add(mast);
-
-      const dishGeo = new THREE.ConeGeometry(4.2, 1.8, 16, 1, true);
-      this.arenaGeometries.add(dishGeo);
-      const dishMesh = new THREE.Mesh(dishGeo, brushedChromeMat);
-      dishMesh.rotation.x = Math.PI * 0.68;
-      dishMesh.position.set(0, 1.6, 0.6);
-      dishGroup.add(dishMesh);
-
-      const emitter = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 2.6), trimAccentMat);
-      this.arenaGeometries.add(emitter.geometry);
-      emitter.position.set(0, 2.2, 1.4);
-      dishGroup.add(emitter);
-
-      // Dual Solar Panel Wings flanking the radar mast
-      const wingL = new THREE.Mesh(new THREE.BoxGeometry(6.5, 0.18, 2.4), trimSecondaryMat);
-      const wingR = new THREE.Mesh(new THREE.BoxGeometry(6.5, 0.18, 2.4), trimSecondaryMat);
-      this.arenaGeometries.add(wingL.geometry);
-      this.arenaGeometries.add(wingR.geometry);
-      wingL.position.set(-5.2, 0.8, 0);
-      wingR.position.set(5.2, 0.8, 0);
-      dishGroup.add(wingL, wingR);
-
-      this.scene.add(dishGroup);
-      this.arenaDecorMeshes.push(dishGroup);
-      this.citadelRings.push(dishGroup);
-
-      // 4 Quadrant Watchtower Overhead Sun-Shield Canopies (y = 6.8m, well above jump height)
-      for (const qx of [-36, 36]) {
-        for (const qz of [-34, 34]) {
-          for (const px of [-4.6, 4.6]) {
-            for (const pz of [-4.6, 4.6]) {
-              addDecorBox(qx + px, 4.6, qz + pz, 0.35, 4.4, 0.35, darkSteelMat);
-            }
-          }
-          addDecorBox(qx, 6.9, qz, 11.4, 0.45, 11.4, gunmetalFrameMat, true);
-          addDecorBox(qx, 7.2, qz, 11.6, 0.14, 11.6, trimAccentMat);
-        }
-      }
-    } else if (mapId === 'neon_lab') {
-      // Giant Suspended Quantum Particle Accelerator Ring hovering above the Lab (y = 13.5m)
-      const accelTorusGeo = new THREE.TorusGeometry(10.5, 0.55, 12, 48);
-      this.arenaGeometries.add(accelTorusGeo);
-      const accelRing = new THREE.Mesh(accelTorusGeo, gunmetalFrameMat);
-      accelRing.rotation.x = Math.PI / 2;
-      accelRing.position.set(0, 13.5, 0);
-      this.scene.add(accelRing);
-      this.arenaDecorMeshes.push(accelRing);
-
-      const coreTorusGeo = new THREE.TorusGeometry(9.8, 0.18, 8, 48);
-      this.arenaGeometries.add(coreTorusGeo);
-      const coreRing = new THREE.Mesh(coreTorusGeo, trimAccentMat);
-      coreRing.rotation.x = Math.PI / 2;
-      coreRing.position.set(0, 13.5, 0);
-      this.scene.add(coreRing);
-      this.arenaDecorMeshes.push(coreRing);
-
-      for (let c = 0; c < 8; c++) {
-        const ang = (c / 8) * Math.PI * 2;
-        const rx = Math.cos(ang) * 10.5;
-        const rz = Math.sin(ang) * 10.5;
-        const coil = addDecorBox(rx, 13.5, rz, 1.8, 1.8, 1.8, c % 2 === 0 ? trimAccentMat : trimSecondaryMat);
-        coil.rotation.y = -ang;
-      }
-
-      // Vertical Quantum Plasma Beam shooting from reactor core into the sky
-      addDecorCyl(0, 22, 0, 0.55, 32, trimAccentMat, 'y');
-    } else {
-      // Cyber Citadel: Central Skyward Holographic Energy Beam & 4 Quadrant Archway Gates
-      addDecorCyl(0, 22, 0, 0.48, 34, trimAccentMat, 'y');
-
-      // 4 Monumental Cyber Archways spanning the North, South, West, and East avenues
-      const archDist = 24;
-      for (const dirSign of [-1, 1]) {
-        // North & South Archway Crossbeams at z = +-24
-        addDecorBox(0, 6.8, dirSign * archDist, 14.5, 1.1, 1.6, darkSteelMat, true);
-        addDecorBox(0, 7.45, dirSign * archDist, 14.8, 0.24, 1.8, trimAccentMat);
-        addDecorBox(-6.2, 4.9, dirSign * archDist, 1.2, 3.8, 1.6, gunmetalFrameMat);
-        addDecorBox(6.2, 4.9, dirSign * archDist, 1.2, 3.8, 1.6, gunmetalFrameMat);
-      }
-    }
+  buildArena(mapCfg = this.currentMapConfig) {
+    buildArena(this, mapCfg);
   }
 
   syncPickups(pickupsData = []) {
-    // If map changed and pickup count/IDs differ, clear old pickup meshes first
     if (pickupsData.length > 0 && this.pickupMeshes.size > 0) {
       const firstId = pickupsData[0].id;
       const existing = this.pickupMeshes.get(firstId);
@@ -1415,7 +371,6 @@ export class Game3D {
         const group = new THREE.Group();
         group.position.set(p.x, p.y, p.z);
 
-        // Multi-tiered Armored Tech Pedestal Base
         const outerBaseGeo = new THREE.CylinderGeometry(1.38, 1.52, 0.14, 8);
         const outerBaseMat = new THREE.MeshStandardMaterial({
           color: 0x1e293b,
@@ -1438,7 +393,6 @@ export class Game3D {
         padMesh.position.y = 0.12;
         group.add(padMesh);
 
-        // 4 Angled Corner Projector Claws around Pedestal
         const clawGeo = new THREE.BoxGeometry(0.22, 0.38, 0.36);
         for (let c = 0; c < 4; c++) {
           const ang = (c / 4) * Math.PI * 2 + Math.PI / 4;
@@ -1449,7 +403,6 @@ export class Game3D {
           group.add(claw);
         }
 
-        // Holographic outer ring + inneremitter ring
         const holoRingGeo = new THREE.RingGeometry(0.78, 1.08, 24);
         const holoRingMat = new THREE.MeshBasicMaterial({
           color: 0x22c55e,
@@ -1462,7 +415,6 @@ export class Game3D {
         holoRing.position.y = 0.23;
         group.add(holoRing);
 
-        // Floating 3D Sculpted Green Cross Health Pack + Outer Octahedron Crystal Cage
         const crossGroup = new THREE.Group();
         const barMat = new THREE.MeshStandardMaterial({
           color: 0x22c55e,
@@ -1489,10 +441,11 @@ export class Game3D {
         group.add(crossGroup);
 
         this.scene.add(group);
-        item = { group, crossGroup, padMat, holoRing };
+        item = { group, crossGroup, padMat, holoRing, x: p.x, y: p.y, z: p.z, active: Boolean(p.active) };
         this.pickupMeshes.set(p.id, item);
       }
 
+      item.active = Boolean(p.active);
       item.crossGroup.visible = Boolean(p.active);
       item.holoRing.visible = Boolean(p.active);
       item.padMat.emissiveIntensity = p.active ? 0.55 : 0.05;
@@ -1502,6 +455,7 @@ export class Game3D {
   updatePickupSingle(pickupId, active) {
     const item = this.pickupMeshes.get(pickupId);
     if (item) {
+      item.active = Boolean(active);
       item.crossGroup.visible = Boolean(active);
       item.holoRing.visible = Boolean(active);
       item.padMat.emissiveIntensity = active ? 0.5 : 0.05;
@@ -1551,7 +505,6 @@ export class Game3D {
     const group = new THREE.Group();
     group.position.set(drop.x || 0, (drop.y || 0) + 0.02, drop.z || 0);
 
-    // Glowing holographic weapon loot ring on the ground
     const ringGeo = new THREE.RingGeometry(0.45, 0.58, 24);
     const ringMat = new THREE.MeshBasicMaterial({
       color: cfg.color || 0x38bdf8,
@@ -1564,7 +517,6 @@ export class Game3D {
     ringMesh.position.y = 0.03;
     group.add(ringMesh);
 
-    // 3D Weapon model hovering and tilted at an angle so it's easy to spot
     const gunSpinGroup = new THREE.Group();
     gunSpinGroup.position.y = 0.36;
     const gunMesh = this.createWeaponMesh(drop.weapon, false);
@@ -1610,601 +562,17 @@ export class Game3D {
   }
 
   createWeaponMesh(weaponId, isFirstPerson = false) {
-    const group = new THREE.Group();
-    const darkMetal = new THREE.MeshStandardMaterial({
-      color: 0x0f172a,
-      roughness: 0.32,
-      metalness: 0.78
-    });
-    const gunMetal = new THREE.MeshStandardMaterial({
-      color: 0x334155,
-      roughness: 0.28,
-      metalness: 0.85
-    });
-    const polymerMat = new THREE.MeshStandardMaterial({
-      color: 0x1e293b,
-      roughness: 0.58,
-      metalness: 0.32
-    });
-    const chromeMetal = new THREE.MeshStandardMaterial({
-      color: 0xcbd5e1,
-      roughness: 0.18,
-      metalness: 0.92
-    });
-    const brassMat = new THREE.MeshStandardMaterial({
-      color: 0xfacc15,
-      roughness: 0.25,
-      metalness: 0.88
-    });
-    const accentColor = WEAPONS[weaponId]?.color || 0xf59e0b;
-    const accentMat = new THREE.MeshStandardMaterial({
-      color: accentColor,
-      emissive: accentColor,
-      emissiveIntensity: 0.42,
-      roughness: 0.22,
-      metalness: 0.5
-    });
-    const reticleMat = new THREE.MeshBasicMaterial({ color: 0x22c55e });
-    const glassMat = new THREE.MeshBasicMaterial({
-      color: 0x38bdf8,
-      transparent: true,
-      opacity: 0.36,
-      side: THREE.DoubleSide
-    });
-
-    let magMesh = null;
-    let boltMesh = null;
-    let muzzleZ = -0.75;
-
-    if (weaponId === 'rifle' || weaponId === 'm4a1' || weaponId === 'scar') {
-      // ASSAULT RIFLES: VANDAL-AK / PHANTOM-M4 (Suppressed) / SCAR-H 7.62 (Battle Rifle)
-      const isM4 = weaponId === 'm4a1';
-      const isScar = weaponId === 'scar';
-      const upperReceiver = new THREE.Mesh(
-        new THREE.BoxGeometry(0.092, isScar ? 0.105 : 0.088, isScar ? 0.52 : 0.48),
-        isScar ? accentMat : darkMetal
-      );
-      upperReceiver.position.set(0, 0.025, 0);
-      const lowerReceiver = new THREE.Mesh(new THREE.BoxGeometry(0.084, 0.068, 0.38), polymerMat);
-      lowerReceiver.position.set(0, -0.038, 0.02);
-
-      // Side Accent Trim Strips
-      const trimStrip = new THREE.Mesh(new THREE.BoxGeometry(0.098, 0.016, 0.38), accentMat);
-      trimStrip.position.set(0, 0.032, -0.02);
-
-      // Ventilated M-LOK Handguard + Gas Block
-      const handguard = new THREE.Mesh(new THREE.BoxGeometry(0.078, 0.098, 0.35), gunMetal);
-      handguard.position.set(0, 0.015, -0.37);
-      const gasBlock = new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.065, 0.06), darkMetal);
-      gasBlock.position.set(0, 0.038, -0.55);
-      const gasTube = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.34, 8), chromeMetal);
-      gasTube.rotation.x = Math.PI / 2;
-      gasTube.position.set(0, 0.056, -0.37);
-
-      // Top Picatinny Rail Teeth
-      const railBase = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.014, 0.68), gunMetal);
-      railBase.position.set(0, 0.074, -0.14);
-
-      // Precision Barrel & Muzzle / Suppressor
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.42, 10), chromeMetal);
-      barrel.rotation.x = Math.PI / 2;
-      barrel.position.set(0, 0.018, -0.58);
-      const brake = isM4
-        ? new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.24, 12), darkMetal)
-        : new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.046, 0.085), accentMat);
-      if (isM4) brake.rotation.x = Math.PI / 2;
-      brake.position.set(0, 0.018, isM4 ? -0.82 : -0.79);
-
-      // Angled Tactical Foregrip under Handguard
-      const foregrip = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.11, 0.068), polymerMat);
-      foregrip.position.set(0, -0.072, -0.35);
-      foregrip.rotation.x = isM4 ? 0.05 : 0.28;
-
-      // Buttstock, Cheek Riser & Rubber Pad
-      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.074, 0.118, 0.26), isScar ? accentMat : polymerMat);
-      stock.position.set(0, -0.008, 0.33);
-      const buttPad = new THREE.Mesh(new THREE.BoxGeometry(0.078, 0.132, 0.035), darkMetal);
-      buttPad.position.set(0, -0.012, 0.47);
-      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.16, 0.085), polymerMat);
-      grip.position.set(0, -0.115, 0.13);
-      grip.rotation.x = -0.26;
-      const triggerGuard = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.016, 0.09), darkMetal);
-      triggerGuard.position.set(0, -0.082, 0.04);
-
-      // Detachable Magazine (Straight heavy 7.62 mag for SCAR, curved mag for AK/M4)
-      magMesh = new THREE.Group();
-      const magBody = new THREE.Mesh(
-        new THREE.BoxGeometry(0.058, isScar ? 0.21 : 0.24, isScar ? 0.115 : 0.102),
-        isScar ? gunMetal : accentMat
-      );
-      const magPlate = new THREE.Mesh(new THREE.BoxGeometry(0.066, 0.032, 0.115), darkMetal);
-      magPlate.position.set(0, -0.12, 0);
-      magMesh.add(magBody, magPlate);
-      magMesh.position.set(0, -0.15, -0.09);
-      magMesh.rotation.x = isScar ? 0.04 : 0.24;
-      magMesh.userData.basePos = magMesh.position.clone();
-
-      // Reciprocating Charging Handle / Bolt Carrier
-      boltMesh = new THREE.Mesh(new THREE.BoxGeometry(0.115, 0.034, 0.12), chromeMetal);
-      boltMesh.position.set(0.018, 0.042, -0.04);
-      boltMesh.userData.baseZ = -0.04;
-
-      // Optic Sight (ACOG tube for SCAR, EOTech Holo for AK/M4)
-      const sightHood = isScar
-        ? new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.028, 0.18, 12), darkMetal)
-        : new THREE.Mesh(new THREE.BoxGeometry(0.068, 0.065, 0.12), darkMetal);
-      if (isScar) sightHood.rotation.x = Math.PI / 2;
-      sightHood.position.set(0, 0.112, -0.02);
-      const sightLens = new THREE.Mesh(new THREE.PlaneGeometry(0.052, 0.046), glassMat);
-      sightLens.position.set(0, 0.11, -0.02);
-      const sightDot = new THREE.Mesh(new THREE.SphereGeometry(0.0075, 8, 8), reticleMat);
-      sightDot.position.set(0, 0.11, -0.025);
-
-      group.add(
-        upperReceiver,
-        lowerReceiver,
-        trimStrip,
-        handguard,
-        gasBlock,
-        gasTube,
-        railBase,
-        barrel,
-        brake,
-        foregrip,
-        stock,
-        buttPad,
-        grip,
-        triggerGuard,
-        magMesh,
-        boltMesh,
-        sightHood,
-        sightLens,
-        sightDot
-      );
-      muzzleZ = isM4 ? -0.95 : -0.86;
-    } else if (weaponId === 'smg') {
-      // VECTOR-KRISS SMG: Futuristic CQB Submachine Gun with Angled Super-V Recoil Frame
-      const upperBody = new THREE.Mesh(new THREE.BoxGeometry(0.088, 0.092, 0.42), darkMetal);
-      upperBody.position.set(0, 0.028, -0.05);
-      const vectorHousing = new THREE.Mesh(new THREE.BoxGeometry(0.082, 0.15, 0.14), accentMat);
-      vectorHousing.position.set(0, -0.055, -0.18);
-      vectorHousing.rotation.x = 0.18;
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.28, 10), gunMetal);
-      barrel.rotation.x = Math.PI / 2;
-      barrel.position.set(0, 0.015, -0.34);
-      const holoSight = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.055, 0.09), gunMetal);
-      holoSight.position.set(0, 0.095, -0.04);
-      const sightDot = new THREE.Mesh(new THREE.SphereGeometry(0.007, 8, 8), reticleMat);
-      sightDot.position.set(0, 0.098, -0.04);
-      const foldingStock = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.085, 0.24), polymerMat);
-      foldingStock.position.set(0, 0.01, 0.26);
-      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.15, 0.08), polymerMat);
-      grip.position.set(0, -0.095, 0.06);
-      grip.rotation.x = -0.2;
-
-      magMesh = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.26, 0.068), gunMetal);
-      magMesh.position.set(0, -0.17, -0.19);
-      magMesh.rotation.x = 0.22;
-      magMesh.userData.basePos = magMesh.position.clone();
-
-      boltMesh = new THREE.Mesh(new THREE.BoxGeometry(0.105, 0.028, 0.09), chromeMetal);
-      boltMesh.position.set(0.015, 0.04, -0.1);
-      boltMesh.userData.baseZ = -0.1;
-
-      group.add(upperBody, vectorHousing, barrel, holoSight, sightDot, foldingStock, grip, magMesh, boltMesh);
-      muzzleZ = -0.52;
-    } else if (weaponId === 'lmg') {
-      // ODIN-M249: Heavy Squad Automatic Machinegun with 80-Round Drum Box & Dual Barrel Shroud
-      const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.125, 0.135, 0.56), darkMetal);
-      receiver.position.set(0, 0.02, -0.04);
-      const topCover = new THREE.Mesh(new THREE.BoxGeometry(0.115, 0.036, 0.34), accentMat);
-      topCover.position.set(0, 0.095, -0.02);
-      const shroud = new THREE.Mesh(new THREE.BoxGeometry(0.105, 0.11, 0.42), gunMetal);
-      shroud.position.set(0, 0.015, -0.48);
-      const heavyBarrel = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.48, 12), chromeMetal);
-      heavyBarrel.rotation.x = Math.PI / 2;
-      heavyBarrel.position.set(0, 0.028, -0.68);
-      const muzzleBrake = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.032, 0.09, 10), accentMat);
-      muzzleBrake.rotation.x = Math.PI / 2;
-      muzzleBrake.position.set(0, 0.028, -0.92);
-      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.135, 0.28), polymerMat);
-      stock.position.set(0, -0.01, 0.36);
-      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.064, 0.16, 0.09), polymerMat);
-      grip.position.set(0, -0.115, 0.14);
-      grip.rotation.x = -0.22;
-
-      // 80-Round Box Drum Magazine
-      magMesh = new THREE.Group();
-      const boxDrum = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.22, 0.18), accentMat);
-      const ammoBelt = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.09, 0.09), brassMat);
-      ammoBelt.position.set(0, 0.12, 0);
-      magMesh.add(boxDrum, ammoBelt);
-      magMesh.position.set(0, -0.16, -0.14);
-      magMesh.userData.basePos = magMesh.position.clone();
-
-      boltMesh = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.036, 0.13), chromeMetal);
-      boltMesh.position.set(0.025, 0.04, -0.06);
-      boltMesh.userData.baseZ = -0.06;
-
-      group.add(receiver, topCover, shroud, heavyBarrel, muzzleBrake, stock, grip, magMesh, boltMesh);
-      muzzleZ = -0.96;
-    } else if (weaponId === 'shotgun') {
-      // BUCKSHOT-8: Heavy Tactical Combat Pump Shotgun with Heatshield & Side Shell Saddle
-      const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.112, 0.142, 0.52), darkMetal);
-      const barrelTop = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.62, 12), gunMetal);
-      barrelTop.rotation.x = Math.PI / 2;
-      barrelTop.position.set(0, 0.038, -0.48);
-
-      // Ventilated Top Barrel Heatshield
-      const heatshield = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.028, 0.44), darkMetal);
-      heatshield.position.set(0, 0.056, -0.42);
-      const magTube = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.56, 10), chromeMetal);
-      magTube.rotation.x = Math.PI / 2;
-      magTube.position.set(0, -0.012, -0.45);
-      const barrelClamp = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.095, 0.045), accentMat);
-      barrelClamp.position.set(0, 0.012, -0.66);
-      const breacherChoke = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.028, 0.07, 10), accentMat);
-      breacherChoke.rotation.x = Math.PI / 2;
-      breacherChoke.position.set(0, 0.038, -0.8);
-
-      // Sliding Ribbed Pump Forend (Acts as boltMesh so it pumps on each shot!)
-      boltMesh = new THREE.Group();
-      const pumpBody = new THREE.Mesh(new THREE.BoxGeometry(0.098, 0.082, 0.27), accentMat);
-      const pumpRail = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.022, 0.36), chromeMetal);
-      pumpRail.position.set(0, 0.02, 0.08);
-      boltMesh.add(pumpBody, pumpRail);
-      boltMesh.position.set(0, -0.022, -0.37);
-      boltMesh.userData.baseZ = -0.37;
-
-      // Side Shell Saddle with 4 Visible 12-Gauge Shells (Acts as magMesh)
-      magMesh = new THREE.Group();
-      const saddlePlate = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.085, 0.22), gunMetal);
-      saddlePlate.position.set(0.058, 0.01, -0.02);
-      magMesh.add(saddlePlate);
-      for (let s = 0; s < 4; s++) {
-        const shellHull = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.068, 8), accentMat);
-        shellHull.position.set(0.068, 0.01, -0.09 + s * 0.045);
-        const shellBrass = new THREE.Mesh(new THREE.CylinderGeometry(0.0115, 0.0115, 0.022, 8), brassMat);
-        shellBrass.position.set(0.068, 0.036, -0.09 + s * 0.045);
-        magMesh.add(shellHull, shellBrass);
-      }
-      magMesh.position.set(0, -0.01, 0.02);
-      magMesh.userData.basePos = magMesh.position.clone();
-
-      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.082, 0.125, 0.28), polymerMat);
-      stock.position.set(0, -0.015, 0.35);
-      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.064, 0.16, 0.09), polymerMat);
-      grip.position.set(0, -0.115, 0.17);
-      grip.rotation.x = -0.28;
-
-      const rearSight = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.04, 0.065), accentMat);
-      rearSight.position.set(0, 0.09, 0.06);
-      const frontPost = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.032, 0.025), reticleMat);
-      frontPost.position.set(0, 0.075, -0.74);
-
-      group.add(
-        receiver,
-        barrelTop,
-        heatshield,
-        magTube,
-        barrelClamp,
-        breacherChoke,
-        boltMesh,
-        magMesh,
-        stock,
-        grip,
-        rearSight,
-        frontPost
-      );
-      muzzleZ = -0.84;
-    } else if (weaponId === 'sniper') {
-      // AWP-PHANTOM: Anti-Materiel Long-Range Sniper Chassis with Dual-Bell Scope & Folded Bipod
-      const chassis = new THREE.Mesh(new THREE.BoxGeometry(0.098, 0.138, 0.72), darkMetal);
-      const cheekRest = new THREE.Mesh(new THREE.BoxGeometry(0.084, 0.055, 0.22), accentMat);
-      cheekRest.position.set(0, 0.065, 0.38);
-
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.025, 0.84, 12), gunMetal);
-      barrel.rotation.x = Math.PI / 2;
-      barrel.position.set(0, 0.028, -0.7);
-      const muzzleBrake = new THREE.Mesh(new THREE.BoxGeometry(0.064, 0.052, 0.11), accentMat);
-      muzzleBrake.position.set(0, 0.028, -1.12);
-
-      // Folded Tactical Bipod Legs under Forend
-      const bipodLeft = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.28, 6), chromeMetal);
-      bipodLeft.rotation.x = Math.PI / 2;
-      bipodLeft.position.set(-0.042, -0.055, -0.46);
-      const bipodRight = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.28, 6), chromeMetal);
-      bipodRight.rotation.x = Math.PI / 2;
-      bipodRight.position.set(0.042, -0.055, -0.46);
-
-      // High-Power Dual-Bell Telescopic Scope with Turrets & Glowing Objective Lens
-      const scopeTube = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.42, 14), darkMetal);
-      scopeTube.rotation.x = Math.PI / 2;
-      scopeTube.position.set(0, 0.135, -0.09);
-      const frontBell = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.034, 0.14, 14), accentMat);
-      frontBell.rotation.x = Math.PI / 2;
-      frontBell.position.set(0, 0.135, -0.28);
-      const rearBell = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.042, 0.1, 14), accentMat);
-      rearBell.rotation.x = Math.PI / 2;
-      rearBell.position.set(0, 0.135, 0.11);
-      const lensGlass = new THREE.Mesh(new THREE.CircleGeometry(0.038, 12), glassMat);
-      lensGlass.position.set(0, 0.135, 0.162);
-      const turretTop = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.035, 8), chromeMetal);
-      turretTop.position.set(0, 0.172, -0.07);
-      const scopeMount = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.055, 0.22), gunMetal);
-      scopeMount.position.set(0, 0.085, -0.09);
-
-      // Detachable Heavy Box Magazine & Bolt Handle
-      magMesh = new THREE.Mesh(new THREE.BoxGeometry(0.066, 0.175, 0.145), gunMetal);
-      magMesh.position.set(0, -0.12, -0.08);
-      magMesh.userData.basePos = magMesh.position.clone();
-
-      boltMesh = new THREE.Group();
-      const boltCarrier = new THREE.Mesh(new THREE.BoxGeometry(0.105, 0.032, 0.14), chromeMetal);
-      const boltKnob = new THREE.Mesh(new THREE.SphereGeometry(0.022, 8, 8), darkMetal);
-      boltKnob.position.set(0.068, -0.01, 0.02);
-      boltMesh.add(boltCarrier, boltKnob);
-      boltMesh.position.set(0.02, 0.038, 0.06);
-      boltMesh.userData.baseZ = 0.06;
-
-      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.13, 0.3), polymerMat);
-      stock.position.set(0, -0.01, 0.44);
-      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.155, 0.085), polymerMat);
-      grip.position.set(0, -0.115, 0.16);
-      grip.rotation.x = -0.24;
-
-      group.add(
-        chassis,
-        cheekRest,
-        barrel,
-        muzzleBrake,
-        bipodLeft,
-        bipodRight,
-        scopeTube,
-        frontBell,
-        rearBell,
-        lensGlass,
-        turretTop,
-        scopeMount,
-        magMesh,
-        boltMesh,
-        stock,
-        grip
-      );
-      muzzleZ = -1.18;
-    } else if (weaponId === 'knife') {
-      // KARAMBIT-X: Curved Cyber Plasma-Edged Tactical Combat Knife with Finger Ring
-      const handle = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.16, 0.065), darkMetal);
-      handle.position.set(0, -0.04, -0.08);
-      handle.rotation.x = 0.25;
-      const fingerRing = new THREE.Mesh(new THREE.TorusGeometry(0.028, 0.008, 8, 16), accentMat);
-      fingerRing.rotation.y = Math.PI / 2;
-      fingerRing.position.set(0, -0.13, -0.05);
-      const guard = new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.028, 0.095), gunMetal);
-      guard.position.set(0, 0.04, -0.1);
-      const bladeSpine = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.065, 0.24), chromeMetal);
-      bladeSpine.position.set(0, 0.09, -0.22);
-      bladeSpine.rotation.x = -0.35;
-      const plasmaEdge = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.018, 0.25), accentMat);
-      plasmaEdge.position.set(0, 0.065, -0.23);
-      plasmaEdge.rotation.x = -0.35;
-      group.add(handle, fingerRing, guard, bladeSpine, plasmaEdge);
-      muzzleZ = -0.35;
-    } else {
-      // SECONDARY PISTOLS: PULSE-P9 / SHERIFF .50 (Deagle) / FRENZY-G18 (Auto Glock)
-      const isDeagle = weaponId === 'deagle';
-      const isGlock = weaponId === 'glock';
-      const slideLen = isDeagle ? 0.39 : 0.33;
-      const frame = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.058, slideLen - 0.02), polymerMat);
-      frame.position.set(0, -0.02, -0.03);
-
-      // Underbarrel Tactical Flashlight / Laser Sight Module
-      const laserBox = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.042, 0.11), gunMetal);
-      laserBox.position.set(0, -0.052, -0.12);
-      const laserLens = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.02, 8), reticleMat);
-      laserLens.rotation.x = Math.PI / 2;
-      laserLens.position.set(0, -0.052, -0.178);
-
-      // Reciprocating Two-Tone Top Slide with Front/Rear Sight Posts
-      boltMesh = new THREE.Group();
-      const slideBody = new THREE.Mesh(
-        new THREE.BoxGeometry(isDeagle ? 0.088 : 0.078, isDeagle ? 0.086 : 0.072, slideLen),
-        isDeagle ? chromeMetal : accentMat
-      );
-      const ejectionPort = new THREE.Mesh(new THREE.BoxGeometry(0.082, 0.035, 0.075), chromeMetal);
-      ejectionPort.position.set(0.002, 0.015, 0.01);
-      const rearDot = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.024, 0.022), reticleMat);
-      rearDot.position.set(0, 0.045, 0.13);
-      const frontDot = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.022, 0.02), reticleMat);
-      frontDot.position.set(0, 0.045, -0.14);
-      boltMesh.add(slideBody, ejectionPort, rearDot, frontDot);
-      boltMesh.position.set(0, 0.028, -0.03);
-      boltMesh.userData.baseZ = -0.03;
-
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.15, 10), chromeMetal);
-      barrel.rotation.x = Math.PI / 2;
-      barrel.position.set(0, 0.028, -0.22);
-
-      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.066, 0.175, 0.092), darkMetal);
-      grip.position.set(0, -0.105, 0.08);
-      grip.rotation.x = -0.22;
-      const triggerGuard = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.014, 0.08), polymerMat);
-      triggerGuard.position.set(0, -0.068, 0.01);
-
-      magMesh = new THREE.Group();
-      const pMagBody = new THREE.Mesh(
-        new THREE.BoxGeometry(0.054, isGlock ? 0.25 : 0.17, 0.076),
-        gunMetal
-      );
-      const pMagBase = new THREE.Mesh(new THREE.BoxGeometry(0.068, 0.026, 0.092), accentMat);
-      pMagBase.position.set(0, isGlock ? -0.13 : -0.088, 0);
-      magMesh.add(pMagBody, pMagBase);
-      magMesh.position.set(0, -0.115, 0.08);
-      magMesh.rotation.x = -0.22;
-      magMesh.userData.basePos = magMesh.position.clone();
-
-      group.add(frame, laserBox, laserLens, boltMesh, barrel, grip, triggerGuard, magMesh);
-      muzzleZ = isDeagle ? -0.35 : -0.31;
-    }
-
-    if (isFirstPerson) {
-      // Scale first-person viewmodel by 1.14x so weapons feel weighty, closer, and detailed
-      group.scale.setScalar(1.14);
-
-      // First-Person Sculpted Human Forearms, Tactical Gloves, Articulated Fingers & Wrist Chrono-Watch
-      const sleeveMat = new THREE.MeshStandardMaterial({
-        color: 0x1e293b,
-        roughness: 0.5,
-        metalness: 0.32
-      });
-      const gloveMat = new THREE.MeshStandardMaterial({
-        color: 0x0f172a,
-        roughness: 0.34,
-        metalness: 0.55
-      });
-      const skinGuardMat = new THREE.MeshStandardMaterial({
-        color: 0x334155,
-        roughness: 0.3,
-        metalness: 0.72
-      });
-      const cuffMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
-
-      // Right Trigger Hand (Sculpted Palm, Knuckle Bridge, Thumb & Curled Trigger Fingers) + Tapered Forearm
-      const rightHandGroup = new THREE.Group();
-      rightHandGroup.position.set(0.012, -0.105, 0.115);
-
-      const rightPalm = new THREE.Mesh(new THREE.CapsuleGeometry(0.034, 0.048, 8, 12), gloveMat);
-      rightPalm.rotation.x = Math.PI / 2.2;
-      const rightKnuckle = new THREE.Mesh(new THREE.CapsuleGeometry(0.016, 0.056, 6, 10), skinGuardMat);
-      rightKnuckle.rotation.z = Math.PI / 2;
-      rightKnuckle.position.set(0.004, 0.025, -0.012);
-
-      // Thumb wrapping around pistol grip
-      const rightThumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, 0.042, 6, 8), gloveMat);
-      rightThumb.position.set(-0.032, 0.01, -0.018);
-      rightThumb.rotation.set(0.45, 0.35, 0.55);
-
-      // 4 Curled fingers around grip & trigger guard
-      for (let f = 0; f < 4; f++) {
-        const finger = new THREE.Mesh(new THREE.CapsuleGeometry(0.01, 0.044, 6, 8), gloveMat);
-        finger.position.set(-0.014, -0.008 - f * 0.018, -0.036 + (f === 0 ? -0.018 : 0));
-        finger.rotation.z = Math.PI / 2;
-        finger.rotation.y = f === 0 ? -0.35 : 0.1;
-        rightHandGroup.add(finger);
-      }
-      rightHandGroup.add(rightPalm, rightKnuckle, rightThumb);
-
-      // Tapered Right Forearm & Vambrace
-      const rightForearm = new THREE.Mesh(new THREE.CapsuleGeometry(0.044, 0.30, 8, 14), sleeveMat);
-      rightForearm.rotation.x = Math.PI / 2 + 0.22;
-      rightForearm.rotation.z = 0.16;
-      rightForearm.position.set(0.062, -0.172, 0.31);
-      const rightVambrace = new THREE.Mesh(new THREE.CylinderGeometry(0.046, 0.052, 0.18, 12), skinGuardMat);
-      rightVambrace.rotation.x = Math.PI / 2 + 0.22;
-      rightVambrace.rotation.z = 0.16;
-      rightVambrace.position.set(0.048, -0.15, 0.24);
-      const rightWristRing = new THREE.Mesh(new THREE.TorusGeometry(0.044, 0.006, 8, 16), cuffMat);
-      rightWristRing.position.set(0.025, -0.122, 0.16);
-      rightWristRing.rotation.y = -0.15;
-      group.add(rightHandGroup, rightForearm, rightVambrace, rightWristRing);
-
-      // Left Support Hand (C-Clamp Foreguard Grip), Holographic Wrist Chrono-Watch & Forearm
-      const isOneHanded = WEAPONS[weaponId]?.slot === 2 || WEAPONS[weaponId]?.slot === 3;
-      if (!isOneHanded) {
-        const leftHandGroup = new THREE.Group();
-        leftHandGroup.position.set(-0.022, -0.055, -0.33);
-
-        const leftPalm = new THREE.Mesh(new THREE.CapsuleGeometry(0.034, 0.052, 8, 12), gloveMat);
-        leftPalm.rotation.x = Math.PI / 2;
-        const leftKnuckle = new THREE.Mesh(new THREE.CapsuleGeometry(0.015, 0.058, 6, 10), skinGuardMat);
-        leftKnuckle.rotation.z = Math.PI / 2;
-        leftKnuckle.position.set(-0.005, 0.022, 0);
-
-        const leftThumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, 0.045, 6, 8), gloveMat);
-        leftThumb.position.set(-0.018, 0.032, -0.02);
-        leftThumb.rotation.set(0.2, -0.4, -0.8);
-
-        for (let f = 0; f < 4; f++) {
-          const finger = new THREE.Mesh(new THREE.CapsuleGeometry(0.01, 0.046, 6, 8), gloveMat);
-          finger.position.set(0.016, -0.018, -0.042 + f * 0.022);
-          finger.rotation.z = Math.PI / 2.3;
-          leftHandGroup.add(finger);
-        }
-        leftHandGroup.add(leftPalm, leftKnuckle, leftThumb);
-
-        // Tactical Wrist Chrono-Watch with Glowing Cyan Dial
-        const watchCase = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.024, 0.014, 14), darkMetal);
-        watchCase.position.set(-0.054, -0.048, -0.22);
-        watchCase.rotation.z = 0.35;
-        const watchFace = new THREE.Mesh(new THREE.CylinderGeometry(0.019, 0.019, 0.016, 14), cuffMat);
-        watchFace.position.copy(watchCase.position);
-        watchFace.rotation.copy(watchCase.rotation);
-        const leftWristStrap = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.008, 8, 16), darkMetal);
-        leftWristStrap.position.set(-0.064, -0.078, -0.22);
-        leftWristStrap.rotation.y = 0.42;
-
-        // Tapered Left Forearm & Vambrace
-        const leftForearm = new THREE.Mesh(new THREE.CapsuleGeometry(0.044, 0.34, 8, 14), sleeveMat);
-        leftForearm.rotation.x = Math.PI / 2 + 0.25;
-        leftForearm.rotation.z = -0.42;
-        leftForearm.position.set(-0.16, -0.162, -0.055);
-        const leftVambrace = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, 0.20, 12), skinGuardMat);
-        leftVambrace.rotation.x = Math.PI / 2 + 0.25;
-        leftVambrace.rotation.z = -0.42;
-        leftVambrace.position.set(-0.115, -0.125, -0.135);
-
-        group.add(leftHandGroup, watchCase, watchFace, leftWristStrap, leftForearm, leftVambrace);
-      }
-
-      // Multi-fin 3D Muzzle Flash at barrel tip
-      const flashGroup = new THREE.Group();
-      const flashMat = new THREE.MeshBasicMaterial({
-        color: 0xfef08a,
-        transparent: true,
-        opacity: 0.94,
-        side: THREE.DoubleSide
-      });
-      const coreCone = new THREE.Mesh(new THREE.ConeGeometry(0.082, 0.28, 6), flashMat);
-      coreCone.rotation.x = -Math.PI / 2;
-      const crossPlaneA = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.3), flashMat);
-      const crossPlaneB = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.3), flashMat);
-      crossPlaneA.rotation.y = Math.PI / 4;
-      crossPlaneB.rotation.y = -Math.PI / 4;
-      flashGroup.add(coreCone, crossPlaneA, crossPlaneB);
-      flashGroup.position.set(0, 0.025, muzzleZ);
-      flashGroup.visible = false;
-      group.add(flashGroup);
-
-      group.userData.flashMesh = flashGroup;
-      group.userData.magMesh = magMesh;
-      group.userData.boltMesh = boltMesh;
-    } else {
-      // Slightly larger third-person weapon scale so enemies' held weapons are clearly identifiable
-      group.scale.setScalar(1.12);
-      const tpFlash = new THREE.Mesh(
-        new THREE.SphereGeometry(0.14, 6, 6),
-        new THREE.MeshBasicMaterial({ color: 0xfef08a })
-      );
-      tpFlash.position.set(0, 0.02, muzzleZ);
-      tpFlash.visible = false;
-      group.add(tpFlash);
-      group.userData.flashMesh = tpFlash;
-    }
-
-    return group;
+    return createWeaponMesh(weaponId, isFirstPerson);
   }
 
   setupViewmodelWeapons() {
     this.viewmodelRig = new THREE.Group();
     this.camera.add(this.viewmodelRig);
 
-    // Dedicated soft key light attached to camera so first-person weapon & metallic rails
-    // always catch crisp specular highlights regardless of room shadow angle
     this.viewmodelKeyLight = new THREE.PointLight(0xe0f2fe, 0.72, 2.5, 1.5);
     this.viewmodelKeyLight.position.set(0.22, 0.28, -0.25);
     this.camera.add(this.viewmodelKeyLight);
 
-    // Dynamic Muzzle Flash PointLight attached to viewmodel rig
     this.muzzleLight = new THREE.PointLight(0xfef08a, 0, 10, 2);
     this.muzzleLight.position.set(0, 0.05, -0.9);
     this.viewmodelRig.add(this.muzzleLight);
@@ -2220,12 +588,10 @@ export class Game3D {
   }
 
   setupLobbyShowcase() {
-    // Interactive 3D Humanoid Operator Stage rendered in center of Lobby screen
     this.lobbyShowcaseGroup = new THREE.Group();
     this.lobbyShowcaseGroup.position.set(0, -0.96, -2.62);
     this.camera.add(this.lobbyShowcaseGroup);
 
-    // Dedicated Studio 3-Point Lighting for the 3D Humanoid Operator Showcase
     this.lobbyKeyLight = new THREE.PointLight(0xffffff, 2.1, 6.5, 1.2);
     this.lobbyKeyLight.position.set(1.25, 2.25, 1.5);
     this.lobbyShowcaseGroup.add(this.lobbyKeyLight);
@@ -2238,7 +604,6 @@ export class Game3D {
     this.lobbyFillLight.position.set(0.1, 0.65, 1.6);
     this.lobbyShowcaseGroup.add(this.lobbyFillLight);
 
-    // Holographic Tactical Turntable Pedestal under Operator's Boots
     const pedGroup = new THREE.Group();
     const baseRingMat = new THREE.MeshStandardMaterial({
       color: 0x0f172a,
@@ -2280,7 +645,6 @@ export class Game3D {
     pedGroup.add(outerDeck, innerPad, this.lobbyHoloRingOuter, this.lobbyHoloRingInner, holoField);
     this.lobbyShowcaseGroup.add(pedGroup);
 
-    // Full Articulated 3D Humanoid Soldier on the Pedestal
     this.lobbyOperatorColor = 0x38bdf8;
     this.lobbyOperator = this.createRemotePlayerMesh(
       {
@@ -2315,7 +679,6 @@ export class Game3D {
       op.gunMesh = this.createWeaponMesh(weaponId, false);
       op.gunHolder.add(op.gunMesh);
     }
-    // Subtle weapon-inspect / shoulder-ready impulse
     op.armPivot.rotation.x = -0.22;
     this.callbacks.onWeaponSwitchSound?.();
   }
@@ -2394,6 +757,7 @@ export class Game3D {
     this.isAiming = false;
     this.currentBloom = 0;
     this.recoilShotIndex = 0;
+    this.crosshairRecoilKick = 0;
     this.accumulatedRecoilPitch = 0;
     this.accumulatedRecoilYaw = 0;
 
@@ -2405,7 +769,6 @@ export class Game3D {
       const vm = this.viewmodelMeshes[wId];
       if (vm) {
         vm.visible = wId === weaponId;
-        // Reset any reload magazine or bolt displacement on previous weapon
         if (vm.userData?.magMesh && vm.userData.magMesh.userData.basePos) {
           vm.userData.magMesh.position.copy(vm.userData.magMesh.userData.basePos);
         }
@@ -2453,7 +816,6 @@ export class Game3D {
     this.reloadStartedAt = now;
 
     if (cfg.shellByShell) {
-      // Shotgun shell-by-shell reload (interruptible by shooting, capped by reserveAmmo!)
       const missing = Math.max(1, Math.min(cfg.magSize - currentAmmo, reserveAmmo));
       const startDelay = cfg.shellReloadStartMs || 240;
       const shellMs = cfg.shellReloadMs || 390;
@@ -2462,7 +824,6 @@ export class Game3D {
       this.nextShellAt = now + startDelay + shellMs;
       this.reloadingUntil = now + this.reloadDuration;
     } else {
-      // Tactical reload (faster when round is chambered) vs Dry/Empty reload (full bolt rack)
       const isTactical = currentAmmo > 0;
       this.reloadMode = isTactical ? 'tactical' : 'empty';
       this.reloadDuration = isTactical ? (cfg.tacticalReloadMs || cfg.reloadMs) : cfg.reloadMs;
@@ -2481,529 +842,15 @@ export class Game3D {
   }
 
   createPlayerNameSprite(name) {
-    const canvas = document.createElement('canvas');
-    canvas.width = 280;
-    canvas.height = 80;
-    const ctx = canvas.getContext('2d');
-
-    const texture = new THREE.CanvasTexture(canvas);
-    const material = new THREE.SpriteMaterial({ map: texture, depthTest: false });
-    const sprite = new THREE.Sprite(material);
-    sprite.scale.set(2.35, 0.67, 1);
-    sprite.position.set(0, 2.38, 0);
-    sprite.renderOrder = 10;
-
-    const updateLabel = (hp) => {
-      ctx.clearRect(0, 0, 280, 80);
-
-      // Chamfered tactical obsidian nameplate
-      ctx.fillStyle = 'rgba(6, 10, 19, 0.88)';
-      ctx.beginPath();
-      ctx.moveTo(28, 8);
-      ctx.lineTo(256, 8);
-      ctx.lineTo(264, 16);
-      ctx.lineTo(264, 64);
-      ctx.lineTo(20, 64);
-      ctx.lineTo(20, 16);
-      ctx.closePath();
-      ctx.fill();
-
-      ctx.strokeStyle = 'rgba(56, 189, 248, 0.65)';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-
-      // Corner tactical accent brackets
-      ctx.fillStyle = '#38bdf8';
-      ctx.fillRect(20, 14, 4, 18);
-      ctx.fillRect(260, 46, 4, 18);
-
-      // Callsign text
-      ctx.font = '800 20px "Chakra Petch", "Segoe UI", sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillStyle = '#f8fafc';
-      ctx.fillText(name.slice(0, 15).toUpperCase(), 142, 33);
-
-      // HP Bar Track
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
-      ctx.fillRect(36, 44, 212, 11);
-
-      // HP Bar Fill
-      const pct = Math.max(0, Math.min(1, hp / 100));
-      ctx.fillStyle = pct > 0.55 ? '#10b981' : pct > 0.25 ? '#f59e0b' : '#ef4444';
-      ctx.fillRect(36, 44, Math.round(212 * pct), 11);
-
-      // Subtle 25% HP segment ticks
-      ctx.fillStyle = 'rgba(6, 10, 19, 0.65)';
-      for (let t = 1; t < 4; t++) {
-        ctx.fillRect(36 + t * 53, 44, 2, 11);
-      }
-
-      texture.needsUpdate = true;
-    };
-
-    updateLabel(100);
-    return { sprite, canvas, texture, material, updateLabel };
+    return createPlayerNameSprite(name);
   }
 
   createRemotePlayerMesh(playerData, options = {}) {
-    const isShowcase = Boolean(options.isShowcase);
-    const group = new THREE.Group();
-    const pColor = playerData.color || this.lobbyOperatorColor || 0x38bdf8;
-
-    const mainMat = new THREE.MeshStandardMaterial({
-      color: pColor,
-      roughness: 0.30,
-      metalness: 0.48
+    return createRemotePlayerMesh(playerData, {
+      scene: this.scene,
+      defaultColor: this.lobbyOperatorColor || 0x38bdf8,
+      ...options
     });
-    const suitMat = new THREE.MeshStandardMaterial({
-      color: 0x1e293b,
-      roughness: 0.54,
-      metalness: 0.28
-    });
-    const armorMat = new THREE.MeshStandardMaterial({
-      color: 0x0f172a,
-      roughness: 0.26,
-      metalness: 0.74
-    });
-    const chromeMat = new THREE.MeshStandardMaterial({
-      color: 0x94a3b8,
-      roughness: 0.20,
-      metalness: 0.88
-    });
-    const visorMat = new THREE.MeshStandardMaterial({
-      color: pColor,
-      emissive: pColor,
-      emissiveIntensity: 0.95,
-      roughness: 0.12,
-      metalness: 0.2
-    });
-
-    const hitboxParts = [];
-    const tagBodyHitbox = (mesh) => {
-      mesh.userData = { playerId: playerData.id, isHeadshot: false };
-      hitboxParts.push(mesh);
-      return mesh;
-    };
-    const tagHeadHitbox = (mesh) => {
-      mesh.userData = { playerId: playerData.id, isHeadshot: true };
-      hitboxParts.push(mesh);
-      return mesh;
-    };
-
-    // ==================== 1. PELVIS, HIPS & TACTICAL UTILITY BELT ====================
-    const pelvisGroup = new THREE.Group();
-    pelvisGroup.position.set(0, 0.80, 0);
-    group.add(pelvisGroup);
-
-    const pelvisCore = new THREE.Mesh(new THREE.CylinderGeometry(0.165, 0.145, 0.19, 14), armorMat);
-    pelvisCore.scale.set(1.22, 1, 0.82);
-    pelvisCore.castShadow = true;
-    tagBodyHitbox(pelvisCore);
-    pelvisGroup.add(pelvisCore);
-
-    const groinGuard = new THREE.Mesh(new THREE.CapsuleGeometry(0.068, 0.08, 8, 12), armorMat);
-    groinGuard.position.set(0, -0.03, -0.08);
-    const beltRing = new THREE.Mesh(new THREE.CylinderGeometry(0.182, 0.182, 0.072, 16), suitMat);
-    beltRing.scale.set(1.24, 1, 0.86);
-    beltRing.position.set(0, 0.065, 0);
-    const beltBuckle = new THREE.Mesh(new THREE.OctahedronGeometry(0.046, 0), visorMat);
-    beltBuckle.position.set(0, 0.065, -0.16);
-
-    // Cylindrical Tactical Grenade Canisters & Side Utility Pouches on Belt
-    const canisterGeo = new THREE.CylinderGeometry(0.036, 0.036, 0.12, 10);
-    const canisterL = new THREE.Mesh(canisterGeo, chromeMat);
-    canisterL.position.set(-0.21, 0.05, -0.09);
-    const canisterR = new THREE.Mesh(canisterGeo, chromeMat);
-    canisterR.position.set(0.21, 0.05, -0.09);
-    const hipPouchL = new THREE.Mesh(new THREE.CapsuleGeometry(0.044, 0.07, 6, 10), suitMat);
-    hipPouchL.position.set(-0.23, 0.04, 0.04);
-    const hipPouchR = new THREE.Mesh(new THREE.CapsuleGeometry(0.044, 0.07, 6, 10), suitMat);
-    hipPouchR.position.set(0.23, 0.04, 0.04);
-    pelvisGroup.add(groinGuard, beltRing, beltBuckle, canisterL, canisterR, hipPouchL, hipPouchR);
-
-    // ==================== 2. ANATOMICAL V-TAPERED UPPER BODY & CHEST RIG ====================
-    const upperBodyGroup = new THREE.Group();
-    upperBodyGroup.position.set(0, 0.10, 0); // World y = 0.90
-    pelvisGroup.add(upperBodyGroup);
-
-    // Primary Body Hitbox Cylinder (covers waist to upper chest)
-    const torsoGeo = new THREE.CylinderGeometry(0.245, 0.175, 0.60, 16);
-    const torsoMesh = new THREE.Mesh(torsoGeo, suitMat);
-    torsoMesh.scale.set(1.24, 1, 0.82);
-    torsoMesh.position.set(0, 0.28, 0);
-    torsoMesh.castShadow = true;
-    tagBodyHitbox(torsoMesh);
-    upperBodyGroup.add(torsoMesh);
-
-    // Contoured 6-Pack Abdominal Weave Ribs
-    for (let r = 0; r < 3; r++) {
-      const abRib = new THREE.Mesh(new THREE.CapsuleGeometry(0.026, 0.19 - r * 0.015, 6, 10), armorMat);
-      abRib.rotation.z = Math.PI / 2;
-      abRib.position.set(0, 0.08 + r * 0.062, -0.138);
-      upperBodyGroup.add(abRib);
-    }
-
-    // Sculpted Left & Right Pectoral Ballistic Plates + Sternum Arc Core
-    const pecGeo = new THREE.SphereGeometry(0.145, 14, 12);
-    const pecLeft = new THREE.Mesh(pecGeo, armorMat);
-    pecLeft.scale.set(1.08, 0.84, 0.65);
-    pecLeft.position.set(-0.105, 0.36, -0.105);
-    const pecRight = new THREE.Mesh(pecGeo, armorMat);
-    pecRight.scale.set(1.08, 0.84, 0.65);
-    pecRight.position.set(0.105, 0.36, -0.105);
-
-    const chestTrimL = new THREE.Mesh(new THREE.CapsuleGeometry(0.016, 0.15, 6, 8), mainMat);
-    chestTrimL.rotation.z = 0.42;
-    chestTrimL.position.set(-0.14, 0.35, -0.178);
-    const chestTrimR = new THREE.Mesh(new THREE.CapsuleGeometry(0.016, 0.15, 6, 8), mainMat);
-    chestTrimR.rotation.z = -0.42;
-    chestTrimR.position.set(0.14, 0.35, -0.178);
-
-    const coreHousing = new THREE.Mesh(new THREE.TorusGeometry(0.056, 0.014, 8, 16), chromeMat);
-    coreHousing.position.set(0, 0.35, -0.182);
-    const coreBadge = new THREE.Mesh(new THREE.OctahedronGeometry(0.048, 1), visorMat);
-    coreBadge.position.set(0, 0.35, -0.188);
-
-    // Muscular Trapezius / Upper Back & Aerodynamic Spine Thruster Pack
-    const trapsSlope = new THREE.Mesh(new THREE.CapsuleGeometry(0.125, 0.26, 8, 12), armorMat);
-    trapsSlope.rotation.z = Math.PI / 2;
-    trapsSlope.position.set(0, 0.47, 0.02);
-
-    const spineRidge = new THREE.Mesh(new THREE.CapsuleGeometry(0.065, 0.32, 8, 12), armorMat);
-    spineRidge.position.set(0, 0.32, 0.17);
-    const thrusterGeo = new THREE.CylinderGeometry(0.048, 0.064, 0.32, 12);
-    const thrusterL = new THREE.Mesh(thrusterGeo, chromeMat);
-    thrusterL.position.set(-0.125, 0.32, 0.195);
-    thrusterL.rotation.z = 0.12;
-    const thrusterR = new THREE.Mesh(thrusterGeo, chromeMat);
-    thrusterR.position.set(0.125, 0.32, 0.195);
-    thrusterR.rotation.z = -0.12;
-    const nozzleGlowL = new THREE.Mesh(new THREE.CylinderGeometry(0.044, 0.044, 0.03, 10), visorMat);
-    nozzleGlowL.position.set(-0.142, 0.155, 0.195);
-    const nozzleGlowR = new THREE.Mesh(new THREE.CylinderGeometry(0.044, 0.044, 0.03, 10), visorMat);
-    nozzleGlowR.position.set(0.142, 0.155, 0.195);
-
-    // Sculpted Neck & Armored Clavicle Collar Ring
-    const collarRing = new THREE.Mesh(new THREE.TorusGeometry(0.125, 0.028, 10, 18), armorMat);
-    collarRing.rotation.x = Math.PI / 2 + 0.12;
-    collarRing.position.set(0, 0.54, -0.01);
-    const neckMuscle = new THREE.Mesh(new THREE.CylinderGeometry(0.078, 0.096, 0.16, 14), suitMat);
-    neckMuscle.position.set(0, 0.60, -0.01);
-
-    upperBodyGroup.add(
-      pecLeft,
-      pecRight,
-      chestTrimL,
-      chestTrimR,
-      coreHousing,
-      coreBadge,
-      trapsSlope,
-      spineRidge,
-      thrusterL,
-      thrusterR,
-      nozzleGlowL,
-      nozzleGlowR,
-      collarRing,
-      neckMuscle
-    );
-
-    // ==================== 3. SCULPTED HUMANOID HEAD, BALLISTIC HELMET & VISOR ====================
-    const headGroup = new THREE.Group();
-    headGroup.position.set(0, 0.64, 0); // World y = 1.54
-    upperBodyGroup.add(headGroup);
-
-    // Generous Headshot Collider Capsule enveloping the entire cranium & helmet
-    const headGeo = new THREE.CapsuleGeometry(0.185, 0.14, 12, 16);
-    const headMesh = new THREE.Mesh(headGeo, suitMat);
-    headMesh.position.set(0, 0.21, 0); // World y = 1.75
-    headMesh.castShadow = true;
-    tagHeadHitbox(headMesh);
-    headGroup.add(headMesh);
-
-    // Smooth Contoured Ballistic Helmet Shell
-    const helmetDome = new THREE.Mesh(new THREE.SphereGeometry(0.196, 18, 14), armorMat);
-    helmetDome.scale.set(0.96, 1.04, 1.08);
-    helmetDome.position.set(0, 0.24, 0.01);
-    tagHeadHitbox(helmetDome);
-
-    // Aerodynamic Crown Ridge & Forehead NVG Shroud
-    const helmetCrest = new THREE.Mesh(new THREE.CapsuleGeometry(0.032, 0.22, 8, 12), mainMat);
-    helmetCrest.rotation.x = Math.PI / 2 - 0.1;
-    helmetCrest.position.set(0, 0.42, 0.01);
-    const browVisorHood = new THREE.Mesh(new THREE.CylinderGeometry(0.192, 0.198, 0.055, 16, 1, false, Math.PI * 0.58, Math.PI * 0.84), mainMat);
-    browVisorHood.position.set(0, 0.285, -0.02);
-
-    // Wrap-Around Curved Panoramic Glowing Visor (Faces -Z forward)
-    const visorMesh = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.186, 0.178, 0.092, 18, 1, false, Math.PI * 0.60, Math.PI * 0.80),
-      visorMat
-    );
-    visorMesh.position.set(0, 0.23, -0.02);
-    tagHeadHitbox(visorMesh);
-
-    // Sculpted Jawline, Cheek Guards & Tactical Respirator Mask
-    const jawMask = new THREE.Mesh(new THREE.CylinderGeometry(0.135, 0.102, 0.13, 14), armorMat);
-    jawMask.position.set(0, 0.13, -0.045);
-    const breatherFilter = new THREE.Mesh(new THREE.CylinderGeometry(0.044, 0.054, 0.08, 12), chromeMat);
-    breatherFilter.rotation.x = Math.PI / 2.2;
-    breatherFilter.position.set(0, 0.105, -0.155);
-    const breatherGlow = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.084, 10), visorMat);
-    breatherGlow.rotation.x = Math.PI / 2.2;
-    breatherGlow.position.set(0, 0.105, -0.157);
-
-    // Side Comms Headset Pods & Antenna
-    const earPodGeo = new THREE.CylinderGeometry(0.062, 0.062, 0.045, 12);
-    earPodGeo.rotateZ(Math.PI / 2);
-    const earPodL = new THREE.Mesh(earPodGeo, chromeMat);
-    earPodL.position.set(-0.188, 0.22, 0.01);
-    const earPodR = new THREE.Mesh(earPodGeo, chromeMat);
-    earPodR.position.set(0.188, 0.22, 0.01);
-    const commsAntenna = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.009, 0.22, 6), chromeMat);
-    commsAntenna.position.set(-0.195, 0.35, 0.04);
-
-    headGroup.add(
-      helmetDome,
-      helmetCrest,
-      browVisorHood,
-      visorMesh,
-      jawMask,
-      breatherFilter,
-      breatherGlow,
-      earPodL,
-      earPodR,
-      commsAntenna
-    );
-
-    // ==================== 4. ARTICULATED 2-SEGMENT ARMS, SHOULDERS & HANDS ====================
-    const armPivot = new THREE.Group();
-    armPivot.position.set(0, 0.46, 0); // World y = 1.36
-    upperBodyGroup.add(armPivot);
-
-    // Helper for curved multi-layer shoulder pauldron + ball joint
-    const buildShoulder = (sideSign) => {
-      const sGroup = new THREE.Group();
-      sGroup.position.set(sideSign * 0.32, 0.01, 0);
-
-      const ballJoint = new THREE.Mesh(new THREE.SphereGeometry(0.095, 12, 10), suitMat);
-      const pauldronDomed = new THREE.Mesh(
-        new THREE.SphereGeometry(0.122, 14, 12, 0, Math.PI * 2, 0, Math.PI * 0.58),
-        armorMat
-      );
-      pauldronDomed.position.set(sideSign * 0.02, 0.02, 0);
-      pauldronDomed.rotation.z = -sideSign * 0.42;
-
-      const pauldronTrim = new THREE.Mesh(new THREE.TorusGeometry(0.112, 0.015, 8, 16), mainMat);
-      pauldronTrim.rotation.x = Math.PI / 2;
-      pauldronTrim.rotation.y = -sideSign * 0.42;
-      pauldronTrim.position.set(sideSign * 0.025, 0.01, 0);
-
-      sGroup.add(ballJoint, pauldronDomed, pauldronTrim);
-      return sGroup;
-    };
-
-    const rightShoulder = buildShoulder(1);
-    const leftShoulder = buildShoulder(-1);
-
-    // Right Trigger Arm: Bicep -> Elbow Joint -> Forearm -> Gauntlet -> Hand & Fingers
-    const rightBicep = new THREE.Mesh(new THREE.CapsuleGeometry(0.062, 0.20, 8, 12), suitMat);
-    rightBicep.position.set(0.33, -0.10, -0.07);
-    rightBicep.rotation.set(0.58, 0, -0.06);
-
-    const rightElbow = new THREE.Mesh(new THREE.SphereGeometry(0.058, 10, 10), armorMat);
-    rightElbow.position.set(0.34, -0.19, -0.17);
-
-    const rightForearm = new THREE.Mesh(new THREE.CylinderGeometry(0.056, 0.044, 0.25, 12), suitMat);
-    rightForearm.position.set(0.31, -0.15, -0.29);
-    rightForearm.rotation.set(1.34, -0.20, 0);
-
-    const rightGauntlet = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.050, 0.16, 10), armorMat);
-    rightGauntlet.position.set(0.31, -0.15, -0.29);
-    rightGauntlet.rotation.set(1.34, -0.20, 0);
-
-    const rightHand = new THREE.Mesh(new THREE.SphereGeometry(0.048, 10, 8), armorMat);
-    rightHand.scale.set(0.9, 1.1, 1.3);
-    rightHand.position.set(0.28, -0.11, -0.40);
-
-    // Left Support Arm: Bicep -> Elbow Joint -> Forearm -> Hand Gripping Handguard
-    const leftBicep = new THREE.Mesh(new THREE.CapsuleGeometry(0.060, 0.21, 8, 12), suitMat);
-    leftBicep.position.set(-0.27, -0.09, -0.10);
-    leftBicep.rotation.set(0.75, -0.42, 0.30);
-
-    const leftElbow = new THREE.Mesh(new THREE.SphereGeometry(0.056, 10, 10), armorMat);
-    leftElbow.position.set(-0.18, -0.17, -0.23);
-
-    const leftForearm = new THREE.Mesh(new THREE.CylinderGeometry(0.054, 0.042, 0.31, 12), suitMat);
-    leftForearm.position.set(0.02, -0.12, -0.39);
-    leftForearm.rotation.set(1.38, 0, -0.82);
-
-    const leftGauntlet = new THREE.Mesh(new THREE.CylinderGeometry(0.058, 0.048, 0.18, 10), armorMat);
-    leftGauntlet.position.set(-0.01, -0.13, -0.36);
-    leftGauntlet.rotation.set(1.38, 0, -0.82);
-
-    const leftHand = new THREE.Mesh(new THREE.SphereGeometry(0.046, 10, 8), armorMat);
-    leftHand.scale.set(1.1, 0.9, 1.25);
-    leftHand.position.set(0.22, -0.08, -0.54);
-
-    // Held 3D Weapon aligned with both hands
-    const gunHolder = new THREE.Group();
-    gunHolder.position.set(0.27, -0.03, -0.42);
-    const gunMesh = this.createWeaponMesh(playerData.weapon || 'rifle', false);
-    gunHolder.add(gunMesh);
-
-    armPivot.add(
-      rightShoulder,
-      leftShoulder,
-      rightBicep,
-      rightElbow,
-      rightForearm,
-      rightGauntlet,
-      rightHand,
-      leftBicep,
-      leftElbow,
-      leftForearm,
-      leftGauntlet,
-      leftHand,
-      gunHolder
-    );
-
-    // ==================== 5. ARTICULATED 2-SEGMENT LEGS (HIP -> THIGH -> KNEE -> SHIN -> BOOT) ====================
-    const thighGeo = new THREE.CylinderGeometry(0.102, 0.078, 0.38, 14);
-    thighGeo.translate(0, -0.19, 0); // Pivot at hip socket (y = 0)
-
-    const shinGeo = new THREE.CylinderGeometry(0.076, 0.054, 0.34, 14);
-    shinGeo.translate(0, -0.17, 0); // Pivot at knee joint (y = 0)
-
-    const buildArticulatedLeg = (sideSign) => {
-      const hipLegMesh = new THREE.Mesh(thighGeo.clone(), suitMat);
-      hipLegMesh.position.set(sideSign * 0.15, 0.80, 0);
-      hipLegMesh.castShadow = true;
-      tagBodyHitbox(hipLegMesh);
-
-      // Hip ball joint & contoured outer thigh armor plate + holster strap
-      const hipBall = new THREE.Mesh(new THREE.SphereGeometry(0.092, 10, 10), suitMat);
-      const thighArmor = new THREE.Mesh(new THREE.CapsuleGeometry(0.054, 0.17, 6, 10), armorMat);
-      thighArmor.position.set(sideSign * 0.038, -0.18, -0.025);
-      const thighStripe = new THREE.Mesh(new THREE.CapsuleGeometry(0.022, 0.14, 6, 8), mainMat);
-      thighStripe.position.set(sideSign * 0.068, -0.18, -0.03);
-      const thighStrap = new THREE.Mesh(new THREE.TorusGeometry(0.092, 0.014, 6, 14), armorMat);
-      thighStrap.rotation.x = Math.PI / 2;
-      thighStrap.position.set(0, -0.19, 0);
-      hipLegMesh.add(hipBall, thighArmor, thighStripe, thighStrap);
-
-      // Articulated Knee Joint Pivot at bottom of thigh (y = -0.38)
-      const kneePivot = new THREE.Group();
-      kneePivot.position.set(0, -0.38, 0);
-      hipLegMesh.add(kneePivot);
-
-      const kneeSphere = new THREE.Mesh(new THREE.SphereGeometry(0.072, 10, 10), suitMat);
-      const kneeCap = new THREE.Mesh(new THREE.CapsuleGeometry(0.052, 0.065, 8, 10), armorMat);
-      kneeCap.position.set(0, 0.01, -0.052);
-      const kneeGlow = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.026, 0.02), visorMat);
-      kneeGlow.position.set(0, 0.01, -0.102);
-
-      // Lower Leg (Shin & Gastrocnemius Calf Muscle)
-      const shinMesh = new THREE.Mesh(shinGeo.clone(), suitMat);
-      shinMesh.castShadow = true;
-      tagBodyHitbox(shinMesh);
-
-      const calfMuscle = new THREE.Mesh(new THREE.SphereGeometry(0.068, 10, 8), suitMat);
-      calfMuscle.scale.set(0.92, 1.4, 1.05);
-      calfMuscle.position.set(0, -0.13, 0.026);
-
-      const shinGuard = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.066, 0.052, 0.25, 12, 1, false, Math.PI * 0.62, Math.PI * 0.76),
-        armorMat
-      );
-      shinGuard.position.set(0, -0.18, -0.02);
-      const shinTrim = new THREE.Mesh(new THREE.CapsuleGeometry(0.014, 0.16, 6, 8), mainMat);
-      shinTrim.position.set(0, -0.18, -0.082);
-
-      // Ankle Joint & Sculpted Combat Boot (Bottom of sole rests at y = -0.42 -> world y = 0.00)
-      const ankleCollar = new THREE.Mesh(new THREE.CylinderGeometry(0.058, 0.066, 0.07, 12), armorMat);
-      ankleCollar.position.set(0, -0.33, 0);
-      const bootInstep = new THREE.Mesh(new THREE.CapsuleGeometry(0.058, 0.13, 8, 12), armorMat);
-      bootInstep.rotation.x = Math.PI / 2;
-      bootInstep.position.set(0, -0.368, -0.045);
-      const bootToeCap = new THREE.Mesh(new THREE.SphereGeometry(0.058, 10, 8), chromeMat);
-      bootToeCap.scale.set(1.02, 0.72, 1.15);
-      bootToeCap.position.set(0, -0.375, -0.115);
-      const bootSole = new THREE.Mesh(new THREE.BoxGeometry(0.126, 0.028, 0.26), armorMat);
-      bootSole.position.set(0, -0.406, -0.045);
-
-      kneePivot.add(
-        kneeSphere,
-        kneeCap,
-        kneeGlow,
-        shinMesh,
-        calfMuscle,
-        shinGuard,
-        shinTrim,
-        ankleCollar,
-        bootInstep,
-        bootToeCap,
-        bootSole
-      );
-
-      return { hipLegMesh, kneePivot, shinMesh };
-    };
-
-    const leftLegData = buildArticulatedLeg(-1);
-    const rightLegData = buildArticulatedLeg(1);
-    const leftLeg = leftLegData.hipLegMesh;
-    const rightLeg = rightLegData.hipLegMesh;
-    const leftKneePivot = leftLegData.kneePivot;
-    const rightKneePivot = rightLegData.kneePivot;
-
-    group.add(leftLeg, rightLeg);
-
-    // Floating Name & Health Bar Sprite (only for in-match remote players)
-    let labelInfo = null;
-    if (!isShowcase) {
-      labelInfo = this.createPlayerNameSprite(playerData.name || 'STRIKER');
-      group.add(labelInfo.sprite);
-      this.scene.add(group);
-    }
-
-    const setOperatorColor = (newHex) => {
-      mainMat.color.setHex(newHex);
-      visorMat.color.setHex(newHex);
-      visorMat.emissive.setHex(newHex);
-    };
-
-    return {
-      id: playerData.id,
-      name: playerData.name,
-      group,
-      pelvisGroup,
-      upperBodyGroup,
-      headGroup,
-      torsoMesh,
-      headMesh,
-      leftLeg,
-      rightLeg,
-      leftKneePivot,
-      rightKneePivot,
-      armPivot,
-      gunHolder,
-      gunMesh,
-      hitboxParts,
-      setOperatorColor,
-      currentWeapon: playerData.weapon || 'rifle',
-      labelInfo,
-      targetPos: new THREE.Vector3(playerData.x || 0, playerData.y || 0, playerData.z || 0),
-      targetYaw: playerData.yaw || 0,
-      targetPitch: playerData.pitch || 0,
-      crouching: Boolean(playerData.crouching),
-      prone: Boolean(playerData.prone),
-      lean: Number(playerData.lean || 0),
-      crouchBlend: 0,
-      proneBlend: 0,
-      leanBlend: 0,
-      hp: playerData.hp ?? 100,
-      alive: playerData.alive !== undefined ? Boolean(playerData.alive) : true,
-      walkPhase: 0,
-      lastShotFlashAt: 0
-    };
   }
 
   rebuildHitboxList() {
@@ -3072,7 +919,6 @@ export class Game3D {
       if (rp.alive !== nowAlive) {
         hitboxesDirty = true;
         if (nowAlive) {
-          // Snap immediately to spawn point upon respawn
           rp.group.position.set(p.x, p.y, p.z);
           rp.group.rotation.y = p.yaw || 0;
         }
@@ -3089,7 +935,6 @@ export class Game3D {
       rp.alive = nowAlive;
       rp.group.visible = nowAlive;
 
-      // Update held weapon model if remote player changed weapons
       if (p.weapon && WEAPONS[p.weapon] && p.weapon !== rp.currentWeapon) {
         rp.currentWeapon = p.weapon;
         rp.gunHolder.remove(rp.gunMesh);
@@ -3106,7 +951,6 @@ export class Game3D {
       }
     }
 
-    // Remove disconnected players/bots
     for (const [id, rp] of this.remotePlayers.entries()) {
       if (!seenIds.has(id)) {
         this.disposeRemotePlayer(rp);
@@ -3139,6 +983,7 @@ export class Game3D {
     this.currentLean = 0;
     this.slideUntil = 0;
     this.currentBloom = 0;
+    this.crosshairRecoilKick = 0;
     this.accumulatedRecoilPitch = 0;
     this.accumulatedRecoilYaw = 0;
     this.recoilShotIndex = 0;
@@ -3166,12 +1011,10 @@ export class Game3D {
 
   spawnShellCasing() {
     const shell = new THREE.Mesh(this.sharedShellGeo, this.sharedShellMat);
-    // Calculate world position of weapon ejection port (right of camera)
     this.tmpVec3A.set(0.24, -0.14, -0.35);
     this.tmpVec3A.applyQuaternion(this.camera.quaternion);
     shell.position.copy(this.camera.position).add(this.tmpVec3A);
 
-    // Eject velocity to the right + slightly up + player velocity
     this.tmpVec3B.set(
       1.6 + Math.random() * 1.1,
       1.4 + Math.random() * 0.9,
@@ -3227,7 +1070,6 @@ export class Game3D {
     const line = new THREE.Line(geo, mat);
     this.scene.add(line);
 
-    // Impact glow orb (uses shared geometry)
     const sparkColor = isPlayerHit ? 0xef4444 : colorHex;
     const sparkMat = new THREE.MeshBasicMaterial({
       color: sparkColor,
@@ -3239,7 +1081,6 @@ export class Game3D {
     spark.scale.setScalar(isPlayerHit ? 1.45 : 0.95);
     this.scene.add(spark);
 
-    // Spawn 3D ricochet/hit spark particles using sharedSparkGeo
     const particles = [];
     const pCount = isPlayerHit ? 5 : 3;
     for (let i = 0; i < pCount; i++) {
@@ -3281,7 +1122,6 @@ export class Game3D {
       if (rp.gunMesh?.userData?.flashMesh) {
         rp.gunMesh.userData.flashMesh.visible = true;
       }
-      // Subtle visual recoil on remote player's gun arm
       rp.armPivot.rotation.x += 0.14;
     }
 
@@ -3302,7 +1142,7 @@ export class Game3D {
     ctx.textAlign = 'center';
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
     ctx.lineWidth = 5;
-    const text = isHeadshot ? `🎯 -${ damage }` : `-${ damage }`;
+    const text = isHeadshot ? `🎯 -${damage}` : `-${damage}`;
     ctx.strokeText(text, 80, 44);
     ctx.fillStyle = isHeadshot ? '#facc15' : '#f8fafc';
     ctx.fillText(text, 80, 44);
@@ -3335,31 +1175,34 @@ export class Game3D {
   }
 
   applyDamageFlinch(damage = 20) {
-    const scale = Math.min(1.5, damage / 35);
-    this.flinchPitch = Math.min(0.06, this.flinchPitch + 0.024 * scale);
-    this.flinchRoll = (Math.random() < 0.5 ? -1 : 1) * 0.032 * scale;
+    const scale = Math.min(1.2, damage / 40);
+    this.flinchPitch = Math.min(0.025, this.flinchPitch + 0.01 * scale);
+    this.flinchRoll = (Math.random() < 0.5 ? -1 : 1) * 0.012 * scale;
   }
 
   computeEffectiveSpread(cfg) {
     const horizSpeed = Math.hypot(this.velocity.x, this.velocity.z);
-    // CS:GO first-shot laser accuracy when stationary / counter-strafed (horizSpeed < 1.1)
-    const firstShotMult = this.recoilShotIndex === 0 && this.currentBloom < 0.0015 && horizSpeed < 1.15 && this.onGround
-      ? (cfg.firstShotSpreadMult || 0.25)
+    const isStationary = horizSpeed < 0.85 && this.onGround;
+
+    // Laser-tight accuracy when stationary / crouched / prone
+    const firstShotMult = this.recoilShotIndex === 0 && this.currentBloom < 0.0015 && isStationary
+      ? (cfg.firstShotSpreadMult || 0.15)
       : 1.0;
     const base = (this.isAiming ? cfg.adsSpread : cfg.spread) * firstShotMult;
-    const speedRatio = Math.min(1.45, horizSpeed / MATCH_CONFIG.WALK_SPEED);
-    // CS:GO harsh movement inaccuracy curve after ~34% walk speed
-    const movePenalty = speedRatio > 0.18
-      ? Math.pow(speedRatio, 1.35) * (cfg.moveSpread || 0.028) * (this.isAiming ? 0.52 : 1.0)
-      : 0;
-    const airPenalty = !this.onGround ? (cfg.airSpread || 0.055) : 0;
     const stanceMult = this.prone
-      ? (cfg.proneSpreadMult || 0.42)
-      : (this.crouching || this.isSliding)
-        ? (cfg.crouchSpreadMult || 0.62)
+      ? (cfg.proneSpreadMult || 0.35)
+      : (this.crouching && !this.isSliding)
+        ? (cfg.crouchSpreadMult || 0.55)
         : 1.0;
 
-    return (base + this.currentBloom + movePenalty + airPenalty) * stanceMult;
+    // Heavy run-and-gun penalty: moving or jumping causes severe spread expansion & bullet deviation
+    const speedRatio = Math.min(1.65, horizSpeed / MATCH_CONFIG.WALK_SPEED);
+    const movePenalty = speedRatio > 0.12
+      ? Math.pow(speedRatio, 1.12) * (cfg.moveSpread || 0.095) * (this.isAiming ? 0.85 : 1.0)
+      : 0;
+    const airPenalty = !this.onGround ? (cfg.airSpread || 0.135) : 0;
+
+    return (base + this.currentBloom) * stanceMult + movePenalty + airPenalty;
   }
 
   attemptShoot() {
@@ -3375,7 +1218,7 @@ export class Game3D {
     const currentAmmo = this.ammoByWeapon[this.currentWeapon];
     const reserveAmmo = this.reserveAmmoByWeapon[this.currentWeapon] ?? 0;
 
-    // If reloading: allow interrupting shell-by-shell shotgun reload if at least 1 shell is loaded!
+    // If reloading: allow interrupting shell-by-shell shotgun reload if at least 1 shell is loaded
     if (this.reloadingUntil > now) {
       if (cfg.shellByShell && currentAmmo > 0) {
         this.reloadingUntil = 0;
@@ -3394,13 +1237,12 @@ export class Game3D {
       return;
     }
 
-    // Cancel sprint if firing a firearm
     if (!isMelee) {
       this.isSprinting = false;
     }
     this.lastShotAt = now;
     if (isMelee) {
-      this.meleeSwingUntil = now + 320;
+      this.meleeSwingUntil = now + 280;
     } else {
       this.ammoByWeapon[this.currentWeapon] = currentAmmo - 1;
       this.callbacks.onWeaponChanged?.(
@@ -3410,8 +1252,8 @@ export class Game3D {
       );
     }
 
-    // 1. Compute effective spread & Raycast BEFORE applying this shot's recoil kick
-    // so the bullet lands accurately where the crosshair is aimed at trigger pull!
+    const horizSpeed = Math.hypot(this.velocity.x, this.velocity.z);
+    const isMovingWhileShooting = horizSpeed > 0.95 || !this.onGround;
     const spreadAmount = isMelee ? 0 : this.computeEffectiveSpread(cfg);
 
     this.rebuildHitboxList();
@@ -3429,23 +1271,32 @@ export class Game3D {
       const dir = this.raycaster.ray.direction;
 
       if (cfg.pellets > 1) {
-        // Shotgun structured pellet ring pattern (center pellet + 7 radial ring pellets)
-        if (p === 0) {
-          dir.x += (Math.random() - 0.5) * spreadAmount * 0.32;
-          dir.y += (Math.random() - 0.5) * spreadAmount * 0.32;
-          dir.z += (Math.random() - 0.5) * spreadAmount * 0.32;
+        // Shotgun pellet ring pattern (widens heavily if running)
+        if (p === 0 && !isMovingWhileShooting) {
+          dir.x += (Math.random() - 0.5) * spreadAmount * 0.25;
+          dir.y += (Math.random() - 0.5) * spreadAmount * 0.25;
+          dir.z += (Math.random() - 0.5) * spreadAmount * 0.25;
         } else {
-          const angle = ((p - 1) / (cfg.pellets - 1)) * Math.PI * 2 + (Math.random() - 0.5) * 0.28;
-          const radius = spreadAmount * (0.62 + Math.random() * 0.42);
+          const angle = ((p) / cfg.pellets) * Math.PI * 2 + (Math.random() - 0.5) * 0.35;
+          const radius = spreadAmount * (0.58 + Math.random() * 0.45);
           dir.x += Math.cos(angle) * radius;
           dir.y += Math.sin(angle) * radius;
-          dir.z += (Math.random() - 0.5) * spreadAmount * 0.45;
+          dir.z += (Math.random() - 0.5) * spreadAmount * 0.48;
         }
       } else if (!isMelee) {
-        // Rifle / Sniper / Pistol cone spread
-        dir.x += (Math.random() - 0.5) * spreadAmount * 2;
-        dir.y += (Math.random() - 0.5) * spreadAmount * 2;
-        dir.z += (Math.random() - 0.5) * spreadAmount * 2;
+        if (isMovingWhileShooting) {
+          // Moving / running while shooting: strong outer-cone radial bullet deviation off-center!
+          const angle = Math.random() * Math.PI * 2;
+          const radius = spreadAmount * (0.42 + Math.random() * 0.68);
+          dir.x += Math.cos(angle) * radius;
+          dir.y += Math.sin(angle) * radius;
+          dir.z += (Math.random() - 0.5) * spreadAmount * 0.85;
+        } else {
+          // Stationary / crouched: tight, easy-to-control center group
+          dir.x += (Math.random() - 0.5) * spreadAmount * 1.4;
+          dir.y += (Math.random() - 0.5) * spreadAmount * 1.4;
+          dir.z += (Math.random() - 0.5) * spreadAmount * 1.4;
+        }
       }
       dir.normalize();
 
@@ -3484,7 +1335,6 @@ export class Game3D {
       }
 
       if (!isMelee || isPlayerHit) {
-        // Render tracer from gun barrel world position
         const barrelStart = {
           x: eyeOrigin.x + dir.x * 0.55,
           y: eyeOrigin.y - 0.13 + dir.y * 0.55,
@@ -3494,7 +1344,6 @@ export class Game3D {
       }
     }
 
-    // Forward direction vector before recoil
     this.raycaster.setFromCamera(this.screenCenter, this.camera);
     const forward = this.raycaster.ray.direction;
 
@@ -3507,49 +1356,25 @@ export class Game3D {
     });
 
     if (isMelee) {
-      this.punchRoll = (Math.random() < 0.5 ? -1 : 1) * 0.025;
       return;
     }
 
-    // 2. Increase dynamic bloom & Apply Progressive 2D Recoil Pattern + Camera Punch
+    // Crosshair-only recoil & dynamic bloom (ZERO camera pitch/yaw/roll shake!)
+    const moveBloomMult = isMovingWhileShooting ? 1.85 : 1.0;
     this.currentBloom = Math.min(
-      cfg.bloomMax || 0.038,
-      this.currentBloom + (cfg.bloomPerShot || 0.0045) * (this.isAiming ? 0.52 : 1.0)
+      (cfg.bloomMax || 0.018) * moveBloomMult,
+      this.currentBloom + (cfg.bloomPerShot || 0.002) * (this.isAiming ? 0.5 : 1.0) * moveBloomMult
     );
 
-    const adsScale = this.isAiming ? 0.52 : 1.0;
-    const crouchScale = this.prone ? 0.55 : (this.crouching || this.isSliding) ? 0.75 : 1.0;
-    const shotIdx = this.recoilShotIndex;
     this.recoilShotIndex = Math.min(30, this.recoilShotIndex + 1);
+    const chKick = (cfg.crosshairKick || 0.018) * (this.isAiming ? 0.65 : 1.0) * (this.prone ? 0.65 : this.crouching ? 0.8 : 1.0);
+    this.crosshairRecoilKick = Math.min(0.11, this.crosshairRecoilKick + chKick);
 
-    // Progressive vertical climb on early/mid spray shots, capped at recoilMaxPitch
-    const climbFactor = 1 + Math.min(shotIdx, 10) * (cfg.recoilClimbMult || 0.12);
-    const maxAccumPitch = cfg.recoilMaxPitch || 0.16;
-    const rawPitchKick = cfg.recoilPitch * climbFactor * adsScale * crouchScale;
-    const pitchKick = this.accumulatedRecoilPitch >= maxAccumPitch
-      ? rawPitchKick * 0.22
-      : rawPitchKick;
-
-    // Deterministic horizontal spray curve + slight micro-jitter
-    const pattern = cfg.recoilPattern || [0];
-    const patternBias = pattern[shotIdx % pattern.length] || 0;
-    const yawBase = cfg.recoilYaw || 0.0068;
-    const yawKick = (patternBias * yawBase * 1.35 + (Math.random() - 0.5) * yawBase * 0.65) * adsScale * crouchScale;
-
-    this.pitch = Math.min(Math.PI / 2 - 0.05, this.pitch + pitchKick);
-    this.yaw += yawKick;
-    this.accumulatedRecoilPitch = Math.min(maxAccumPitch * 1.15, this.accumulatedRecoilPitch + pitchKick * 0.85);
-    this.accumulatedRecoilYaw += yawKick * 0.82;
-
-    // Sharp camera punch spring that recovers quickly for snappy gunfeel
-    this.punchPitch = Math.min(0.065, this.punchPitch + rawPitchKick * 0.46);
-    this.punchRoll = (patternBias * 0.012) + (Math.random() - 0.5) * 0.014;
-
-    // Viewmodel kickback & reciprocating bolt/pump animation
-    this.recoilOffset = Math.min(0.22, this.recoilOffset + (cfg.visualKick || 0.09));
+    // Gentle 3D weapon viewmodel kickback & reciprocating bolt/pump animation (camera stays 100% steady)
+    this.recoilOffset = Math.min(0.16, this.recoilOffset + (cfg.visualKick || 0.055));
     this.boltKickOffset = 1.0;
     if (this.currentWeapon === 'shotgun' || this.currentWeapon === 'sniper') {
-      this.pumpCycleDuration = cfg.pumpActionMs || cfg.boltActionMs || 500;
+      this.pumpCycleDuration = cfg.pumpActionMs || cfg.boltActionMs || 420;
       this.pumpCycleUntil = now + this.pumpCycleDuration;
     }
 
@@ -3564,7 +1389,6 @@ export class Game3D {
     this.muzzleLight.color.setHex(cfg.color || 0xfef08a);
     this.muzzleLight.intensity = 3.2;
 
-    // Eject 3D spinning brass shell casing
     this.spawnShellCasing();
 
     if (this.ammoByWeapon[this.currentWeapon] === 0 && (this.reserveAmmoByWeapon[this.currentWeapon] ?? 0) > 0) {
@@ -3586,7 +1410,6 @@ export class Game3D {
     this.slideUntil = now + (MATCH_CONFIG.SLIDE_DURATION_MS || 620);
     this.slideCooldownUntil = now + (MATCH_CONFIG.SLIDE_COOLDOWN_MS || 900);
 
-    // Lock slide direction along current horizontal velocity vector
     this.slideDir.set(this.velocity.x / horizSpeed, 0, this.velocity.z / horizSpeed);
     const burstSpeed = MATCH_CONFIG.SLIDE_INITIAL_SPEED || 10.4;
     this.velocity.x = this.slideDir.x * burstSpeed;
@@ -3602,7 +1425,7 @@ export class Game3D {
     const now = performance.now();
     const cfg = WEAPONS[this.currentWeapon];
 
-    // Advance shell-by-shell shotgun reload or magazine reload completion (deducting from finite reserveAmmo!)
+    // Advance shell-by-shell shotgun reload or magazine reload completion
     if (this.reloadingUntil) {
       const wId = this.currentWeapon;
       if (cfg.shellByShell && this.reloadMode === 'shell') {
@@ -3617,16 +1440,14 @@ export class Game3D {
           const nextRes = this.reserveAmmoByWeapon[wId];
           const isFull = nextAmmo >= cfg.magSize || nextRes <= 0;
 
-          // Subtle physical bump on each shell inserted into the tube
-          this.punchPitch = Math.min(0.03, this.punchPitch + 0.01);
-          this.recoilOffset = Math.max(this.recoilOffset, 0.042);
+          this.recoilOffset = Math.max(this.recoilOffset, 0.036);
           this.callbacks.onShellInserted?.(wId, nextAmmo, nextRes, isFull);
 
           if (isFull) {
             this.reloadingUntil = 0;
             this.nextShellAt = 0;
-            this.pumpCycleDuration = 340;
-            this.pumpCycleUntil = now + 340;
+            this.pumpCycleDuration = 300;
+            this.pumpCycleUntil = now + 300;
             this.callbacks.onReloadComplete?.(wId, nextAmmo, nextRes);
           } else {
             this.nextShellAt += cfg.shellReloadMs || 390;
@@ -3653,8 +1474,6 @@ export class Game3D {
         if (activeVm?.userData?.boltMesh && typeof activeVm.userData.boltMesh.userData.baseZ === 'number') {
           activeVm.userData.boltMesh.position.z = activeVm.userData.boltMesh.userData.baseZ;
         }
-        // Subtle bolt-forward camera snap when reload completes
-        this.punchPitch = Math.max(-0.02, this.punchPitch - 0.009);
         this.callbacks.onReloadComplete?.(wId, this.ammoByWeapon[wId], this.reserveAmmoByWeapon[wId]);
       }
     }
@@ -3678,7 +1497,6 @@ export class Game3D {
       if (this.keys.KeyA) moveRight -= 1;
     }
 
-    // Check slide expiration
     if (this.isSliding && (now >= this.slideUntil || !this.onGround)) {
       this.isSliding = false;
     }
@@ -3693,13 +1511,12 @@ export class Game3D {
       !wantsCrouch &&
       !this.isSliding &&
       this.reloadingUntil <= now &&
-      now - this.lastShotAt > 160;
+      now - this.lastShotAt > 120;
 
     if (wantsSprint && this.prone) {
       this.prone = false;
     }
 
-    // Trigger Tactical Power Slide if pressing Crouch while sprinting fast
     if (wantsCrouch && !this.crouching && !this.isSliding && this.onGround) {
       this.tryTriggerSlide(now);
     }
@@ -3718,7 +1535,7 @@ export class Game3D {
     this.currentLean += (targetLean - this.currentLean) * Math.min(1, dt * 14);
     if (Math.abs(this.currentLean) < 0.005) this.currentLean = 0;
 
-    // Smooth eye height interpolation (Stand: 1.62m, Crouch: 1.04m, Slide: 0.78m, Prone: 0.52m) + landing spring
+    // Smooth eye height interpolation
     const targetEye = this.prone
       ? 0.52
       : this.isSliding
@@ -3728,7 +1545,6 @@ export class Game3D {
           : 1.62;
     this.currentEyeHeight += (targetEye - this.currentEyeHeight) * Math.min(1, dt * 13);
 
-    // Update landing dip spring
     this.landingDip += this.landingDipVel * dt;
     this.landingDipVel -= this.landingDip * 140 * dt;
     this.landingDipVel *= Math.max(0, 1 - dt * 14);
@@ -3763,18 +1579,15 @@ export class Game3D {
     const targetSpeed = baseTargetSpeed * (this.isSliding ? 1.0 : weaponMoveMult);
 
     if (this.isSliding) {
-      // Decay slide speed smoothly with slide friction
       const slideFriction = MATCH_CONFIG.SLIDE_FRICTION || 2.6;
       this.velocity.x *= Math.max(0, 1 - slideFriction * dt);
       this.velocity.z *= Math.max(0, 1 - slideFriction * dt);
-      // Allow subtle steering during slide
       this.velocity.x += wishDirX * 4.8 * dt;
       this.velocity.z += wishDirZ * 4.8 * dt;
     } else if (this.onGround) {
       if (wishLen > 0.001) {
         const wishVx = wishDirX * targetSpeed;
         const wishVz = wishDirZ * targetSpeed;
-        // CS:GO Counter-Strafing: if player reverses movement direction (dot product < -0.15), apply extra braking!
         const dotVel = this.velocity.x * wishDirX + this.velocity.z * wishDirZ;
         const counterStrafeBoost = dotVel < -0.2 ? 2.35 : 1.0;
         const dvX = wishVx - this.velocity.x;
@@ -3797,7 +1610,6 @@ export class Game3D {
         }
       }
     } else {
-      // Air control & momentum preservation
       const airDrag = Math.max(0, 1 - 0.35 * dt);
       this.velocity.x *= airDrag;
       this.velocity.z *= airDrag;
@@ -3825,7 +1637,6 @@ export class Game3D {
       const bobRate = this.isSprinting ? 12.2 : this.prone ? 4.8 : this.crouching ? 6.4 : 9.2;
       this.weaponBobTime += dt * bobRate;
 
-      // Procedural footstep audio timing (silent when crouching or prone, like CS:GO shift-walk/crouch)
       if (now >= this.nextFootstepAt && !this.crouching && !this.prone) {
         this.nextFootstepAt = now + (this.isSprinting ? 335 : 460);
         this.callbacks.onFootstep?.(this.isSprinting);
@@ -3834,7 +1645,7 @@ export class Game3D {
       this.weaponBobTime = 0;
     }
 
-    // Jump with Coyote Time (120ms) & Jump Buffering (120ms)
+    // Jump with Coyote Time & Jump Buffering
     if (this.keys.Space && this.isPointerLocked) {
       if (this.prone) {
         this.prone = false;
@@ -3857,13 +1668,12 @@ export class Game3D {
       this.callbacks.onJump?.();
     }
 
-    // Gravity
     this.velocity.y -= (MATCH_CONFIG.GRAVITY || 22.0) * dt;
 
     const preFallVy = this.velocity.y;
     this.wasOnGround = this.onGround;
 
-    // Integrate horizontal & vertical with AABB collision + stair step-up against active map obstacles
+    // Integrate horizontal & vertical with AABB collision against active map obstacles
     this.position.x += this.velocity.x * dt;
     this.position.z += this.velocity.z * dt;
     this.position.y += this.velocity.y * dt;
@@ -3929,7 +1739,6 @@ export class Game3D {
       }
     }
 
-    // Settle on floor & detect landing impact
     if (this.position.y <= highestFloor + 0.025 && this.velocity.y <= 0) {
       this.position.y = highestFloor;
       this.velocity.y = 0;
@@ -3945,40 +1754,33 @@ export class Game3D {
       this.onGround = false;
     }
 
-    // Clamp active map arena bounds
     const limit = (this.arenaHalfSize || MATCH_CONFIG.ARENA_HALF_SIZE) - 0.6;
     this.position.x = Math.max(-limit, Math.min(limit, this.position.x));
     this.position.z = Math.max(-limit, Math.min(limit, this.position.z));
 
-    // Smooth Recoil Auto-Recovery & Spray Index Reset
-    const recDelay = cfg.recoilRecoveryDelayMs || (cfg.fireRateMs + 45);
+    // Decay crosshair recoil kick & reset spray index smoothly without touching camera pitch/yaw!
+    const recDelay = cfg.recoilRecoveryDelayMs || (cfg.fireRateMs + 35);
+    this.crosshairRecoilKick = Math.max(0, this.crosshairRecoilKick - dt * (cfg.recoilRecovery || 14.0) * 0.018);
     if (now - this.lastShotAt > recDelay) {
-      const recSpeed = (cfg.recoilRecovery || 8.0) * dt;
-      const pitchStep = Math.min(this.accumulatedRecoilPitch, this.accumulatedRecoilPitch * recSpeed);
-      this.pitch = Math.max(-Math.PI / 2 + 0.05, this.pitch - pitchStep);
-      this.accumulatedRecoilPitch = Math.max(0, this.accumulatedRecoilPitch - pitchStep);
-
-      const yawStep = this.accumulatedRecoilYaw * Math.min(1, recSpeed);
-      this.yaw -= yawStep;
-      this.accumulatedRecoilYaw -= yawStep;
-
-      if (this.accumulatedRecoilPitch < 0.002) {
-        this.recoilShotIndex = 0;
-      } else if (now - this.lastShotAt > recDelay * 1.8) {
-        this.recoilShotIndex = Math.max(0, this.recoilShotIndex - dt * 18);
-      }
+      this.recoilShotIndex = Math.max(0, this.recoilShotIndex - dt * 28);
+      if (this.recoilShotIndex < 0.2) this.recoilShotIndex = 0;
     }
 
-    this.currentBloom = Math.max(0, this.currentBloom - (cfg.bloomDecay || 0.1) * dt);
+    this.currentBloom = Math.max(0, this.currentBloom - (cfg.bloomDecay || 0.14) * dt);
     this.effectiveSpread = this.computeEffectiveSpread(cfg);
-    this.callbacks.onSpreadUpdate?.(this.effectiveSpread, this.isAiming, this.isSprinting);
+    const isMoving = horizSpeed > 0.65 || !this.onGround;
+    this.callbacks.onSpreadUpdate?.(
+      this.effectiveSpread,
+      this.isAiming,
+      isMoving,
+      this.crosshairRecoilKick
+    );
 
-    // Decay camera punch & damage flinch springs
-    const springDecay = Math.max(0, 1 - dt * 18);
-    this.punchPitch *= springDecay;
-    this.punchRoll *= springDecay;
-    this.flinchPitch *= Math.max(0, 1 - dt * 12);
-    this.flinchRoll *= Math.max(0, 1 - dt * 12);
+    // Decay damage flinch springs (punchPitch and punchRoll remain 0 when shooting)
+    this.punchPitch = 0;
+    this.punchRoll = 0;
+    this.flinchPitch *= Math.max(0, 1 - dt * 14);
+    this.flinchRoll *= Math.max(0, 1 - dt * 14);
 
     // Camera Strafe Roll, Slide Tilt & Tactical Q/E Lean Roll
     const leanRoll = -this.currentLean * (MATCH_CONFIG.LEAN_ROLL_ANGLE || 0.145);
@@ -3987,25 +1789,24 @@ export class Game3D {
       : -moveRight * (this.isSprinting ? 0.026 : 0.016)) + leanRoll;
     this.cameraRoll += (targetRoll - this.cameraRoll) * Math.min(1, dt * 14);
 
-    // Lateral camera offset when leaning (Q/E) around corners
     const leanOffset = this.currentLean * (MATCH_CONFIG.LEAN_OFFSET || 0.42);
     const leanDropY = Math.abs(this.currentLean) * -0.055;
 
-    // Update camera transform
+    // Update camera transform (no shooting recoil shake!)
     this.camera.position.set(
       this.position.x + rightX * leanOffset,
       this.position.y + this.currentEyeHeight + this.landingDip + leanDropY,
       this.position.z + rightZ * leanOffset
     );
     this.tmpEuler.set(
-      Math.max(-Math.PI / 2 + 0.04, Math.min(Math.PI / 2 - 0.04, this.pitch + this.punchPitch + this.flinchPitch)),
+      Math.max(-Math.PI / 2 + 0.04, Math.min(Math.PI / 2 - 0.04, this.pitch + this.flinchPitch)),
       this.yaw,
-      this.cameraRoll + this.punchRoll + this.flinchRoll,
+      this.cameraRoll + this.flinchRoll,
       'YXZ'
     );
     this.camera.quaternion.setFromEuler(this.tmpEuler);
 
-    // Smooth Dynamic FOV (tighter base 68° FOV so world structures & enemies appear larger)
+    // Smooth Dynamic FOV
     const targetFov = this.isAiming
       ? cfg.zoomFov
       : this.isSliding
@@ -4019,8 +1820,8 @@ export class Game3D {
     }
 
     // Update First-Person Weapon Viewmodel Animation
-    this.recoilOffset = Math.max(0, this.recoilOffset - dt * 0.72);
-    this.boltKickOffset = Math.max(0, this.boltKickOffset - dt * 7.8);
+    this.recoilOffset = Math.max(0, this.recoilOffset - dt * 0.85);
+    this.boltKickOffset = Math.max(0, this.boltKickOffset - dt * 8.5);
     this.swayX *= 0.85;
     this.swayY *= 0.85;
 
@@ -4044,7 +1845,7 @@ export class Game3D {
     this.viewmodelRig.position.y += (targetVmY - bobY + this.swayY - this.viewmodelRig.position.y) * 0.28;
     this.viewmodelRig.position.z = targetVmZ + this.recoilOffset;
 
-    let targetRotX = this.recoilOffset * 1.45;
+    let targetRotX = this.recoilOffset * 1.15;
     let targetRotY = 0;
     let targetRotZ = -this.cameraRoll * 0.85;
 
@@ -4056,7 +1857,6 @@ export class Game3D {
       const reloadPct = Math.max(0, Math.min(1, 1 - (this.reloadingUntil - now) / this.reloadDuration));
 
       if (this.reloadMode === 'shell') {
-        // Shotgun shell-by-shell tilt & rhythmic shell insertion pulse
         const shellPulse = this.nextShellAt > 0
           ? Math.sin(Math.max(0, 1 - (this.nextShellAt - now) / (cfg.shellReloadMs || 390)) * Math.PI)
           : 0;
@@ -4067,7 +1867,6 @@ export class Game3D {
           magMesh.position.y = magMesh.userData.basePos.y - shellPulse * 0.06;
         }
       } else if (this.reloadMode === 'tactical') {
-        // Tactical reload: 2-stage mag swap (out -> lock in)
         targetRotX = -0.32 + Math.sin(reloadPct * Math.PI) * 0.22;
         targetRotZ = 0.44;
         targetRotY = 0.2;
@@ -4078,7 +1877,6 @@ export class Game3D {
           magMesh.position.y = magMesh.userData.basePos.y - magDip * 0.22;
         }
       } else {
-        // Dry / Empty 3-stage reload: Mag out (0-45%), Mag lock-in (45-74%), Bolt Rack (74-96%)
         if (reloadPct < 0.74) {
           const stagePct = reloadPct / 0.74;
           targetRotX = -0.35 + Math.sin(stagePct * Math.PI) * 0.24;
@@ -4091,7 +1889,6 @@ export class Game3D {
             magMesh.position.y = magMesh.userData.basePos.y - magDip * 0.24;
           }
         } else {
-          // Stage 3: Pull charging handle / slide back and release
           const boltPct = (reloadPct - 0.74) / 0.26;
           const pull = Math.sin(boltPct * Math.PI);
           targetRotX = -0.18 - pull * 0.14;
@@ -4113,11 +1910,9 @@ export class Game3D {
       targetRotZ = 0.38;
     }
 
-    // Shotgun pump-action / Sniper bolt-action cycling between shots
     if (!isReloading && boltMesh && typeof boltMesh.userData.baseZ === 'number') {
       if (this.pumpCycleUntil > now) {
         const cyclePct = 1 - (this.pumpCycleUntil - now) / this.pumpCycleDuration;
-        // Delay 22% after shot, then pump back & forward smoothly
         const pumpPhase = cyclePct > 0.22 ? Math.sin(((cyclePct - 0.22) / 0.78) * Math.PI) : 0;
         boltMesh.position.z = boltMesh.userData.baseZ + pumpPhase * 0.115;
         targetRotX -= pumpPhase * 0.09;
@@ -4127,9 +1922,8 @@ export class Game3D {
       }
     }
 
-    // Melee Karambit slash arc animation
     if (this.meleeSwingUntil > now) {
-      const swingPct = 1 - (this.meleeSwingUntil - now) / 320;
+      const swingPct = 1 - (this.meleeSwingUntil - now) / 280;
       const slashArc = Math.sin(swingPct * Math.PI);
       targetRotX -= slashArc * 0.55;
       targetRotY += slashArc * 0.85;
@@ -4141,7 +1935,6 @@ export class Game3D {
     this.viewmodelRig.rotation.y += (targetRotY - this.viewmodelRig.rotation.y) * 0.25;
     this.viewmodelRig.rotation.z += (targetRotZ - this.viewmodelRig.rotation.z) * 0.25;
 
-    // Hide muzzle flash & dynamic light after 50ms
     if (now - this.lastShotAt > 50) {
       if (activeVm?.userData?.flashMesh) {
         activeVm.userData.flashMesh.visible = false;
@@ -4186,92 +1979,7 @@ export class Game3D {
   }
 
   animateHumanoidRig(rp, dt, now, isMoving, moveSpeed = 0) {
-    // 1. Smoothly blend standing <-> tactical crouch <-> prone & Q/E lean posture
-    const targetProne = rp.prone ? 1.0 : 0.0;
-    rp.proneBlend = (rp.proneBlend || 0) + (targetProne - (rp.proneBlend || 0)) * Math.min(1, dt * 11);
-    const pb = rp.proneBlend;
-
-    const targetCrouch = rp.crouching && !rp.prone ? 1.0 : 0.0;
-    rp.crouchBlend = (rp.crouchBlend || 0) + (targetCrouch - (rp.crouchBlend || 0)) * Math.min(1, dt * 12);
-    const cb = rp.crouchBlend;
-
-    const targetLean = rp.lean || 0;
-    rp.leanBlend = (rp.leanBlend || 0) + (targetLean - (rp.leanBlend || 0)) * Math.min(1, dt * 14);
-    const lb = rp.leanBlend;
-
-    // 2. Advance gait cycle & subtle idle breathing
-    const breath = Math.sin(now * 0.0028 + (rp.id?.length || 0)) * 0.016;
-    if (isMoving) {
-      const rate = moveSpeed > 0.16 ? 13.5 : 10.8;
-      rp.walkPhase += dt * rate;
-    }
-
-    const strideAmp = isMoving ? (pb > 0.4 ? 0.18 : cb > 0.4 ? 0.42 : 0.62) : 0;
-    const strideSin = Math.sin(rp.walkPhase);
-    const strideBob = isMoving ? Math.abs(Math.sin(rp.walkPhase)) * 0.032 * (1 - cb * 0.4 - pb * 0.75) : 0;
-
-    // 3. Pelvis & Hip Socket vertical height (drops 0.25m in crouch, 0.56m in prone)
-    const hipY = 0.80 - cb * 0.25 - pb * 0.56 + strideBob;
-    if (rp.pelvisGroup) {
-      rp.pelvisGroup.position.y = hipY;
-      rp.pelvisGroup.rotation.y = isMoving ? -strideSin * 0.06 : 0;
-    }
-    rp.leftLeg.position.y = hipY;
-    rp.rightLeg.position.y = hipY;
-
-    // 4. Articulated Hip Swing + Real Knee Joint Flexion (or extended backward in Prone)
-    const crouchHipFlex = cb * 0.56 - pb * 1.15;
-    const crouchKneeFlex = cb * 0.96 + pb * 0.18;
-
-    if (isMoving) {
-      const leftHipSwing = strideSin * strideAmp;
-      const rightHipSwing = -strideSin * strideAmp;
-      rp.leftLeg.rotation.x = leftHipSwing + crouchHipFlex;
-      rp.rightLeg.rotation.x = rightHipSwing + crouchHipFlex;
-
-      if (rp.leftKneePivot && rp.rightKneePivot) {
-        const leftKneeSwing = Math.max(0.06, Math.sin(rp.walkPhase - 0.65) * 0.78);
-        const rightKneeSwing = Math.max(0.06, Math.sin(rp.walkPhase + Math.PI - 0.65) * 0.78);
-        rp.leftKneePivot.rotation.x = -(leftKneeSwing * (1 - cb * 0.35 - pb * 0.65) + crouchKneeFlex);
-        rp.rightKneePivot.rotation.x = -(rightKneeSwing * (1 - cb * 0.35 - pb * 0.65) + crouchKneeFlex);
-      }
-    } else {
-      rp.leftLeg.rotation.x += (crouchHipFlex + 0.04 - rp.leftLeg.rotation.x) * Math.min(1, dt * 10);
-      rp.rightLeg.rotation.x += (crouchHipFlex - 0.05 - rp.rightLeg.rotation.x) * Math.min(1, dt * 10);
-      if (rp.leftKneePivot && rp.rightKneePivot) {
-        rp.leftKneePivot.rotation.x += (-(crouchKneeFlex + 0.08) - rp.leftKneePivot.rotation.x) * Math.min(1, dt * 10);
-        rp.rightKneePivot.rotation.x += (-(crouchKneeFlex + 0.06) - rp.rightKneePivot.rotation.x) * Math.min(1, dt * 10);
-      }
-    }
-
-    // 5. Upper Body, Head, Lean Roll & Dual-Arm Aiming Articulation
-    const aimPitch = rp.targetPitch || 0;
-    if (rp.upperBodyGroup) {
-      const targetTorsoPitch = -cb * 0.18 - pb * 1.05 + aimPitch * 0.25 + breath * 0.5;
-      rp.upperBodyGroup.rotation.x += (targetTorsoPitch - rp.upperBodyGroup.rotation.x) * 0.25;
-      const targetTorsoTwist = isMoving ? strideSin * 0.09 : Math.sin(now * 0.0014) * 0.03;
-      rp.upperBodyGroup.rotation.y += (targetTorsoTwist - rp.upperBodyGroup.rotation.y) * 0.2;
-      rp.upperBodyGroup.rotation.z = -lb * 0.28;
-      rp.upperBodyGroup.position.x = lb * 0.18;
-    }
-    if (rp.headGroup) {
-      const targetHeadPitch = cb * 0.16 + pb * 0.92 + aimPitch * 0.45;
-      rp.headGroup.rotation.x += (targetHeadPitch - rp.headGroup.rotation.x) * 0.28;
-    }
-    if (rp.armPivot) {
-      const targetArmPitch = pb * 0.95 + aimPitch * 0.75 + breath + (isMoving ? Math.cos(rp.walkPhase * 2) * 0.035 : 0);
-      rp.armPivot.rotation.x += (targetArmPitch - rp.armPivot.rotation.x) * 0.32;
-    }
-
-    // Keep overhead nameplate positioned cleanly above helmet
-    if (rp.labelInfo?.sprite) {
-      rp.labelInfo.sprite.position.y = 2.38 - cb * 0.26 - pb * 0.88;
-    }
-
-    // Hide third-person muzzle flash after 55ms
-    if (rp.gunMesh?.userData?.flashMesh && now - rp.lastShotFlashAt > 55) {
-      rp.gunMesh.userData.flashMesh.visible = false;
-    }
+    animateHumanoidRig(rp, dt, now, isMoving, moveSpeed);
   }
 
   animate(now) {
@@ -4280,7 +1988,6 @@ export class Game3D {
     const dt = Math.min(0.1, (now - this.lastFrameTime) / 1000);
     this.lastFrameTime = now;
 
-    // FPS Counter & Adaptive Resolution Scaling for low-end laptops
     this.frameCount++;
     if (now - this.lastFpsUpdate >= 500) {
       this.currentFps = Math.round((this.frameCount * 1000) / (now - this.lastFpsUpdate));
@@ -4298,7 +2005,6 @@ export class Game3D {
     }
 
     if (!this.inMatch) {
-      // Closer, dramatic low-angle orbit camera over the 3D Arena while in Lobby
       const angle = now * 0.00022;
       const orbitR = (this.arenaHalfSize || 60) * 0.56;
       this.camera.position.set(Math.cos(angle) * orbitR, 16.5, Math.sin(angle) * orbitR);
@@ -4310,7 +2016,6 @@ export class Game3D {
         if (this.lobbyAutoRotate) {
           this.lobbyOperatorYaw += dt * 0.38;
         }
-        // Face camera (+Z in camera space) with user/auto turntable yaw
         this.lobbyOperator.group.rotation.y = Math.PI + this.lobbyOperatorYaw;
         this.lobbyOperator.crouching = Boolean(this.lobbyCrouching);
         this.animateHumanoidRig(
@@ -4330,7 +2035,6 @@ export class Game3D {
       this.updateLocalPhysics(dt);
     }
 
-    // Animate Central Citadel rotating energy rings, radar arrays & atmospheric particles
     for (let i = 0; i < this.citadelRings.length; i++) {
       const ring = this.citadelRings[i];
       if (ring.isMesh) {
@@ -4342,7 +2046,6 @@ export class Game3D {
       this.ambientParticles.rotation.y = now * 0.00008;
     }
 
-    // Interpolate Remote Players & Bots smoothly with articulated humanoid rig
     const lerpFactor = Math.min(1, dt * 18);
     for (const rp of this.remotePlayers.values()) {
       if (!rp.alive) continue;
@@ -4361,7 +2064,19 @@ export class Game3D {
       this.animateHumanoidRig(rp, dt, now, moveSpeed > 0.025, moveSpeed);
     }
 
-    // Rotate & bob 3D Health Packs
+    // Update top-left Tactical Mini Map / Radar when in match
+    if (this.inMatch && this.minimap) {
+      this.minimap.update({
+        localPos: this.position,
+        localYaw: this.yaw,
+        localAlive: this.alive,
+        remotePlayers: this.remotePlayers,
+        pickups: this.pickupMeshes,
+        droppedWeapons: this.droppedWeaponMeshes,
+        now
+      });
+    }
+
     for (const item of this.pickupMeshes.values()) {
       if (item.crossGroup.visible) {
         item.crossGroup.rotation.y = now * 0.0024;
@@ -4369,7 +2084,6 @@ export class Game3D {
       }
     }
 
-    // Rotate, bob & expire 3D Dropped Primary Weapons (5s despawn + [F] proximity prompt)
     const pickupRadius = MATCH_CONFIG.DROPPED_WEAPON_PICKUP_RADIUS || 2.8;
     let closestDrop = null;
     let closestDist = pickupRadius;
@@ -4383,7 +2097,6 @@ export class Game3D {
       }
       item.gunSpinGroup.rotation.y = now * 0.0032;
       item.gunSpinGroup.position.y = 0.36 + Math.sin(now * 0.006) * 0.07;
-      // Blink rapidly during the final 1.5 seconds before disappearing
       if (remMs < 1500) {
         const blink = Math.sin(now * 0.032) > 0 ? 0.92 : 0.25;
         item.ringMat.opacity = blink;
@@ -4409,7 +2122,6 @@ export class Game3D {
       this.callbacks.onNearbyWeaponChange?.(null, 0);
     }
 
-    // Update ejected 3D brass shell casings
     for (let i = this.activeShells.length - 1; i >= 0; i--) {
       const sh = this.activeShells[i];
       const elapsed = now - sh.createdAt;
@@ -4427,7 +2139,6 @@ export class Game3D {
       }
     }
 
-    // Update & clean up bullet tracers, ricochet sparks, & 3D damage popups
     for (let i = this.activeEffects.length - 1; i >= 0; i--) {
       const fx = this.activeEffects[i];
       const elapsed = now - fx.createdAt;
@@ -4508,12 +2219,6 @@ export class Game3D {
       const dy = -e.movementY * sens;
       this.yaw += dx;
       this.pitch = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, this.pitch + dy));
-
-      // Smart recoil compensation: if player pulls mouse down while gun is kicked up,
-      // absorb that downward pull from accumulatedRecoilPitch so recovery doesn't dip below original aim
-      if (dy < 0 && this.accumulatedRecoilPitch > 0) {
-        this.accumulatedRecoilPitch = Math.max(0, this.accumulatedRecoilPitch + dy);
-      }
 
       this.swayX = Math.max(-0.045, Math.min(0.045, -e.movementX * 0.00055));
       this.swayY = Math.max(-0.045, Math.min(0.045, e.movementY * 0.00055));

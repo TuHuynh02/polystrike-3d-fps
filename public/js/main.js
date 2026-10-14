@@ -244,11 +244,15 @@ const game = new Game3D(canvasContainer, {
       crosshair.classList.toggle('aiming', Boolean(isAiming));
     }
   },
-  onSpreadUpdate: (effectiveSpread, isAiming) => {
-    // Convert angular spread (radians) into pixel gap (2px to 26px)
-    const gapPx = Math.max(2, Math.min(26, Math.round(effectiveSpread * 380)));
-    crosshair.style.setProperty('--ch-gap', `${ gapPx }px`);
+  onSpreadUpdate: (effectiveSpread, isAiming, isMoving = false, crosshairKick = 0) => {
+    // Convert angular spread + crosshair recoil kick into pixel gap (2px stationary up to 44px when running/firing)
+    const moveBonusPx = isMoving ? 10 : 0;
+    const kickPx = Math.round((crosshairKick || 0) * 280);
+    const gapPx = Math.max(2, Math.min(44, Math.round(effectiveSpread * 340) + moveBonusPx + kickPx));
+    crosshair.style.setProperty('--ch-gap', `${gapPx}px`);
     crosshair.classList.toggle('aiming', Boolean(isAiming));
+    crosshair.classList.toggle('moving', Boolean(isMoving));
+    crosshair.classList.toggle('recoiling', kickPx >= 3);
   },
   onMovementHudUpdate: (stance, speed) => {
     if (hudSpeed) hudSpeed.textContent = speed.toFixed(1);

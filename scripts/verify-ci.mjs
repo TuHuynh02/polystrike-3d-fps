@@ -17,13 +17,23 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
 
+import fs from 'node:fs';
+
 const filesToCheck = [
   'shared/constants.js',
+  'shared/config.js',
+  'shared/weapons.js',
+  'shared/maps.js',
+  'shared/physics.js',
   'server/index.js',
   'server/roomManager.js',
   'server/botAI.js',
   'public/js/main.js',
   'public/js/game3d.js',
+  'public/js/minimap.js',
+  'public/js/weaponModels.js',
+  'public/js/humanoidRig.js',
+  'public/js/arenaBuilder.js',
   'public/js/audio.js',
   'public/js/networkAdapter.js',
   'scripts/build-pages.mjs'
@@ -34,13 +44,34 @@ for (const rel of filesToCheck) {
   execFileSync(process.execPath, ['--check', path.join(ROOT_DIR, rel)], { stdio: 'inherit' });
 }
 
-console.log('🔫 [CI] Verifying 3-Slot Weapon Arsenal & Loadout Config...');
+console.log('🔫 [CI] Verifying 3-Slot Weapon Arsenal, Faster Fire Rates, Zero Camera Shake & Run-and-Gun Penalty...');
 assert.equal(PRIMARY_WEAPONS.length, 7, 'Should have 7 primary weapons (3 ARs, SMG, Shotgun, Sniper, LMG)');
 assert.equal(SECONDARY_WEAPONS.length, 3, 'Should have 3 secondary weapons');
 assert.equal(MELEE_WEAPONS.length, 1, 'Should have 1 melee knife weapon');
 assert.ok(WEAPONS[DEFAULT_LOADOUT.primary], 'Default primary weapon must exist');
 assert.ok(WEAPONS[DEFAULT_LOADOUT.secondary], 'Default secondary weapon must exist');
 assert.ok(WEAPONS[DEFAULT_LOADOUT.melee]?.isMelee, 'Default melee weapon must have isMelee=true');
+
+// Faster fire rate checks
+assert.ok(WEAPONS.rifle.fireRateMs <= 90, 'Rifle fire rate should be fast (<= 90ms)');
+assert.ok(WEAPONS.m4a1.fireRateMs <= 75, 'M4A1 fire rate should be fast (<= 75ms)');
+assert.ok(WEAPONS.smg.fireRateMs <= 58, 'SMG fire rate should be fast (<= 58ms)');
+assert.ok(WEAPONS.pistol.fireRateMs <= 140, 'Pistol fire rate should be fast (<= 140ms)');
+
+// Zero camera recoil shake & heavy run-and-gun penalty checks
+for (const [wId, wCfg] of Object.entries(WEAPONS)) {
+  assert.equal(wCfg.recoilPitch, 0, `${wId} must have recoilPitch === 0 (zero camera shake)`);
+  assert.equal(wCfg.recoilYaw, 0, `${wId} must have recoilYaw === 0 (zero camera shake)`);
+  if (!wCfg.isMelee) {
+    assert.ok(wCfg.crosshairKick > 0, `${wId} must define crosshairKick > 0 for crosshair-only recoil`);
+    assert.ok(wCfg.moveSpread >= 0.055, `${wId} must enforce heavy moveSpread >= 0.055 when running`);
+    assert.ok(wCfg.airSpread >= 0.09, `${wId} must enforce heavy airSpread >= 0.09 when airborne`);
+  }
+}
+
+const indexHtml = fs.readFileSync(path.join(ROOT_DIR, 'public/index.html'), 'utf8');
+assert.ok(indexHtml.includes('id="hud-minimap"'), 'HUD must include top-left #hud-minimap container');
+assert.ok(indexHtml.includes('id="minimap-canvas"'), 'HUD must include #minimap-canvas');
 
 console.log('🛡️ [CI] Verifying Deathmatch Spawn Optimization & 1.5s Spawn Protection...');
 assert.equal(MATCH_CONFIG.SPAWN_PROTECTION_MS, 1500, 'Spawn protection must be 1500ms (1.5s)');
