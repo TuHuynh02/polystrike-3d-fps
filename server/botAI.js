@@ -86,6 +86,7 @@ export function createBotEntity(index, spawnPoint, mapCfg = null) {
   const pool = BOT_WEAPON_POOL || WEAPON_ORDER.filter((w) => !WEAPONS[w]?.isMelee);
   const weaponId = pool[index % pool.length];
   const weapon = WEAPONS[weaponId];
+  const primaryId = weapon.slot === 1 ? weaponId : 'rifle';
   const now = Date.now();
   return {
     id: `bot_${ index + 1 }_${ Math.random().toString(36).slice(2, 6) }`,
@@ -98,8 +99,28 @@ export function createBotEntity(index, spawnPoint, mapCfg = null) {
     yaw: spawnPoint.yaw || 0,
     pitch: 0,
     crouching: false,
+    prone: false,
+    lean: 0,
+    loadout: {
+      primary: primaryId,
+      secondary: 'pistol',
+      melee: 'knife'
+    },
     weapon: weaponId,
     ammo: weapon.magSize,
+    reserveAmmo: weapon.reserveAmmo ?? weapon.magSize * 3,
+    ammoByWeapon: {
+      [primaryId]: WEAPONS[primaryId].magSize,
+      [weaponId]: weapon.magSize,
+      pistol: WEAPONS.pistol.magSize,
+      knife: 1
+    },
+    reserveAmmoByWeapon: {
+      [primaryId]: WEAPONS[primaryId].reserveAmmo ?? WEAPONS[primaryId].magSize * 3,
+      [weaponId]: weapon.reserveAmmo ?? weapon.magSize * 3,
+      pistol: WEAPONS.pistol.reserveAmmo ?? 36,
+      knife: 0
+    },
     hp: MATCH_CONFIG.MAX_HP,
     alive: true,
     kills: 0,
@@ -140,10 +161,17 @@ export function updateRoomBots(room, dt, now, callbacks) {
 
     const weaponCfg = WEAPONS[bot.weapon] || WEAPONS.rifle;
 
-    // Complete reload if finished
+    // Complete reload if finished (deducting from reserveAmmo)
     if (bot.reloadingUntil && now >= bot.reloadingUntil) {
       bot.reloadingUntil = 0;
-      bot.ammo = weaponCfg.magSize;
+      const curMag = bot.ammo ?? 0;
+      const curRes = bot.reserveAmmo ?? weaponCfg.reserveAmmo ?? weaponCfg.magSize;
+      const needed = Math.max(0, weaponCfg.magSize - curMag);
+      const loaded = Math.min(needed, curRes);
+      bot.ammo = curMag + loaded;
+      bot.reserveAmmo = Math.max(0, curRes - loaded);
+      if (bot.ammoByWeapon) bot.ammoByWeapon[bot.weapon] = bot.ammo;
+      if (bot.reserveAmmoByWeapon) bot.reserveAmmoByWeapon[bot.weapon] = bot.reserveAmmo;
     }
 
     // Periodic AI decision update
@@ -235,9 +263,12 @@ export function updateRoomBots(room, dt, now, callbacks) {
 
       // Attempt to fire at target
       if (bot.ammo <= 0 && !bot.reloadingUntil) {
-        bot.reloadingUntil = now + weaponCfg.reloadMs;
+        if ((bot.reserveAmmo ?? 0) > 0) {
+          bot.reloadingUntil = now + weaponCfg.reloadMs;
+        }
       } else if (
         !bot.reloadingUntil &&
+        bot.ammo > 0 &&
         now - bot.lastShotAt >= Math.max(weaponCfg.fireRateMs * 1.65, 230)
       ) {
         const botEye = { x: bot.x, y: bot.y + 1.5, z: bot.z };
@@ -246,6 +277,7 @@ export function updateRoomBots(room, dt, now, callbacks) {
         if (hasLineOfSight(botEye, targetChest, obstacles)) {
           bot.lastShotAt = now;
           bot.ammo = Math.max(0, bot.ammo - 1);
+          if (bot.ammoByWeapon) bot.ammoByWeapon[bot.weapon] = bot.ammo;
 
           // Distance-based accuracy so bots feel fair and exciting
           const dist3D = Math.hypot(dx, dy, dz);

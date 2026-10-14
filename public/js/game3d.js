@@ -90,6 +90,8 @@ export class Game3D {
     this.rayTargets = [];
     this.remotePlayers = new Map(); // id -> RemotePlayerObject
     this.pickupMeshes = new Map();  // pickupId -> { group, crossGroup, ringMesh, padMat }
+    this.droppedWeaponMeshes = new Map(); // dropId -> { group, gunGroup, ringMesh, labelInfo, data }
+    this.nearbyDrop = null;
     this.activeEffects = [];        // Tracers, spark bursts, floating damage numbers
     this.activeShells = [];         // Ejected 3D brass shell casings
     this.bulletDecals = [];         // Pooled ring buffer of surface bullet holes (max 36)
@@ -112,6 +114,11 @@ export class Game3D {
     this.lastGroundedAt = 0;
     this.jumpQueuedUntil = 0;
     this.crouching = false;
+    this.prone = false;
+    this.currentLean = 0;
+    this.taggedUntil = 0;
+    this.prevMoveRight = 0;
+    this.prevMoveForward = 0;
     this.isSprinting = false;
     this.isSliding = false;
     this.slideUntil = 0;
@@ -123,7 +130,7 @@ export class Game3D {
     this.nextFootstepAt = 0;
     this.sensitivity = 1.0;
 
-    // Weapon, 3-Slot Loadout, Reload & Gunshot mechanics state
+    // Weapon, 3-Slot Loadout, Finite Reserve Ammo, Reload & Gunshot mechanics state
     this.loadout = {
       primary: 'rifle',
       secondary: 'pistol',
@@ -131,8 +138,10 @@ export class Game3D {
     };
     this.currentWeapon = 'rifle';
     this.ammoByWeapon = {};
+    this.reserveAmmoByWeapon = {};
     for (const wId of WEAPON_ORDER) {
       this.ammoByWeapon[wId] = WEAPONS[wId].magSize;
+      this.reserveAmmoByWeapon[wId] = WEAPONS[wId].infiniteAmmo ? 0 : (WEAPONS[wId].reserveAmmo ?? WEAPONS[wId].magSize * 3);
     }
     this.lastShotAt = -1000;
     this.reloadingUntil = 0;
@@ -170,6 +179,9 @@ export class Game3D {
       KeyS: false,
       KeyA: false,
       KeyD: false,
+      KeyQ: false,
+      KeyE: false,
+      KeyZ: false,
       Space: false,
       ShiftLeft: false,
       ShiftRight: false,
@@ -185,10 +197,11 @@ export class Game3D {
     this.lastMoveSentAt = 0;
     this.lastHudMoveUpdateAt = 0;
 
-    // Build 3D environment & weapon viewmodels
+    // Build 3D environment, weapon viewmodels & lobby 3D humanoid operator showcase
     this.setupLights();
     this.loadMap(DEFAULT_MAP_ID);
     this.setupViewmodelWeapons();
+    this.setupLobbyShowcase();
     this.bindEvents();
 
     // Start render loop
@@ -1495,6 +1508,107 @@ export class Game3D {
     }
   }
 
+  clearDroppedWeapons() {
+    for (const item of this.droppedWeaponMeshes.values()) {
+      this.scene.remove(item.group);
+      item.group.traverse((obj) => {
+        if (obj.isMesh) {
+          obj.geometry?.dispose();
+          if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
+          else obj.material?.dispose();
+        }
+      });
+    }
+    this.droppedWeaponMeshes.clear();
+    if (this.nearbyDrop) {
+      this.nearbyDrop = null;
+      this.callbacks.onNearbyWeaponChange?.(null, 0);
+    }
+  }
+
+  syncDroppedWeapons(drops = []) {
+    const seen = new Set();
+    for (const d of drops) {
+      seen.add(d.id);
+      if (!this.droppedWeaponMeshes.has(d.id)) {
+        this.addDroppedWeapon(d);
+      }
+    }
+    for (const id of Array.from(this.droppedWeaponMeshes.keys())) {
+      if (!seen.has(id)) {
+        this.removeDroppedWeapon(id);
+      }
+    }
+  }
+
+  addDroppedWeapon(drop) {
+    if (!drop || !drop.id || !WEAPONS[drop.weapon]) return;
+    if (this.droppedWeaponMeshes.has(drop.id)) {
+      this.removeDroppedWeapon(drop.id);
+    }
+
+    const cfg = WEAPONS[drop.weapon];
+    const group = new THREE.Group();
+    group.position.set(drop.x || 0, (drop.y || 0) + 0.02, drop.z || 0);
+
+    // Glowing holographic weapon loot ring on the ground
+    const ringGeo = new THREE.RingGeometry(0.45, 0.58, 24);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: cfg.color || 0x38bdf8,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.85
+    });
+    const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+    ringMesh.rotation.x = -Math.PI / 2;
+    ringMesh.position.y = 0.03;
+    group.add(ringMesh);
+
+    // 3D Weapon model hovering and tilted at an angle so it's easy to spot
+    const gunSpinGroup = new THREE.Group();
+    gunSpinGroup.position.y = 0.36;
+    const gunMesh = this.createWeaponMesh(drop.weapon, false);
+    gunMesh.scale.setScalar(1.22);
+    gunMesh.rotation.z = 0.32;
+    gunSpinGroup.add(gunMesh);
+    group.add(gunSpinGroup);
+
+    this.scene.add(group);
+    const now = performance.now();
+    const ttlMs = MATCH_CONFIG.DROPPED_WEAPON_DESPAWN_MS || 5000;
+    this.droppedWeaponMeshes.set(drop.id, {
+      id: drop.id,
+      weapon: drop.weapon,
+      ammo: drop.ammo ?? 0,
+      reserveAmmo: drop.reserveAmmo ?? 0,
+      x: drop.x || 0,
+      y: drop.y || 0,
+      z: drop.z || 0,
+      group,
+      gunSpinGroup,
+      ringMat,
+      localExpiresAt: now + ttlMs
+    });
+  }
+
+  removeDroppedWeapon(dropId) {
+    const item = this.droppedWeaponMeshes.get(dropId);
+    if (!item) return;
+    this.scene.remove(item.group);
+    item.group.traverse((obj) => {
+      if (obj.isMesh) {
+        obj.geometry?.dispose();
+        if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
+        else obj.material?.dispose();
+      }
+    });
+    this.droppedWeaponMeshes.delete(dropId);
+    if (this.nearbyDrop && this.nearbyDrop.id === dropId) {
+      this.nearbyDrop = null;
+      this.callbacks.onNearbyWeaponChange?.(null, 0);
+    }
+  }
+
   createWeaponMesh(weaponId, isFirstPerson = false) {
     const group = new THREE.Group();
     const darkMetal = new THREE.MeshStandardMaterial({
@@ -1937,46 +2051,109 @@ export class Game3D {
       // Scale first-person viewmodel by 1.14x so weapons feel weighty, closer, and detailed
       group.scale.setScalar(1.14);
 
-      // First-Person Armored Cyber-Gloves, Knuckle Plates, Forearm Sleeves & Tactical Wrist Watch
+      // First-Person Sculpted Human Forearms, Tactical Gloves, Articulated Fingers & Wrist Chrono-Watch
       const sleeveMat = new THREE.MeshStandardMaterial({
         color: 0x1e293b,
-        roughness: 0.52,
-        metalness: 0.35
+        roughness: 0.5,
+        metalness: 0.32
       });
       const gloveMat = new THREE.MeshStandardMaterial({
         color: 0x0f172a,
-        roughness: 0.36,
+        roughness: 0.34,
         metalness: 0.55
+      });
+      const skinGuardMat = new THREE.MeshStandardMaterial({
+        color: 0x334155,
+        roughness: 0.3,
+        metalness: 0.72
       });
       const cuffMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
 
-      // Right trigger hand, knuckle armor & forearm
-      const rightHand = new THREE.Mesh(new THREE.BoxGeometry(0.082, 0.088, 0.12), gloveMat);
-      rightHand.position.set(0.012, -0.11, 0.12);
-      const rightKnuckle = new THREE.Mesh(new THREE.BoxGeometry(0.088, 0.032, 0.075), gunMetal);
-      rightKnuckle.position.set(0.014, -0.082, 0.105);
-      const rightArm = new THREE.Mesh(new THREE.BoxGeometry(0.094, 0.096, 0.38), sleeveMat);
-      rightArm.position.set(0.065, -0.175, 0.33);
-      rightArm.rotation.x = 0.22;
-      rightArm.rotation.y = -0.15;
-      group.add(rightHand, rightKnuckle, rightArm);
+      // Right Trigger Hand (Sculpted Palm, Knuckle Bridge, Thumb & Curled Trigger Fingers) + Tapered Forearm
+      const rightHandGroup = new THREE.Group();
+      rightHandGroup.position.set(0.012, -0.105, 0.115);
 
-      // Left support hand, holographic wrist tac-watch & forearm
+      const rightPalm = new THREE.Mesh(new THREE.CapsuleGeometry(0.034, 0.048, 8, 12), gloveMat);
+      rightPalm.rotation.x = Math.PI / 2.2;
+      const rightKnuckle = new THREE.Mesh(new THREE.CapsuleGeometry(0.016, 0.056, 6, 10), skinGuardMat);
+      rightKnuckle.rotation.z = Math.PI / 2;
+      rightKnuckle.position.set(0.004, 0.025, -0.012);
+
+      // Thumb wrapping around pistol grip
+      const rightThumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, 0.042, 6, 8), gloveMat);
+      rightThumb.position.set(-0.032, 0.01, -0.018);
+      rightThumb.rotation.set(0.45, 0.35, 0.55);
+
+      // 4 Curled fingers around grip & trigger guard
+      for (let f = 0; f < 4; f++) {
+        const finger = new THREE.Mesh(new THREE.CapsuleGeometry(0.01, 0.044, 6, 8), gloveMat);
+        finger.position.set(-0.014, -0.008 - f * 0.018, -0.036 + (f === 0 ? -0.018 : 0));
+        finger.rotation.z = Math.PI / 2;
+        finger.rotation.y = f === 0 ? -0.35 : 0.1;
+        rightHandGroup.add(finger);
+      }
+      rightHandGroup.add(rightPalm, rightKnuckle, rightThumb);
+
+      // Tapered Right Forearm & Vambrace
+      const rightForearm = new THREE.Mesh(new THREE.CapsuleGeometry(0.044, 0.30, 8, 14), sleeveMat);
+      rightForearm.rotation.x = Math.PI / 2 + 0.22;
+      rightForearm.rotation.z = 0.16;
+      rightForearm.position.set(0.062, -0.172, 0.31);
+      const rightVambrace = new THREE.Mesh(new THREE.CylinderGeometry(0.046, 0.052, 0.18, 12), skinGuardMat);
+      rightVambrace.rotation.x = Math.PI / 2 + 0.22;
+      rightVambrace.rotation.z = 0.16;
+      rightVambrace.position.set(0.048, -0.15, 0.24);
+      const rightWristRing = new THREE.Mesh(new THREE.TorusGeometry(0.044, 0.006, 8, 16), cuffMat);
+      rightWristRing.position.set(0.025, -0.122, 0.16);
+      rightWristRing.rotation.y = -0.15;
+      group.add(rightHandGroup, rightForearm, rightVambrace, rightWristRing);
+
+      // Left Support Hand (C-Clamp Foreguard Grip), Holographic Wrist Chrono-Watch & Forearm
       const isOneHanded = WEAPONS[weaponId]?.slot === 2 || WEAPONS[weaponId]?.slot === 3;
       if (!isOneHanded) {
-        const leftHand = new THREE.Mesh(new THREE.BoxGeometry(0.086, 0.084, 0.135), gloveMat);
-        leftHand.position.set(-0.02, -0.058, -0.33);
-        const leftKnuckle = new THREE.Mesh(new THREE.BoxGeometry(0.092, 0.028, 0.085), gunMetal);
-        leftKnuckle.position.set(-0.022, -0.038, -0.33);
-        const leftCuff = new THREE.Mesh(new THREE.BoxGeometry(0.094, 0.09, 0.024), cuffMat);
-        leftCuff.position.set(-0.062, -0.092, -0.22);
-        const tacWatch = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.018, 0.048), reticleMat);
-        tacWatch.position.set(-0.045, -0.046, -0.22);
-        const leftArm = new THREE.Mesh(new THREE.BoxGeometry(0.092, 0.092, 0.44), sleeveMat);
-        leftArm.position.set(-0.165, -0.165, -0.05);
-        leftArm.rotation.y = 0.42;
-        leftArm.rotation.x = 0.25;
-        group.add(leftHand, leftKnuckle, leftCuff, tacWatch, leftArm);
+        const leftHandGroup = new THREE.Group();
+        leftHandGroup.position.set(-0.022, -0.055, -0.33);
+
+        const leftPalm = new THREE.Mesh(new THREE.CapsuleGeometry(0.034, 0.052, 8, 12), gloveMat);
+        leftPalm.rotation.x = Math.PI / 2;
+        const leftKnuckle = new THREE.Mesh(new THREE.CapsuleGeometry(0.015, 0.058, 6, 10), skinGuardMat);
+        leftKnuckle.rotation.z = Math.PI / 2;
+        leftKnuckle.position.set(-0.005, 0.022, 0);
+
+        const leftThumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, 0.045, 6, 8), gloveMat);
+        leftThumb.position.set(-0.018, 0.032, -0.02);
+        leftThumb.rotation.set(0.2, -0.4, -0.8);
+
+        for (let f = 0; f < 4; f++) {
+          const finger = new THREE.Mesh(new THREE.CapsuleGeometry(0.01, 0.046, 6, 8), gloveMat);
+          finger.position.set(0.016, -0.018, -0.042 + f * 0.022);
+          finger.rotation.z = Math.PI / 2.3;
+          leftHandGroup.add(finger);
+        }
+        leftHandGroup.add(leftPalm, leftKnuckle, leftThumb);
+
+        // Tactical Wrist Chrono-Watch with Glowing Cyan Dial
+        const watchCase = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.024, 0.014, 14), darkMetal);
+        watchCase.position.set(-0.054, -0.048, -0.22);
+        watchCase.rotation.z = 0.35;
+        const watchFace = new THREE.Mesh(new THREE.CylinderGeometry(0.019, 0.019, 0.016, 14), cuffMat);
+        watchFace.position.copy(watchCase.position);
+        watchFace.rotation.copy(watchCase.rotation);
+        const leftWristStrap = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.008, 8, 16), darkMetal);
+        leftWristStrap.position.set(-0.064, -0.078, -0.22);
+        leftWristStrap.rotation.y = 0.42;
+
+        // Tapered Left Forearm & Vambrace
+        const leftForearm = new THREE.Mesh(new THREE.CapsuleGeometry(0.044, 0.34, 8, 14), sleeveMat);
+        leftForearm.rotation.x = Math.PI / 2 + 0.25;
+        leftForearm.rotation.z = -0.42;
+        leftForearm.position.set(-0.16, -0.162, -0.055);
+        const leftVambrace = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, 0.20, 12), skinGuardMat);
+        leftVambrace.rotation.x = Math.PI / 2 + 0.25;
+        leftVambrace.rotation.z = -0.42;
+        leftVambrace.position.set(-0.115, -0.125, -0.135);
+
+        group.add(leftHandGroup, watchCase, watchFace, leftWristStrap, leftForearm, leftVambrace);
       }
 
       // Multi-fin 3D Muzzle Flash at barrel tip
@@ -2042,6 +2219,148 @@ export class Game3D {
     this.viewmodelRig.position.set(0.24, -0.21, -0.40);
   }
 
+  setupLobbyShowcase() {
+    // Interactive 3D Humanoid Operator Stage rendered in center of Lobby screen
+    this.lobbyShowcaseGroup = new THREE.Group();
+    this.lobbyShowcaseGroup.position.set(0, -0.96, -2.62);
+    this.camera.add(this.lobbyShowcaseGroup);
+
+    // Dedicated Studio 3-Point Lighting for the 3D Humanoid Operator Showcase
+    this.lobbyKeyLight = new THREE.PointLight(0xffffff, 2.1, 6.5, 1.2);
+    this.lobbyKeyLight.position.set(1.25, 2.25, 1.5);
+    this.lobbyShowcaseGroup.add(this.lobbyKeyLight);
+
+    this.lobbyRimLight = new THREE.PointLight(0x38bdf8, 1.8, 6.0, 1.2);
+    this.lobbyRimLight.position.set(-1.35, 1.85, -0.95);
+    this.lobbyShowcaseGroup.add(this.lobbyRimLight);
+
+    this.lobbyFillLight = new THREE.PointLight(0xf59e0b, 0.9, 5.5, 1.5);
+    this.lobbyFillLight.position.set(0.1, 0.65, 1.6);
+    this.lobbyShowcaseGroup.add(this.lobbyFillLight);
+
+    // Holographic Tactical Turntable Pedestal under Operator's Boots
+    const pedGroup = new THREE.Group();
+    const baseRingMat = new THREE.MeshStandardMaterial({
+      color: 0x0f172a,
+      roughness: 0.25,
+      metalness: 0.85
+    });
+    const chromeRimMat = new THREE.MeshStandardMaterial({
+      color: 0x64748b,
+      roughness: 0.2,
+      metalness: 0.9
+    });
+    this.lobbyPedestalGlowMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.85
+    });
+    this.lobbyHoloConeMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.09,
+      depthWrite: false
+    });
+
+    const outerDeck = new THREE.Mesh(new THREE.CylinderGeometry(0.68, 0.78, 0.07, 16), baseRingMat);
+    outerDeck.position.y = -0.035;
+    const innerPad = new THREE.Mesh(new THREE.CylinderGeometry(0.54, 0.58, 0.08, 24), chromeRimMat);
+    innerPad.position.y = -0.025;
+    this.lobbyHoloRingOuter = new THREE.Mesh(new THREE.RingGeometry(0.58, 0.65, 32), this.lobbyPedestalGlowMat);
+    this.lobbyHoloRingOuter.rotation.x = -Math.PI / 2;
+    this.lobbyHoloRingOuter.position.y = 0.018;
+    this.lobbyHoloRingInner = new THREE.Mesh(new THREE.RingGeometry(0.36, 0.40, 24), this.lobbyPedestalGlowMat);
+    this.lobbyHoloRingInner.rotation.x = -Math.PI / 2;
+    this.lobbyHoloRingInner.position.y = 0.02;
+    const holoField = new THREE.Mesh(new THREE.CylinderGeometry(0.58, 0.54, 0.48, 24, 1, true), this.lobbyHoloConeMat);
+    holoField.position.y = 0.24;
+
+    pedGroup.add(outerDeck, innerPad, this.lobbyHoloRingOuter, this.lobbyHoloRingInner, holoField);
+    this.lobbyShowcaseGroup.add(pedGroup);
+
+    // Full Articulated 3D Humanoid Soldier on the Pedestal
+    this.lobbyOperatorColor = 0x38bdf8;
+    this.lobbyOperator = this.createRemotePlayerMesh(
+      {
+        id: 'lobby_showcase',
+        name: 'STRIKER',
+        color: this.lobbyOperatorColor,
+        weapon: this.currentWeapon || 'rifle',
+        x: 0,
+        y: 0,
+        z: 0
+      },
+      { isShowcase: true }
+    );
+    this.lobbyShowcaseGroup.add(this.lobbyOperator.group);
+
+    this.lobbyOperatorYaw = -0.32;
+    this.lobbyAutoRotate = true;
+    this.lobbyCrouching = false;
+    this.lobbyWalkDemo = false;
+    this.lobbyTestShotAt = 0;
+  }
+
+  setLobbyWeapon(weaponId) {
+    if (!WEAPONS[weaponId] || !this.lobbyOperator) return;
+    const op = this.lobbyOperator;
+    if (op.currentWeapon !== weaponId) {
+      op.currentWeapon = weaponId;
+      op.gunHolder.remove(op.gunMesh);
+      op.gunMesh.traverse((obj) => {
+        if (obj.isMesh) obj.geometry?.dispose();
+      });
+      op.gunMesh = this.createWeaponMesh(weaponId, false);
+      op.gunHolder.add(op.gunMesh);
+    }
+    // Subtle weapon-inspect / shoulder-ready impulse
+    op.armPivot.rotation.x = -0.22;
+    this.callbacks.onWeaponSwitchSound?.();
+  }
+
+  setLobbyOperatorColor(colorHex) {
+    this.lobbyOperatorColor = colorHex;
+    if (this.lobbyOperator?.setOperatorColor) {
+      this.lobbyOperator.setOperatorColor(colorHex);
+    }
+    if (this.lobbyRimLight) this.lobbyRimLight.color.setHex(colorHex);
+    if (this.lobbyPedestalGlowMat) this.lobbyPedestalGlowMat.color.setHex(colorHex);
+    if (this.lobbyHoloConeMat) this.lobbyHoloConeMat.color.setHex(colorHex);
+  }
+
+  toggleLobbyCrouch(forceState = null) {
+    this.lobbyCrouching = forceState !== null ? Boolean(forceState) : !this.lobbyCrouching;
+    if (this.lobbyOperator) {
+      this.lobbyOperator.crouching = this.lobbyCrouching;
+    }
+    return this.lobbyCrouching;
+  }
+
+  toggleLobbyWalk(forceState = null) {
+    this.lobbyWalkDemo = forceState !== null ? Boolean(forceState) : !this.lobbyWalkDemo;
+    return this.lobbyWalkDemo;
+  }
+
+  triggerLobbyTestFire() {
+    if (!this.lobbyOperator) return;
+    const now = performance.now();
+    this.lobbyTestShotAt = now;
+    this.lobbyOperator.lastShotFlashAt = now;
+    if (this.lobbyOperator.gunMesh?.userData?.flashMesh) {
+      this.lobbyOperator.gunMesh.userData.flashMesh.visible = true;
+    }
+    this.lobbyOperator.armPivot.rotation.x = 0.22;
+    if (this.lobbyOperator.upperBodyGroup) {
+      this.lobbyOperator.upperBodyGroup.rotation.x = -0.09;
+    }
+  }
+
+  rotateLobbyOperator(deltaYaw) {
+    this.lobbyOperatorYaw += deltaYaw;
+  }
+
   setLoadout(loadout = {}, activeWeapon = null) {
     if (loadout.primary && WEAPONS[loadout.primary]?.slot === 1) {
       this.loadout.primary = loadout.primary;
@@ -2100,7 +2419,22 @@ export class Game3D {
       this.callbacks.onWeaponSwitchSound?.();
     }
     this.callbacks.onAimChange?.(false, weaponId);
-    this.callbacks.onWeaponChanged?.(weaponId, this.ammoByWeapon[weaponId], cfg.magSize);
+    this.callbacks.onWeaponChanged?.(
+      weaponId,
+      this.ammoByWeapon[weaponId],
+      this.reserveAmmoByWeapon[weaponId] ?? cfg.reserveAmmo ?? cfg.magSize
+    );
+  }
+
+  applySwappedWeapon(data) {
+    if (!data || !data.weapon || !WEAPONS[data.weapon]) return;
+    const wId = data.weapon;
+    const cfg = WEAPONS[wId];
+    this.loadout.primary = wId;
+    this.ammoByWeapon[wId] = typeof data.ammo === 'number' ? data.ammo : cfg.magSize;
+    this.reserveAmmoByWeapon[wId] = typeof data.reserveAmmo === 'number' ? data.reserveAmmo : (cfg.reserveAmmo ?? 0);
+    this.currentWeapon = '';
+    this.switchWeapon(wId);
   }
 
   startReload() {
@@ -2111,15 +2445,16 @@ export class Game3D {
     if (this.reloadingUntil > now) return;
 
     const currentAmmo = this.ammoByWeapon[this.currentWeapon];
-    if (currentAmmo >= cfg.magSize) return;
+    const reserveAmmo = this.reserveAmmoByWeapon[this.currentWeapon] ?? 0;
+    if (currentAmmo >= cfg.magSize || reserveAmmo <= 0) return;
 
     this.isAiming = false;
     this.isSprinting = false;
     this.reloadStartedAt = now;
 
     if (cfg.shellByShell) {
-      // Shotgun shell-by-shell reload (interruptible by shooting!)
-      const missing = Math.max(1, cfg.magSize - currentAmmo);
+      // Shotgun shell-by-shell reload (interruptible by shooting, capped by reserveAmmo!)
+      const missing = Math.max(1, Math.min(cfg.magSize - currentAmmo, reserveAmmo));
       const startDelay = cfg.shellReloadStartMs || 240;
       const shellMs = cfg.shellReloadMs || 390;
       this.reloadMode = 'shell';
@@ -2141,47 +2476,67 @@ export class Game3D {
       this.reloadDuration,
       this.reloadMode,
       currentAmmo,
-      cfg.magSize
+      reserveAmmo
     );
   }
 
   createPlayerNameSprite(name) {
     const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 72;
+    canvas.width = 280;
+    canvas.height = 80;
     const ctx = canvas.getContext('2d');
 
     const texture = new THREE.CanvasTexture(canvas);
     const material = new THREE.SpriteMaterial({ map: texture, depthTest: false });
     const sprite = new THREE.Sprite(material);
-    sprite.scale.set(2.25, 0.64, 1);
-    sprite.position.set(0, 2.46, 0);
+    sprite.scale.set(2.35, 0.67, 1);
+    sprite.position.set(0, 2.38, 0);
     sprite.renderOrder = 10;
 
     const updateLabel = (hp) => {
-      ctx.clearRect(0, 0, 256, 72);
+      ctx.clearRect(0, 0, 280, 80);
 
-      // Sleek tactical HUD pill
-      ctx.fillStyle = 'rgba(9, 13, 22, 0.86)';
-      ctx.fillRect(22, 6, 212, 56);
-      ctx.strokeStyle = 'rgba(56, 189, 248, 0.55)';
+      // Chamfered tactical obsidian nameplate
+      ctx.fillStyle = 'rgba(6, 10, 19, 0.88)';
+      ctx.beginPath();
+      ctx.moveTo(28, 8);
+      ctx.lineTo(256, 8);
+      ctx.lineTo(264, 16);
+      ctx.lineTo(264, 64);
+      ctx.lineTo(20, 64);
+      ctx.lineTo(20, 16);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.65)';
       ctx.lineWidth = 2;
-      ctx.strokeRect(22, 6, 212, 56);
+      ctx.stroke();
 
-      // Name text
-      ctx.font = 'bold 21px Segoe UI, sans-serif';
+      // Corner tactical accent brackets
+      ctx.fillStyle = '#38bdf8';
+      ctx.fillRect(20, 14, 4, 18);
+      ctx.fillRect(260, 46, 4, 18);
+
+      // Callsign text
+      ctx.font = '800 20px "Chakra Petch", "Segoe UI", sans-serif';
       ctx.textAlign = 'center';
       ctx.fillStyle = '#f8fafc';
-      ctx.fillText(name.slice(0, 15), 128, 30);
+      ctx.fillText(name.slice(0, 15).toUpperCase(), 142, 33);
 
       // HP Bar Track
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.82)';
-      ctx.fillRect(38, 41, 180, 11);
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+      ctx.fillRect(36, 44, 212, 11);
 
       // HP Bar Fill
       const pct = Math.max(0, Math.min(1, hp / 100));
-      ctx.fillStyle = pct > 0.5 ? '#22c55e' : pct > 0.25 ? '#f59e0b' : '#ef4444';
-      ctx.fillRect(38, 41, Math.round(180 * pct), 11);
+      ctx.fillStyle = pct > 0.55 ? '#10b981' : pct > 0.25 ? '#f59e0b' : '#ef4444';
+      ctx.fillRect(36, 44, Math.round(212 * pct), 11);
+
+      // Subtle 25% HP segment ticks
+      ctx.fillStyle = 'rgba(6, 10, 19, 0.65)';
+      for (let t = 1; t < 4; t++) {
+        ctx.fillRect(36 + t * 53, 44, 2, 11);
+      }
 
       texture.needsUpdate = true;
     };
@@ -2190,202 +2545,462 @@ export class Game3D {
     return { sprite, canvas, texture, material, updateLabel };
   }
 
-  createRemotePlayerMesh(playerData) {
+  createRemotePlayerMesh(playerData, options = {}) {
+    const isShowcase = Boolean(options.isShowcase);
     const group = new THREE.Group();
-    const pColor = playerData.color || 0x38bdf8;
+    const pColor = playerData.color || this.lobbyOperatorColor || 0x38bdf8;
+
     const mainMat = new THREE.MeshStandardMaterial({
       color: pColor,
-      roughness: 0.34,
-      metalness: 0.35
+      roughness: 0.30,
+      metalness: 0.48
     });
-    const darkMat = new THREE.MeshStandardMaterial({
+    const suitMat = new THREE.MeshStandardMaterial({
       color: 0x1e293b,
-      roughness: 0.5,
-      metalness: 0.45
+      roughness: 0.54,
+      metalness: 0.28
     });
     const armorMat = new THREE.MeshStandardMaterial({
       color: 0x0f172a,
-      roughness: 0.28,
-      metalness: 0.75
+      roughness: 0.26,
+      metalness: 0.74
     });
     const chromeMat = new THREE.MeshStandardMaterial({
       color: 0x94a3b8,
-      roughness: 0.22,
+      roughness: 0.20,
       metalness: 0.88
     });
     const visorMat = new THREE.MeshStandardMaterial({
-      color: 0x38bdf8,
+      color: pColor,
       emissive: pColor,
-      emissiveIntensity: 0.9,
-      roughness: 0.15
+      emissiveIntensity: 0.95,
+      roughness: 0.12,
+      metalness: 0.2
     });
 
-    // 1. Torso Core (Body Hitbox)
-    const torsoGeo = new THREE.BoxGeometry(0.7, 0.82, 0.42);
-    const torsoMesh = new THREE.Mesh(torsoGeo, mainMat);
-    torsoMesh.position.y = 1.08;
+    const hitboxParts = [];
+    const tagBodyHitbox = (mesh) => {
+      mesh.userData = { playerId: playerData.id, isHeadshot: false };
+      hitboxParts.push(mesh);
+      return mesh;
+    };
+    const tagHeadHitbox = (mesh) => {
+      mesh.userData = { playerId: playerData.id, isHeadshot: true };
+      hitboxParts.push(mesh);
+      return mesh;
+    };
+
+    // ==================== 1. PELVIS, HIPS & TACTICAL UTILITY BELT ====================
+    const pelvisGroup = new THREE.Group();
+    pelvisGroup.position.set(0, 0.80, 0);
+    group.add(pelvisGroup);
+
+    const pelvisCore = new THREE.Mesh(new THREE.CylinderGeometry(0.165, 0.145, 0.19, 14), armorMat);
+    pelvisCore.scale.set(1.22, 1, 0.82);
+    pelvisCore.castShadow = true;
+    tagBodyHitbox(pelvisCore);
+    pelvisGroup.add(pelvisCore);
+
+    const groinGuard = new THREE.Mesh(new THREE.CapsuleGeometry(0.068, 0.08, 8, 12), armorMat);
+    groinGuard.position.set(0, -0.03, -0.08);
+    const beltRing = new THREE.Mesh(new THREE.CylinderGeometry(0.182, 0.182, 0.072, 16), suitMat);
+    beltRing.scale.set(1.24, 1, 0.86);
+    beltRing.position.set(0, 0.065, 0);
+    const beltBuckle = new THREE.Mesh(new THREE.OctahedronGeometry(0.046, 0), visorMat);
+    beltBuckle.position.set(0, 0.065, -0.16);
+
+    // Cylindrical Tactical Grenade Canisters & Side Utility Pouches on Belt
+    const canisterGeo = new THREE.CylinderGeometry(0.036, 0.036, 0.12, 10);
+    const canisterL = new THREE.Mesh(canisterGeo, chromeMat);
+    canisterL.position.set(-0.21, 0.05, -0.09);
+    const canisterR = new THREE.Mesh(canisterGeo, chromeMat);
+    canisterR.position.set(0.21, 0.05, -0.09);
+    const hipPouchL = new THREE.Mesh(new THREE.CapsuleGeometry(0.044, 0.07, 6, 10), suitMat);
+    hipPouchL.position.set(-0.23, 0.04, 0.04);
+    const hipPouchR = new THREE.Mesh(new THREE.CapsuleGeometry(0.044, 0.07, 6, 10), suitMat);
+    hipPouchR.position.set(0.23, 0.04, 0.04);
+    pelvisGroup.add(groinGuard, beltRing, beltBuckle, canisterL, canisterR, hipPouchL, hipPouchR);
+
+    // ==================== 2. ANATOMICAL V-TAPERED UPPER BODY & CHEST RIG ====================
+    const upperBodyGroup = new THREE.Group();
+    upperBodyGroup.position.set(0, 0.10, 0); // World y = 0.90
+    pelvisGroup.add(upperBodyGroup);
+
+    // Primary Body Hitbox Cylinder (covers waist to upper chest)
+    const torsoGeo = new THREE.CylinderGeometry(0.245, 0.175, 0.60, 16);
+    const torsoMesh = new THREE.Mesh(torsoGeo, suitMat);
+    torsoMesh.scale.set(1.24, 1, 0.82);
+    torsoMesh.position.set(0, 0.28, 0);
     torsoMesh.castShadow = true;
-    torsoMesh.userData = { playerId: playerData.id, isHeadshot: false };
-    group.add(torsoMesh);
+    tagBodyHitbox(torsoMesh);
+    upperBodyGroup.add(torsoMesh);
 
-    // Sculpted Exo-Armor Chest Rig, Arc Core, Collar & Utility Belt
-    const chestPlate = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.46, 0.48), armorMat);
-    chestPlate.position.set(0, 1.2, 0);
-    const absPlate = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.24, 0.45), darkMat);
-    absPlate.position.set(0, 0.86, 0);
-    const neckGuard = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.24, 0.14, 10), armorMat);
-    neckGuard.position.set(0, 1.5, 0);
-    const coreBadge = new THREE.Mesh(new THREE.OctahedronGeometry(0.11, 0), visorMat);
-    coreBadge.position.set(0, 1.22, -0.22);
+    // Contoured 6-Pack Abdominal Weave Ribs
+    for (let r = 0; r < 3; r++) {
+      const abRib = new THREE.Mesh(new THREE.CapsuleGeometry(0.026, 0.19 - r * 0.015, 6, 10), armorMat);
+      abRib.rotation.z = Math.PI / 2;
+      abRib.position.set(0, 0.08 + r * 0.062, -0.138);
+      upperBodyGroup.add(abRib);
+    }
 
-    // Tactical Waist Belt & Side Ammo Pouches
-    const utilityBelt = new THREE.Mesh(new THREE.BoxGeometry(0.74, 0.11, 0.46), armorMat);
-    utilityBelt.position.set(0, 0.72, 0);
-    const pouchL = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.16, 0.18), darkMat);
-    pouchL.position.set(-0.39, 0.73, -0.05);
-    const pouchR = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.16, 0.18), darkMat);
-    pouchR.position.set(0.39, 0.73, -0.05);
+    // Sculpted Left & Right Pectoral Ballistic Plates + Sternum Arc Core
+    const pecGeo = new THREE.SphereGeometry(0.145, 14, 12);
+    const pecLeft = new THREE.Mesh(pecGeo, armorMat);
+    pecLeft.scale.set(1.08, 0.84, 0.65);
+    pecLeft.position.set(-0.105, 0.36, -0.105);
+    const pecRight = new THREE.Mesh(pecGeo, armorMat);
+    pecRight.scale.set(1.08, 0.84, 0.65);
+    pecRight.position.set(0.105, 0.36, -0.105);
 
-    // Twin-Thruster Cyber Jetpack on Back
-    const backpack = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.54, 0.24), armorMat);
-    backpack.position.set(0, 1.15, 0.28);
-    const thrusterGeo = new THREE.CylinderGeometry(0.065, 0.085, 0.44, 8);
+    const chestTrimL = new THREE.Mesh(new THREE.CapsuleGeometry(0.016, 0.15, 6, 8), mainMat);
+    chestTrimL.rotation.z = 0.42;
+    chestTrimL.position.set(-0.14, 0.35, -0.178);
+    const chestTrimR = new THREE.Mesh(new THREE.CapsuleGeometry(0.016, 0.15, 6, 8), mainMat);
+    chestTrimR.rotation.z = -0.42;
+    chestTrimR.position.set(0.14, 0.35, -0.178);
+
+    const coreHousing = new THREE.Mesh(new THREE.TorusGeometry(0.056, 0.014, 8, 16), chromeMat);
+    coreHousing.position.set(0, 0.35, -0.182);
+    const coreBadge = new THREE.Mesh(new THREE.OctahedronGeometry(0.048, 1), visorMat);
+    coreBadge.position.set(0, 0.35, -0.188);
+
+    // Muscular Trapezius / Upper Back & Aerodynamic Spine Thruster Pack
+    const trapsSlope = new THREE.Mesh(new THREE.CapsuleGeometry(0.125, 0.26, 8, 12), armorMat);
+    trapsSlope.rotation.z = Math.PI / 2;
+    trapsSlope.position.set(0, 0.47, 0.02);
+
+    const spineRidge = new THREE.Mesh(new THREE.CapsuleGeometry(0.065, 0.32, 8, 12), armorMat);
+    spineRidge.position.set(0, 0.32, 0.17);
+    const thrusterGeo = new THREE.CylinderGeometry(0.048, 0.064, 0.32, 12);
     const thrusterL = new THREE.Mesh(thrusterGeo, chromeMat);
-    thrusterL.position.set(-0.18, 1.14, 0.34);
+    thrusterL.position.set(-0.125, 0.32, 0.195);
+    thrusterL.rotation.z = 0.12;
     const thrusterR = new THREE.Mesh(thrusterGeo, chromeMat);
-    thrusterR.position.set(0.18, 1.14, 0.34);
-    const nozzleGlowL = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.05, 8), visorMat);
-    nozzleGlowL.position.set(-0.18, 0.91, 0.34);
-    const nozzleGlowR = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.05, 8), visorMat);
-    nozzleGlowR.position.set(0.18, 0.91, 0.34);
-    group.add(
-      chestPlate,
-      absPlate,
-      neckGuard,
+    thrusterR.position.set(0.125, 0.32, 0.195);
+    thrusterR.rotation.z = -0.12;
+    const nozzleGlowL = new THREE.Mesh(new THREE.CylinderGeometry(0.044, 0.044, 0.03, 10), visorMat);
+    nozzleGlowL.position.set(-0.142, 0.155, 0.195);
+    const nozzleGlowR = new THREE.Mesh(new THREE.CylinderGeometry(0.044, 0.044, 0.03, 10), visorMat);
+    nozzleGlowR.position.set(0.142, 0.155, 0.195);
+
+    // Sculpted Neck & Armored Clavicle Collar Ring
+    const collarRing = new THREE.Mesh(new THREE.TorusGeometry(0.125, 0.028, 10, 18), armorMat);
+    collarRing.rotation.x = Math.PI / 2 + 0.12;
+    collarRing.position.set(0, 0.54, -0.01);
+    const neckMuscle = new THREE.Mesh(new THREE.CylinderGeometry(0.078, 0.096, 0.16, 14), suitMat);
+    neckMuscle.position.set(0, 0.60, -0.01);
+
+    upperBodyGroup.add(
+      pecLeft,
+      pecRight,
+      chestTrimL,
+      chestTrimR,
+      coreHousing,
       coreBadge,
-      utilityBelt,
-      pouchL,
-      pouchR,
-      backpack,
+      trapsSlope,
+      spineRidge,
       thrusterL,
       thrusterR,
       nozzleGlowL,
-      nozzleGlowR
+      nozzleGlowR,
+      collarRing,
+      neckMuscle
     );
 
-    // Layered Angled Shoulder Pauldrons
-    const leftShoulder = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.26, 0.38), armorMat);
-    leftShoulder.position.set(-0.46, 1.35, 0);
-    leftShoulder.rotation.z = 0.18;
-    const leftShoulderTrim = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.06, 0.4), visorMat);
-    leftShoulderTrim.position.set(-0.47, 1.44, 0);
-    leftShoulderTrim.rotation.z = 0.18;
+    // ==================== 3. SCULPTED HUMANOID HEAD, BALLISTIC HELMET & VISOR ====================
+    const headGroup = new THREE.Group();
+    headGroup.position.set(0, 0.64, 0); // World y = 1.54
+    upperBodyGroup.add(headGroup);
 
-    const rightShoulder = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.26, 0.38), armorMat);
-    rightShoulder.position.set(0.46, 1.35, 0);
-    rightShoulder.rotation.z = -0.18;
-    const rightShoulderTrim = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.06, 0.4), visorMat);
-    rightShoulderTrim.position.set(0.47, 1.44, 0);
-    rightShoulderTrim.rotation.z = -0.18;
-    group.add(leftShoulder, leftShoulderTrim, rightShoulder, rightShoulderTrim);
-
-    // 2. Sculpted Tactical Helmet & Wrap-Around Glowing Visor (Headshot Hitbox)
-    const headGeo = new THREE.BoxGeometry(0.46, 0.46, 0.46);
-    const headMesh = new THREE.Mesh(headGeo, mainMat);
-    headMesh.position.y = 1.76;
+    // Generous Headshot Collider Capsule enveloping the entire cranium & helmet
+    const headGeo = new THREE.CapsuleGeometry(0.185, 0.14, 12, 16);
+    const headMesh = new THREE.Mesh(headGeo, suitMat);
+    headMesh.position.set(0, 0.21, 0); // World y = 1.75
     headMesh.castShadow = true;
-    headMesh.userData = { playerId: playerData.id, isHeadshot: true };
-    group.add(headMesh);
+    tagHeadHitbox(headMesh);
+    headGroup.add(headMesh);
 
-    const helmetDome = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.52), armorMat);
-    helmetDome.position.set(0, 1.96, 0.01);
-    const helmetCrest = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.08, 0.46), visorMat);
-    helmetCrest.position.set(0, 2.04, 0);
-    const visorMesh = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.16, 0.1), visorMat);
-    visorMesh.position.set(0, 1.78, -0.21);
-    const chinGuard = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.12, 0.26), armorMat);
-    chinGuard.position.set(0, 1.6, -0.14);
-    const earPodL = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.52, 8), chromeMat);
-    earPodL.rotation.z = Math.PI / 2;
-    earPodL.position.set(0, 1.76, 0.02);
-    group.add(helmetDome, helmetCrest, visorMesh, chinGuard, earPodL);
+    // Smooth Contoured Ballistic Helmet Shell
+    const helmetDome = new THREE.Mesh(new THREE.SphereGeometry(0.196, 18, 14), armorMat);
+    helmetDome.scale.set(0.96, 1.04, 1.08);
+    helmetDome.position.set(0, 0.24, 0.01);
+    tagHeadHitbox(helmetDome);
 
-    // 3. Articulated Dual Arms + Weapon Holder Pivot
+    // Aerodynamic Crown Ridge & Forehead NVG Shroud
+    const helmetCrest = new THREE.Mesh(new THREE.CapsuleGeometry(0.032, 0.22, 8, 12), mainMat);
+    helmetCrest.rotation.x = Math.PI / 2 - 0.1;
+    helmetCrest.position.set(0, 0.42, 0.01);
+    const browVisorHood = new THREE.Mesh(new THREE.CylinderGeometry(0.192, 0.198, 0.055, 16, 1, false, Math.PI * 0.58, Math.PI * 0.84), mainMat);
+    browVisorHood.position.set(0, 0.285, -0.02);
+
+    // Wrap-Around Curved Panoramic Glowing Visor (Faces -Z forward)
+    const visorMesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.186, 0.178, 0.092, 18, 1, false, Math.PI * 0.60, Math.PI * 0.80),
+      visorMat
+    );
+    visorMesh.position.set(0, 0.23, -0.02);
+    tagHeadHitbox(visorMesh);
+
+    // Sculpted Jawline, Cheek Guards & Tactical Respirator Mask
+    const jawMask = new THREE.Mesh(new THREE.CylinderGeometry(0.135, 0.102, 0.13, 14), armorMat);
+    jawMask.position.set(0, 0.13, -0.045);
+    const breatherFilter = new THREE.Mesh(new THREE.CylinderGeometry(0.044, 0.054, 0.08, 12), chromeMat);
+    breatherFilter.rotation.x = Math.PI / 2.2;
+    breatherFilter.position.set(0, 0.105, -0.155);
+    const breatherGlow = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.084, 10), visorMat);
+    breatherGlow.rotation.x = Math.PI / 2.2;
+    breatherGlow.position.set(0, 0.105, -0.157);
+
+    // Side Comms Headset Pods & Antenna
+    const earPodGeo = new THREE.CylinderGeometry(0.062, 0.062, 0.045, 12);
+    earPodGeo.rotateZ(Math.PI / 2);
+    const earPodL = new THREE.Mesh(earPodGeo, chromeMat);
+    earPodL.position.set(-0.188, 0.22, 0.01);
+    const earPodR = new THREE.Mesh(earPodGeo, chromeMat);
+    earPodR.position.set(0.188, 0.22, 0.01);
+    const commsAntenna = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.009, 0.22, 6), chromeMat);
+    commsAntenna.position.set(-0.195, 0.35, 0.04);
+
+    headGroup.add(
+      helmetDome,
+      helmetCrest,
+      browVisorHood,
+      visorMesh,
+      jawMask,
+      breatherFilter,
+      breatherGlow,
+      earPodL,
+      earPodR,
+      commsAntenna
+    );
+
+    // ==================== 4. ARTICULATED 2-SEGMENT ARMS, SHOULDERS & HANDS ====================
     const armPivot = new THREE.Group();
-    armPivot.position.set(0, 1.34, 0);
-    const rightArm = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.22, 0.58), darkMat);
-    rightArm.position.set(0.43, -0.05, -0.19);
-    const rightGauntlet = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.24, 0.24), armorMat);
-    rightGauntlet.position.set(0.43, -0.05, -0.34);
+    armPivot.position.set(0, 0.46, 0); // World y = 1.36
+    upperBodyGroup.add(armPivot);
 
-    const leftArm = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.2, 0.54), darkMat);
-    leftArm.position.set(-0.34, -0.06, -0.23);
-    leftArm.rotation.y = -0.38;
+    // Helper for curved multi-layer shoulder pauldron + ball joint
+    const buildShoulder = (sideSign) => {
+      const sGroup = new THREE.Group();
+      sGroup.position.set(sideSign * 0.32, 0.01, 0);
 
+      const ballJoint = new THREE.Mesh(new THREE.SphereGeometry(0.095, 12, 10), suitMat);
+      const pauldronDomed = new THREE.Mesh(
+        new THREE.SphereGeometry(0.122, 14, 12, 0, Math.PI * 2, 0, Math.PI * 0.58),
+        armorMat
+      );
+      pauldronDomed.position.set(sideSign * 0.02, 0.02, 0);
+      pauldronDomed.rotation.z = -sideSign * 0.42;
+
+      const pauldronTrim = new THREE.Mesh(new THREE.TorusGeometry(0.112, 0.015, 8, 16), mainMat);
+      pauldronTrim.rotation.x = Math.PI / 2;
+      pauldronTrim.rotation.y = -sideSign * 0.42;
+      pauldronTrim.position.set(sideSign * 0.025, 0.01, 0);
+
+      sGroup.add(ballJoint, pauldronDomed, pauldronTrim);
+      return sGroup;
+    };
+
+    const rightShoulder = buildShoulder(1);
+    const leftShoulder = buildShoulder(-1);
+
+    // Right Trigger Arm: Bicep -> Elbow Joint -> Forearm -> Gauntlet -> Hand & Fingers
+    const rightBicep = new THREE.Mesh(new THREE.CapsuleGeometry(0.062, 0.20, 8, 12), suitMat);
+    rightBicep.position.set(0.33, -0.10, -0.07);
+    rightBicep.rotation.set(0.58, 0, -0.06);
+
+    const rightElbow = new THREE.Mesh(new THREE.SphereGeometry(0.058, 10, 10), armorMat);
+    rightElbow.position.set(0.34, -0.19, -0.17);
+
+    const rightForearm = new THREE.Mesh(new THREE.CylinderGeometry(0.056, 0.044, 0.25, 12), suitMat);
+    rightForearm.position.set(0.31, -0.15, -0.29);
+    rightForearm.rotation.set(1.34, -0.20, 0);
+
+    const rightGauntlet = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.050, 0.16, 10), armorMat);
+    rightGauntlet.position.set(0.31, -0.15, -0.29);
+    rightGauntlet.rotation.set(1.34, -0.20, 0);
+
+    const rightHand = new THREE.Mesh(new THREE.SphereGeometry(0.048, 10, 8), armorMat);
+    rightHand.scale.set(0.9, 1.1, 1.3);
+    rightHand.position.set(0.28, -0.11, -0.40);
+
+    // Left Support Arm: Bicep -> Elbow Joint -> Forearm -> Hand Gripping Handguard
+    const leftBicep = new THREE.Mesh(new THREE.CapsuleGeometry(0.060, 0.21, 8, 12), suitMat);
+    leftBicep.position.set(-0.27, -0.09, -0.10);
+    leftBicep.rotation.set(0.75, -0.42, 0.30);
+
+    const leftElbow = new THREE.Mesh(new THREE.SphereGeometry(0.056, 10, 10), armorMat);
+    leftElbow.position.set(-0.18, -0.17, -0.23);
+
+    const leftForearm = new THREE.Mesh(new THREE.CylinderGeometry(0.054, 0.042, 0.31, 12), suitMat);
+    leftForearm.position.set(0.02, -0.12, -0.39);
+    leftForearm.rotation.set(1.38, 0, -0.82);
+
+    const leftGauntlet = new THREE.Mesh(new THREE.CylinderGeometry(0.058, 0.048, 0.18, 10), armorMat);
+    leftGauntlet.position.set(-0.01, -0.13, -0.36);
+    leftGauntlet.rotation.set(1.38, 0, -0.82);
+
+    const leftHand = new THREE.Mesh(new THREE.SphereGeometry(0.046, 10, 8), armorMat);
+    leftHand.scale.set(1.1, 0.9, 1.25);
+    leftHand.position.set(0.22, -0.08, -0.54);
+
+    // Held 3D Weapon aligned with both hands
     const gunHolder = new THREE.Group();
-    gunHolder.position.set(0.42, -0.02, -0.46);
+    gunHolder.position.set(0.27, -0.03, -0.42);
     const gunMesh = this.createWeaponMesh(playerData.weapon || 'rifle', false);
     gunHolder.add(gunMesh);
 
-    armPivot.add(rightArm, rightGauntlet, leftArm, gunHolder);
-    group.add(armPivot);
+    armPivot.add(
+      rightShoulder,
+      leftShoulder,
+      rightBicep,
+      rightElbow,
+      rightForearm,
+      rightGauntlet,
+      rightHand,
+      leftBicep,
+      leftElbow,
+      leftForearm,
+      leftGauntlet,
+      leftHand,
+      gunHolder
+    );
 
-    // 4. Hip-Pivoted Articulated Legs with 3D Knee Guards & Heavy Combat Boots (Body Hitbox)
-    // Translating legGeo downward by -0.35 so rotating leftLeg.rotation.x pivots naturally from the hip!
-    const legGeo = new THREE.BoxGeometry(0.26, 0.7, 0.28);
-    legGeo.translate(0, -0.35, 0);
+    // ==================== 5. ARTICULATED 2-SEGMENT LEGS (HIP -> THIGH -> KNEE -> SHIN -> BOOT) ====================
+    const thighGeo = new THREE.CylinderGeometry(0.102, 0.078, 0.38, 14);
+    thighGeo.translate(0, -0.19, 0); // Pivot at hip socket (y = 0)
 
-    const buildLegArmor = (legMesh) => {
-      const kneePad = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.16, 0.1), armorMat);
-      kneePad.position.set(0, -0.34, -0.14);
-      const kneeGlow = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.05, 0.12), visorMat);
-      kneeGlow.position.set(0, -0.34, -0.14);
-      const shinGuard = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.26, 0.31), armorMat);
-      shinGuard.position.set(0, -0.52, -0.01);
-      const combatBoot = new THREE.Mesh(new THREE.BoxGeometry(0.29, 0.14, 0.38), armorMat);
-      combatBoot.position.set(0, -0.64, -0.04);
-      legMesh.add(kneePad, kneeGlow, shinGuard, combatBoot);
+    const shinGeo = new THREE.CylinderGeometry(0.076, 0.054, 0.34, 14);
+    shinGeo.translate(0, -0.17, 0); // Pivot at knee joint (y = 0)
+
+    const buildArticulatedLeg = (sideSign) => {
+      const hipLegMesh = new THREE.Mesh(thighGeo.clone(), suitMat);
+      hipLegMesh.position.set(sideSign * 0.15, 0.80, 0);
+      hipLegMesh.castShadow = true;
+      tagBodyHitbox(hipLegMesh);
+
+      // Hip ball joint & contoured outer thigh armor plate + holster strap
+      const hipBall = new THREE.Mesh(new THREE.SphereGeometry(0.092, 10, 10), suitMat);
+      const thighArmor = new THREE.Mesh(new THREE.CapsuleGeometry(0.054, 0.17, 6, 10), armorMat);
+      thighArmor.position.set(sideSign * 0.038, -0.18, -0.025);
+      const thighStripe = new THREE.Mesh(new THREE.CapsuleGeometry(0.022, 0.14, 6, 8), mainMat);
+      thighStripe.position.set(sideSign * 0.068, -0.18, -0.03);
+      const thighStrap = new THREE.Mesh(new THREE.TorusGeometry(0.092, 0.014, 6, 14), armorMat);
+      thighStrap.rotation.x = Math.PI / 2;
+      thighStrap.position.set(0, -0.19, 0);
+      hipLegMesh.add(hipBall, thighArmor, thighStripe, thighStrap);
+
+      // Articulated Knee Joint Pivot at bottom of thigh (y = -0.38)
+      const kneePivot = new THREE.Group();
+      kneePivot.position.set(0, -0.38, 0);
+      hipLegMesh.add(kneePivot);
+
+      const kneeSphere = new THREE.Mesh(new THREE.SphereGeometry(0.072, 10, 10), suitMat);
+      const kneeCap = new THREE.Mesh(new THREE.CapsuleGeometry(0.052, 0.065, 8, 10), armorMat);
+      kneeCap.position.set(0, 0.01, -0.052);
+      const kneeGlow = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.026, 0.02), visorMat);
+      kneeGlow.position.set(0, 0.01, -0.102);
+
+      // Lower Leg (Shin & Gastrocnemius Calf Muscle)
+      const shinMesh = new THREE.Mesh(shinGeo.clone(), suitMat);
+      shinMesh.castShadow = true;
+      tagBodyHitbox(shinMesh);
+
+      const calfMuscle = new THREE.Mesh(new THREE.SphereGeometry(0.068, 10, 8), suitMat);
+      calfMuscle.scale.set(0.92, 1.4, 1.05);
+      calfMuscle.position.set(0, -0.13, 0.026);
+
+      const shinGuard = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.066, 0.052, 0.25, 12, 1, false, Math.PI * 0.62, Math.PI * 0.76),
+        armorMat
+      );
+      shinGuard.position.set(0, -0.18, -0.02);
+      const shinTrim = new THREE.Mesh(new THREE.CapsuleGeometry(0.014, 0.16, 6, 8), mainMat);
+      shinTrim.position.set(0, -0.18, -0.082);
+
+      // Ankle Joint & Sculpted Combat Boot (Bottom of sole rests at y = -0.42 -> world y = 0.00)
+      const ankleCollar = new THREE.Mesh(new THREE.CylinderGeometry(0.058, 0.066, 0.07, 12), armorMat);
+      ankleCollar.position.set(0, -0.33, 0);
+      const bootInstep = new THREE.Mesh(new THREE.CapsuleGeometry(0.058, 0.13, 8, 12), armorMat);
+      bootInstep.rotation.x = Math.PI / 2;
+      bootInstep.position.set(0, -0.368, -0.045);
+      const bootToeCap = new THREE.Mesh(new THREE.SphereGeometry(0.058, 10, 8), chromeMat);
+      bootToeCap.scale.set(1.02, 0.72, 1.15);
+      bootToeCap.position.set(0, -0.375, -0.115);
+      const bootSole = new THREE.Mesh(new THREE.BoxGeometry(0.126, 0.028, 0.26), armorMat);
+      bootSole.position.set(0, -0.406, -0.045);
+
+      kneePivot.add(
+        kneeSphere,
+        kneeCap,
+        kneeGlow,
+        shinMesh,
+        calfMuscle,
+        shinGuard,
+        shinTrim,
+        ankleCollar,
+        bootInstep,
+        bootToeCap,
+        bootSole
+      );
+
+      return { hipLegMesh, kneePivot, shinMesh };
     };
 
-    const leftLeg = new THREE.Mesh(legGeo, darkMat);
-    leftLeg.position.set(-0.19, 0.7, 0);
-    leftLeg.castShadow = true;
-    leftLeg.userData = { playerId: playerData.id, isHeadshot: false };
-    buildLegArmor(leftLeg);
-
-    const rightLeg = new THREE.Mesh(legGeo.clone(), darkMat);
-    rightLeg.position.set(0.19, 0.7, 0);
-    rightLeg.castShadow = true;
-    rightLeg.userData = { playerId: playerData.id, isHeadshot: false };
-    buildLegArmor(rightLeg);
+    const leftLegData = buildArticulatedLeg(-1);
+    const rightLegData = buildArticulatedLeg(1);
+    const leftLeg = leftLegData.hipLegMesh;
+    const rightLeg = rightLegData.hipLegMesh;
+    const leftKneePivot = leftLegData.kneePivot;
+    const rightKneePivot = rightLegData.kneePivot;
 
     group.add(leftLeg, rightLeg);
 
-    // Floating Name & Health Bar Sprite
-    const labelInfo = this.createPlayerNameSprite(playerData.name);
-    group.add(labelInfo.sprite);
+    // Floating Name & Health Bar Sprite (only for in-match remote players)
+    let labelInfo = null;
+    if (!isShowcase) {
+      labelInfo = this.createPlayerNameSprite(playerData.name || 'STRIKER');
+      group.add(labelInfo.sprite);
+      this.scene.add(group);
+    }
 
-    this.scene.add(group);
+    const setOperatorColor = (newHex) => {
+      mainMat.color.setHex(newHex);
+      visorMat.color.setHex(newHex);
+      visorMat.emissive.setHex(newHex);
+    };
 
     return {
       id: playerData.id,
       name: playerData.name,
       group,
+      pelvisGroup,
+      upperBodyGroup,
+      headGroup,
       torsoMesh,
       headMesh,
       leftLeg,
       rightLeg,
+      leftKneePivot,
+      rightKneePivot,
       armPivot,
       gunHolder,
       gunMesh,
+      hitboxParts,
+      setOperatorColor,
       currentWeapon: playerData.weapon || 'rifle',
       labelInfo,
-      targetPos: new THREE.Vector3(playerData.x, playerData.y, playerData.z),
+      targetPos: new THREE.Vector3(playerData.x || 0, playerData.y || 0, playerData.z || 0),
       targetYaw: playerData.yaw || 0,
       targetPitch: playerData.pitch || 0,
       crouching: Boolean(playerData.crouching),
+      prone: Boolean(playerData.prone),
+      lean: Number(playerData.lean || 0),
+      crouchBlend: 0,
+      proneBlend: 0,
+      leanBlend: 0,
       hp: playerData.hp ?? 100,
-      alive: Boolean(playerData.alive),
+      alive: playerData.alive !== undefined ? Boolean(playerData.alive) : true,
       walkPhase: 0,
       lastShotFlashAt: 0
     };
@@ -2395,7 +3010,13 @@ export class Game3D {
     this.hitboxMeshes.length = 0;
     for (const rp of this.remotePlayers.values()) {
       if (!rp.alive) continue;
-      this.hitboxMeshes.push(rp.headMesh, rp.torsoMesh, rp.leftLeg, rp.rightLeg);
+      if (rp.hitboxParts && rp.hitboxParts.length > 0) {
+        for (let i = 0; i < rp.hitboxParts.length; i++) {
+          this.hitboxMeshes.push(rp.hitboxParts[i]);
+        }
+      } else {
+        this.hitboxMeshes.push(rp.headMesh, rp.torsoMesh, rp.leftLeg, rp.rightLeg);
+      }
     }
     this.rayTargets.length = 0;
     for (let i = 0; i < this.worldMeshes.length; i++) {
@@ -2408,8 +3029,10 @@ export class Game3D {
 
   disposeRemotePlayer(rp) {
     this.scene.remove(rp.group);
-    rp.labelInfo.texture.dispose();
-    rp.labelInfo.material.dispose();
+    if (rp.labelInfo) {
+      rp.labelInfo.texture.dispose();
+      rp.labelInfo.material.dispose();
+    }
     rp.group.traverse((obj) => {
       if (obj.isMesh) {
         obj.geometry?.dispose();
@@ -2461,6 +3084,8 @@ export class Game3D {
       rp.targetYaw = p.yaw || 0;
       rp.targetPitch = p.pitch || 0;
       rp.crouching = Boolean(p.crouching);
+      rp.prone = Boolean(p.prone);
+      rp.lean = Number(p.lean || 0);
       rp.alive = nowAlive;
       rp.group.visible = nowAlive;
 
@@ -2509,6 +3134,9 @@ export class Game3D {
     this.isAiming = false;
     this.isSprinting = false;
     this.isSliding = false;
+    this.crouching = false;
+    this.prone = false;
+    this.currentLean = 0;
     this.slideUntil = 0;
     this.currentBloom = 0;
     this.accumulatedRecoilPitch = 0;
@@ -2520,7 +3148,8 @@ export class Game3D {
     this.flinchRoll = 0;
     this.meleeSwingUntil = 0;
     for (const wId of WEAPON_ORDER) {
-      this.ammoByWeapon[wId] = WEAPONS[wId].magSize;
+      this.ammoByWeapon[wId] = data.ammoByWeapon?.[wId] ?? WEAPONS[wId].magSize;
+      this.reserveAmmoByWeapon[wId] = data.reserveAmmoByWeapon?.[wId] ?? (WEAPONS[wId].reserveAmmo ?? WEAPONS[wId].magSize * 3);
     }
     if (data.loadout) {
       this.setLoadout(data.loadout, data.weapon || data.loadout.primary);
@@ -2528,7 +3157,11 @@ export class Game3D {
       this.switchWeapon(data.weapon);
     }
     const wCfg = WEAPONS[this.currentWeapon] || WEAPONS.rifle;
-    this.callbacks.onWeaponChanged?.(this.currentWeapon, wCfg.magSize, wCfg.magSize);
+    this.callbacks.onWeaponChanged?.(
+      this.currentWeapon,
+      this.ammoByWeapon[this.currentWeapon] ?? wCfg.magSize,
+      this.reserveAmmoByWeapon[this.currentWeapon] ?? wCfg.reserveAmmo ?? wCfg.magSize
+    );
   }
 
   spawnShellCasing() {
@@ -2708,15 +3341,23 @@ export class Game3D {
   }
 
   computeEffectiveSpread(cfg) {
-    const firstShotMult = this.recoilShotIndex === 0 && this.currentBloom < 0.0015
-      ? (cfg.firstShotSpreadMult || 0.35)
+    const horizSpeed = Math.hypot(this.velocity.x, this.velocity.z);
+    // CS:GO first-shot laser accuracy when stationary / counter-strafed (horizSpeed < 1.1)
+    const firstShotMult = this.recoilShotIndex === 0 && this.currentBloom < 0.0015 && horizSpeed < 1.15 && this.onGround
+      ? (cfg.firstShotSpreadMult || 0.25)
       : 1.0;
     const base = (this.isAiming ? cfg.adsSpread : cfg.spread) * firstShotMult;
-    const horizSpeed = Math.hypot(this.velocity.x, this.velocity.z);
-    const speedRatio = Math.min(1.35, horizSpeed / MATCH_CONFIG.WALK_SPEED);
-    const movePenalty = speedRatio * (cfg.moveSpread || 0.012) * (this.isAiming ? 0.45 : 1.0);
-    const airPenalty = !this.onGround ? (cfg.airSpread || 0.03) : 0;
-    const stanceMult = (this.crouching || this.isSliding) ? (cfg.crouchSpreadMult || 0.65) : 1.0;
+    const speedRatio = Math.min(1.45, horizSpeed / MATCH_CONFIG.WALK_SPEED);
+    // CS:GO harsh movement inaccuracy curve after ~34% walk speed
+    const movePenalty = speedRatio > 0.18
+      ? Math.pow(speedRatio, 1.35) * (cfg.moveSpread || 0.028) * (this.isAiming ? 0.52 : 1.0)
+      : 0;
+    const airPenalty = !this.onGround ? (cfg.airSpread || 0.055) : 0;
+    const stanceMult = this.prone
+      ? (cfg.proneSpreadMult || 0.42)
+      : (this.crouching || this.isSliding)
+        ? (cfg.crouchSpreadMult || 0.62)
+        : 1.0;
 
     return (base + this.currentBloom + movePenalty + airPenalty) * stanceMult;
   }
@@ -2732,13 +3373,14 @@ export class Game3D {
 
     const isMelee = Boolean(cfg.isMelee || cfg.infiniteAmmo);
     const currentAmmo = this.ammoByWeapon[this.currentWeapon];
+    const reserveAmmo = this.reserveAmmoByWeapon[this.currentWeapon] ?? 0;
 
     // If reloading: allow interrupting shell-by-shell shotgun reload if at least 1 shell is loaded!
     if (this.reloadingUntil > now) {
       if (cfg.shellByShell && currentAmmo > 0) {
         this.reloadingUntil = 0;
         this.nextShellAt = 0;
-        this.callbacks.onReloadCancel?.(this.currentWeapon, currentAmmo, cfg.magSize);
+        this.callbacks.onReloadCancel?.(this.currentWeapon, currentAmmo, reserveAmmo);
       } else {
         return;
       }
@@ -2746,7 +3388,9 @@ export class Game3D {
 
     if (!isMelee && currentAmmo <= 0) {
       this.callbacks.onDryFire?.();
-      this.startReload();
+      if (reserveAmmo > 0) {
+        this.startReload();
+      }
       return;
     }
 
@@ -2762,7 +3406,7 @@ export class Game3D {
       this.callbacks.onWeaponChanged?.(
         this.currentWeapon,
         this.ammoByWeapon[this.currentWeapon],
-        cfg.magSize
+        reserveAmmo
       );
     }
 
@@ -2874,7 +3518,7 @@ export class Game3D {
     );
 
     const adsScale = this.isAiming ? 0.52 : 1.0;
-    const crouchScale = (this.crouching || this.isSliding) ? 0.75 : 1.0;
+    const crouchScale = this.prone ? 0.55 : (this.crouching || this.isSliding) ? 0.75 : 1.0;
     const shotIdx = this.recoilShotIndex;
     this.recoilShotIndex = Math.min(30, this.recoilShotIndex + 1);
 
@@ -2923,7 +3567,7 @@ export class Game3D {
     // Eject 3D spinning brass shell casing
     this.spawnShellCasing();
 
-    if (this.ammoByWeapon[this.currentWeapon] === 0) {
+    if (this.ammoByWeapon[this.currentWeapon] === 0 && (this.reserveAmmoByWeapon[this.currentWeapon] ?? 0) > 0) {
       this.startReload();
     }
   }
@@ -2938,6 +3582,7 @@ export class Game3D {
 
     this.isSliding = true;
     this.isSprinting = false;
+    this.prone = false;
     this.slideUntil = now + (MATCH_CONFIG.SLIDE_DURATION_MS || 620);
     this.slideCooldownUntil = now + (MATCH_CONFIG.SLIDE_COOLDOWN_MS || 900);
 
@@ -2957,25 +3602,32 @@ export class Game3D {
     const now = performance.now();
     const cfg = WEAPONS[this.currentWeapon];
 
-    // Advance shell-by-shell shotgun reload or magazine reload completion
+    // Advance shell-by-shell shotgun reload or magazine reload completion (deducting from finite reserveAmmo!)
     if (this.reloadingUntil) {
+      const wId = this.currentWeapon;
       if (cfg.shellByShell && this.reloadMode === 'shell') {
         if (this.nextShellAt > 0 && now >= this.nextShellAt) {
-          const nextAmmo = Math.min(cfg.magSize, this.ammoByWeapon[this.currentWeapon] + 1);
-          this.ammoByWeapon[this.currentWeapon] = nextAmmo;
-          const isFull = nextAmmo >= cfg.magSize;
+          const curAmmo = this.ammoByWeapon[wId] ?? 0;
+          const resAmmo = this.reserveAmmoByWeapon[wId] ?? 0;
+          if (curAmmo < cfg.magSize && resAmmo > 0) {
+            this.ammoByWeapon[wId] = curAmmo + 1;
+            this.reserveAmmoByWeapon[wId] = resAmmo - 1;
+          }
+          const nextAmmo = this.ammoByWeapon[wId];
+          const nextRes = this.reserveAmmoByWeapon[wId];
+          const isFull = nextAmmo >= cfg.magSize || nextRes <= 0;
 
           // Subtle physical bump on each shell inserted into the tube
           this.punchPitch = Math.min(0.03, this.punchPitch + 0.01);
           this.recoilOffset = Math.max(this.recoilOffset, 0.042);
-          this.callbacks.onShellInserted?.(this.currentWeapon, nextAmmo, cfg.magSize, isFull);
+          this.callbacks.onShellInserted?.(wId, nextAmmo, nextRes, isFull);
 
           if (isFull) {
             this.reloadingUntil = 0;
             this.nextShellAt = 0;
             this.pumpCycleDuration = 340;
             this.pumpCycleUntil = now + 340;
-            this.callbacks.onReloadComplete?.(this.currentWeapon, cfg.magSize);
+            this.callbacks.onReloadComplete?.(wId, nextAmmo, nextRes);
           } else {
             this.nextShellAt += cfg.shellReloadMs || 390;
           }
@@ -2983,13 +3635,18 @@ export class Game3D {
         if (this.reloadingUntil && now >= this.reloadingUntil) {
           this.reloadingUntil = 0;
           this.nextShellAt = 0;
-          this.ammoByWeapon[this.currentWeapon] = cfg.magSize;
-          this.callbacks.onReloadComplete?.(this.currentWeapon, cfg.magSize);
+          this.callbacks.onReloadComplete?.(wId, this.ammoByWeapon[wId], this.reserveAmmoByWeapon[wId]);
         }
       } else if (now >= this.reloadingUntil) {
         this.reloadingUntil = 0;
-        this.ammoByWeapon[this.currentWeapon] = cfg.magSize;
-        const activeVm = this.viewmodelMeshes[this.currentWeapon];
+        const curAmmo = this.ammoByWeapon[wId] ?? 0;
+        const resAmmo = this.reserveAmmoByWeapon[wId] ?? 0;
+        const needed = Math.max(0, cfg.magSize - curAmmo);
+        const take = Math.min(needed, resAmmo);
+        this.ammoByWeapon[wId] = curAmmo + take;
+        this.reserveAmmoByWeapon[wId] = resAmmo - take;
+
+        const activeVm = this.viewmodelMeshes[wId];
         if (activeVm?.userData?.magMesh && activeVm.userData.magMesh.userData.basePos) {
           activeVm.userData.magMesh.position.copy(activeVm.userData.magMesh.userData.basePos);
         }
@@ -2998,7 +3655,7 @@ export class Game3D {
         }
         // Subtle bolt-forward camera snap when reload completes
         this.punchPitch = Math.max(-0.02, this.punchPitch - 0.009);
-        this.callbacks.onReloadComplete?.(this.currentWeapon, cfg.magSize);
+        this.callbacks.onReloadComplete?.(wId, this.ammoByWeapon[wId], this.reserveAmmoByWeapon[wId]);
       }
     }
 
@@ -3027,6 +3684,9 @@ export class Game3D {
     }
 
     const wantsCrouch = this.keys.KeyC || this.keys.ControlLeft;
+    if (wantsCrouch && this.prone) {
+      this.prone = false;
+    }
     const wantsSprint = (this.keys.ShiftLeft || this.keys.ShiftRight) &&
       moveForward > 0 &&
       !this.isAiming &&
@@ -3034,6 +3694,10 @@ export class Game3D {
       !this.isSliding &&
       this.reloadingUntil <= now &&
       now - this.lastShotAt > 160;
+
+    if (wantsSprint && this.prone) {
+      this.prone = false;
+    }
 
     // Trigger Tactical Power Slide if pressing Crouch while sprinting fast
     if (wantsCrouch && !this.crouching && !this.isSliding && this.onGround) {
@@ -3044,12 +3708,25 @@ export class Game3D {
       this.isSliding = false;
     }
 
-    this.crouching = wantsCrouch || this.isSliding;
-    this.isSprinting = wantsSprint && !this.crouching;
+    this.crouching = (wantsCrouch || this.isSliding) && !this.prone;
+    this.isSprinting = wantsSprint && !this.crouching && !this.prone;
 
-    // Smooth eye height interpolation + landing spring compression
-    const targetEye = this.isSliding ? 0.78 : this.crouching ? 1.04 : 1.62;
-    this.currentEyeHeight += (targetEye - this.currentEyeHeight) * Math.min(1, dt * 14);
+    // Tactical Peek / Lean (Q = -1 left, E = +1 right)
+    const targetLean = this.isPointerLocked && !this.isSprinting && !this.isSliding
+      ? (this.keys.KeyE ? 1 : 0) - (this.keys.KeyQ ? 1 : 0)
+      : 0;
+    this.currentLean += (targetLean - this.currentLean) * Math.min(1, dt * 14);
+    if (Math.abs(this.currentLean) < 0.005) this.currentLean = 0;
+
+    // Smooth eye height interpolation (Stand: 1.62m, Crouch: 1.04m, Slide: 0.78m, Prone: 0.52m) + landing spring
+    const targetEye = this.prone
+      ? 0.52
+      : this.isSliding
+        ? 0.78
+        : this.crouching
+          ? 1.04
+          : 1.62;
+    this.currentEyeHeight += (targetEye - this.currentEyeHeight) * Math.min(1, dt * 13);
 
     // Update landing dip spring
     this.landingDip += this.landingDipVel * dt;
@@ -3074,13 +3751,15 @@ export class Game3D {
     const weaponMoveMult = cfg.moveSpeedMult || 1.0;
     const baseTargetSpeed = this.isSliding
       ? MATCH_CONFIG.SLIDE_INITIAL_SPEED
-      : this.crouching
-        ? MATCH_CONFIG.CROUCH_SPEED
-        : this.isAiming
-          ? MATCH_CONFIG.ADS_SPEED
-          : this.isSprinting
-            ? MATCH_CONFIG.SPRINT_SPEED
-            : MATCH_CONFIG.WALK_SPEED;
+      : this.prone
+        ? (MATCH_CONFIG.PRONE_SPEED || 2.0)
+        : this.crouching
+          ? MATCH_CONFIG.CROUCH_SPEED
+          : this.isAiming
+            ? MATCH_CONFIG.ADS_SPEED
+            : this.isSprinting
+              ? MATCH_CONFIG.SPRINT_SPEED
+              : MATCH_CONFIG.WALK_SPEED;
     const targetSpeed = baseTargetSpeed * (this.isSliding ? 1.0 : weaponMoveMult);
 
     if (this.isSliding) {
@@ -3095,21 +3774,24 @@ export class Game3D {
       if (wishLen > 0.001) {
         const wishVx = wishDirX * targetSpeed;
         const wishVz = wishDirZ * targetSpeed;
+        // CS:GO Counter-Strafing: if player reverses movement direction (dot product < -0.15), apply extra braking!
+        const dotVel = this.velocity.x * wishDirX + this.velocity.z * wishDirZ;
+        const counterStrafeBoost = dotVel < -0.2 ? 2.35 : 1.0;
         const dvX = wishVx - this.velocity.x;
         const dvZ = wishVz - this.velocity.z;
         const dvLen = Math.hypot(dvX, dvZ);
         if (dvLen > 0.0001) {
-          const maxStep = (MATCH_CONFIG.GROUND_ACCEL || 52.0) * dt;
+          const maxStep = (MATCH_CONFIG.GROUND_ACCEL || 56.0) * counterStrafeBoost * dt;
           const scale = Math.min(1, maxStep / dvLen);
           this.velocity.x += dvX * scale;
           this.velocity.z += dvZ * scale;
         }
       } else {
-        const friction = MATCH_CONFIG.GROUND_FRICTION || 11.0;
+        const friction = MATCH_CONFIG.GROUND_FRICTION || 13.5;
         const drop = Math.max(0, 1 - friction * dt);
         this.velocity.x *= drop;
         this.velocity.z *= drop;
-        if (Math.hypot(this.velocity.x, this.velocity.z) < 0.06) {
+        if (Math.hypot(this.velocity.x, this.velocity.z) < 0.08) {
           this.velocity.x = 0;
           this.velocity.z = 0;
         }
@@ -3140,11 +3822,11 @@ export class Game3D {
 
     const horizSpeed = Math.hypot(this.velocity.x, this.velocity.z);
     if (this.onGround && horizSpeed > 0.5 && !this.isSliding) {
-      const bobRate = this.isSprinting ? 12.2 : this.crouching ? 6.4 : 9.2;
+      const bobRate = this.isSprinting ? 12.2 : this.prone ? 4.8 : this.crouching ? 6.4 : 9.2;
       this.weaponBobTime += dt * bobRate;
 
-      // Procedural footstep audio timing synced to slower tactical movement speed
-      if (now >= this.nextFootstepAt && !this.crouching) {
+      // Procedural footstep audio timing (silent when crouching or prone, like CS:GO shift-walk/crouch)
+      if (now >= this.nextFootstepAt && !this.crouching && !this.prone) {
         this.nextFootstepAt = now + (this.isSprinting ? 335 : 460);
         this.callbacks.onFootstep?.(this.isSprinting);
       }
@@ -3154,7 +3836,11 @@ export class Game3D {
 
     // Jump with Coyote Time (120ms) & Jump Buffering (120ms)
     if (this.keys.Space && this.isPointerLocked) {
-      this.jumpQueuedUntil = now + (MATCH_CONFIG.JUMP_BUFFER_MS || 120);
+      if (this.prone) {
+        this.prone = false;
+      } else {
+        this.jumpQueuedUntil = now + (MATCH_CONFIG.JUMP_BUFFER_MS || 120);
+      }
     }
 
     const canCoyoteJump = this.onGround || (now - this.lastGroundedAt <= (MATCH_CONFIG.COYOTE_TIME_MS || 120));
@@ -3183,11 +3869,13 @@ export class Game3D {
     this.position.y += this.velocity.y * dt;
 
     const radius = MATCH_CONFIG.PLAYER_RADIUS;
-    const playerHeight = this.isSliding
-      ? (MATCH_CONFIG.PLAYER_SLIDE_HEIGHT || 0.9)
-      : this.crouching
-        ? MATCH_CONFIG.PLAYER_CROUCH_HEIGHT
-        : MATCH_CONFIG.PLAYER_HEIGHT;
+    const playerHeight = this.prone
+      ? (MATCH_CONFIG.PLAYER_PRONE_HEIGHT || 0.58)
+      : this.isSliding
+        ? (MATCH_CONFIG.PLAYER_SLIDE_HEIGHT || 0.9)
+        : this.crouching
+          ? MATCH_CONFIG.PLAYER_CROUCH_HEIGHT
+          : MATCH_CONFIG.PLAYER_HEIGHT;
     let highestFloor = 0;
     const obstacles = this.currentObstacles;
 
@@ -3292,17 +3980,22 @@ export class Game3D {
     this.flinchPitch *= Math.max(0, 1 - dt * 12);
     this.flinchRoll *= Math.max(0, 1 - dt * 12);
 
-    // Camera Strafe Roll & Slide Tilt
-    const targetRoll = this.isSliding
+    // Camera Strafe Roll, Slide Tilt & Tactical Q/E Lean Roll
+    const leanRoll = -this.currentLean * (MATCH_CONFIG.LEAN_ROLL_ANGLE || 0.145);
+    const targetRoll = (this.isSliding
       ? 0.055
-      : -moveRight * (this.isSprinting ? 0.026 : 0.016);
-    this.cameraRoll += (targetRoll - this.cameraRoll) * Math.min(1, dt * 12);
+      : -moveRight * (this.isSprinting ? 0.026 : 0.016)) + leanRoll;
+    this.cameraRoll += (targetRoll - this.cameraRoll) * Math.min(1, dt * 14);
+
+    // Lateral camera offset when leaning (Q/E) around corners
+    const leanOffset = this.currentLean * (MATCH_CONFIG.LEAN_OFFSET || 0.42);
+    const leanDropY = Math.abs(this.currentLean) * -0.055;
 
     // Update camera transform
     this.camera.position.set(
-      this.position.x,
-      this.position.y + this.currentEyeHeight + this.landingDip,
-      this.position.z
+      this.position.x + rightX * leanOffset,
+      this.position.y + this.currentEyeHeight + this.landingDip + leanDropY,
+      this.position.z + rightZ * leanOffset
     );
     this.tmpEuler.set(
       Math.max(-Math.PI / 2 + 0.04, Math.min(Math.PI / 2 - 0.04, this.pitch + this.punchPitch + this.flinchPitch)),
@@ -3339,7 +4032,7 @@ export class Game3D {
     const equipProgress = isEquipping ? 1 - (this.equipUntil - now) / this.equipDuration : 1;
     const equipDropY = isEquipping ? (1 - equipProgress) * -0.26 : 0;
 
-    const targetVmX = this.isAiming ? 0.0 : this.isSprinting ? 0.17 : 0.24;
+    const targetVmX = (this.isAiming ? 0.0 : this.isSprinting ? 0.17 : 0.24) + this.currentLean * 0.03;
     const targetVmY = (isReloading ? -0.27 : this.isAiming ? -0.165 : -0.21) + equipDropY + this.landingDip * 0.45;
     const targetVmZ = this.isAiming ? -0.33 : -0.40;
 
@@ -3353,7 +4046,7 @@ export class Game3D {
 
     let targetRotX = this.recoilOffset * 1.45;
     let targetRotY = 0;
-    let targetRotZ = -this.cameraRoll * 1.2;
+    let targetRotZ = -this.cameraRoll * 0.85;
 
     const activeVm = this.viewmodelMeshes[this.currentWeapon];
     const magMesh = activeVm?.userData?.magMesh;
@@ -3463,11 +4156,15 @@ export class Game3D {
         ? 'AIR'
         : this.isSliding
           ? 'SLIDE'
-          : this.isSprinting
-            ? 'SPRINT'
-            : this.crouching
-              ? 'CROUCH'
-              : 'WALK';
+          : this.prone
+            ? 'PRONE'
+            : this.isSprinting
+              ? 'SPRINT'
+              : this.crouching
+                ? 'CROUCH'
+                : Math.abs(this.currentLean) > 0.25
+                  ? 'PEEK'
+                  : 'WALK';
       this.callbacks.onMovementHudUpdate?.(stance, horizSpeed);
     }
 
@@ -3481,8 +4178,99 @@ export class Game3D {
         yaw: this.yaw,
         pitch: this.pitch,
         crouching: this.crouching,
+        prone: this.prone,
+        lean: this.currentLean,
         weapon: this.currentWeapon
       });
+    }
+  }
+
+  animateHumanoidRig(rp, dt, now, isMoving, moveSpeed = 0) {
+    // 1. Smoothly blend standing <-> tactical crouch <-> prone & Q/E lean posture
+    const targetProne = rp.prone ? 1.0 : 0.0;
+    rp.proneBlend = (rp.proneBlend || 0) + (targetProne - (rp.proneBlend || 0)) * Math.min(1, dt * 11);
+    const pb = rp.proneBlend;
+
+    const targetCrouch = rp.crouching && !rp.prone ? 1.0 : 0.0;
+    rp.crouchBlend = (rp.crouchBlend || 0) + (targetCrouch - (rp.crouchBlend || 0)) * Math.min(1, dt * 12);
+    const cb = rp.crouchBlend;
+
+    const targetLean = rp.lean || 0;
+    rp.leanBlend = (rp.leanBlend || 0) + (targetLean - (rp.leanBlend || 0)) * Math.min(1, dt * 14);
+    const lb = rp.leanBlend;
+
+    // 2. Advance gait cycle & subtle idle breathing
+    const breath = Math.sin(now * 0.0028 + (rp.id?.length || 0)) * 0.016;
+    if (isMoving) {
+      const rate = moveSpeed > 0.16 ? 13.5 : 10.8;
+      rp.walkPhase += dt * rate;
+    }
+
+    const strideAmp = isMoving ? (pb > 0.4 ? 0.18 : cb > 0.4 ? 0.42 : 0.62) : 0;
+    const strideSin = Math.sin(rp.walkPhase);
+    const strideBob = isMoving ? Math.abs(Math.sin(rp.walkPhase)) * 0.032 * (1 - cb * 0.4 - pb * 0.75) : 0;
+
+    // 3. Pelvis & Hip Socket vertical height (drops 0.25m in crouch, 0.56m in prone)
+    const hipY = 0.80 - cb * 0.25 - pb * 0.56 + strideBob;
+    if (rp.pelvisGroup) {
+      rp.pelvisGroup.position.y = hipY;
+      rp.pelvisGroup.rotation.y = isMoving ? -strideSin * 0.06 : 0;
+    }
+    rp.leftLeg.position.y = hipY;
+    rp.rightLeg.position.y = hipY;
+
+    // 4. Articulated Hip Swing + Real Knee Joint Flexion (or extended backward in Prone)
+    const crouchHipFlex = cb * 0.56 - pb * 1.15;
+    const crouchKneeFlex = cb * 0.96 + pb * 0.18;
+
+    if (isMoving) {
+      const leftHipSwing = strideSin * strideAmp;
+      const rightHipSwing = -strideSin * strideAmp;
+      rp.leftLeg.rotation.x = leftHipSwing + crouchHipFlex;
+      rp.rightLeg.rotation.x = rightHipSwing + crouchHipFlex;
+
+      if (rp.leftKneePivot && rp.rightKneePivot) {
+        const leftKneeSwing = Math.max(0.06, Math.sin(rp.walkPhase - 0.65) * 0.78);
+        const rightKneeSwing = Math.max(0.06, Math.sin(rp.walkPhase + Math.PI - 0.65) * 0.78);
+        rp.leftKneePivot.rotation.x = -(leftKneeSwing * (1 - cb * 0.35 - pb * 0.65) + crouchKneeFlex);
+        rp.rightKneePivot.rotation.x = -(rightKneeSwing * (1 - cb * 0.35 - pb * 0.65) + crouchKneeFlex);
+      }
+    } else {
+      rp.leftLeg.rotation.x += (crouchHipFlex + 0.04 - rp.leftLeg.rotation.x) * Math.min(1, dt * 10);
+      rp.rightLeg.rotation.x += (crouchHipFlex - 0.05 - rp.rightLeg.rotation.x) * Math.min(1, dt * 10);
+      if (rp.leftKneePivot && rp.rightKneePivot) {
+        rp.leftKneePivot.rotation.x += (-(crouchKneeFlex + 0.08) - rp.leftKneePivot.rotation.x) * Math.min(1, dt * 10);
+        rp.rightKneePivot.rotation.x += (-(crouchKneeFlex + 0.06) - rp.rightKneePivot.rotation.x) * Math.min(1, dt * 10);
+      }
+    }
+
+    // 5. Upper Body, Head, Lean Roll & Dual-Arm Aiming Articulation
+    const aimPitch = rp.targetPitch || 0;
+    if (rp.upperBodyGroup) {
+      const targetTorsoPitch = -cb * 0.18 - pb * 1.05 + aimPitch * 0.25 + breath * 0.5;
+      rp.upperBodyGroup.rotation.x += (targetTorsoPitch - rp.upperBodyGroup.rotation.x) * 0.25;
+      const targetTorsoTwist = isMoving ? strideSin * 0.09 : Math.sin(now * 0.0014) * 0.03;
+      rp.upperBodyGroup.rotation.y += (targetTorsoTwist - rp.upperBodyGroup.rotation.y) * 0.2;
+      rp.upperBodyGroup.rotation.z = -lb * 0.28;
+      rp.upperBodyGroup.position.x = lb * 0.18;
+    }
+    if (rp.headGroup) {
+      const targetHeadPitch = cb * 0.16 + pb * 0.92 + aimPitch * 0.45;
+      rp.headGroup.rotation.x += (targetHeadPitch - rp.headGroup.rotation.x) * 0.28;
+    }
+    if (rp.armPivot) {
+      const targetArmPitch = pb * 0.95 + aimPitch * 0.75 + breath + (isMoving ? Math.cos(rp.walkPhase * 2) * 0.035 : 0);
+      rp.armPivot.rotation.x += (targetArmPitch - rp.armPivot.rotation.x) * 0.32;
+    }
+
+    // Keep overhead nameplate positioned cleanly above helmet
+    if (rp.labelInfo?.sprite) {
+      rp.labelInfo.sprite.position.y = 2.38 - cb * 0.26 - pb * 0.88;
+    }
+
+    // Hide third-person muzzle flash after 55ms
+    if (rp.gunMesh?.userData?.flashMesh && now - rp.lastShotFlashAt > 55) {
+      rp.gunMesh.userData.flashMesh.visible = false;
     }
   }
 
@@ -3516,7 +4304,29 @@ export class Game3D {
       this.camera.position.set(Math.cos(angle) * orbitR, 16.5, Math.sin(angle) * orbitR);
       this.camera.lookAt(0, 3.2, 0);
       this.viewmodelRig.visible = false;
+
+      if (this.lobbyShowcaseGroup && this.lobbyOperator) {
+        this.lobbyShowcaseGroup.visible = true;
+        if (this.lobbyAutoRotate) {
+          this.lobbyOperatorYaw += dt * 0.38;
+        }
+        // Face camera (+Z in camera space) with user/auto turntable yaw
+        this.lobbyOperator.group.rotation.y = Math.PI + this.lobbyOperatorYaw;
+        this.lobbyOperator.crouching = Boolean(this.lobbyCrouching);
+        this.animateHumanoidRig(
+          this.lobbyOperator,
+          dt,
+          now,
+          Boolean(this.lobbyWalkDemo),
+          this.lobbyWalkDemo ? 0.18 : 0
+        );
+        if (this.lobbyHoloRingOuter) this.lobbyHoloRingOuter.rotation.z = now * 0.0012;
+        if (this.lobbyHoloRingInner) this.lobbyHoloRingInner.rotation.z = -now * 0.0018;
+      }
     } else {
+      if (this.lobbyShowcaseGroup) {
+        this.lobbyShowcaseGroup.visible = false;
+      }
       this.updateLocalPhysics(dt);
     }
 
@@ -3532,7 +4342,7 @@ export class Game3D {
       this.ambientParticles.rotation.y = now * 0.00008;
     }
 
-    // Interpolate Remote Players & Bots smoothly with shortest-angle yaw interpolation
+    // Interpolate Remote Players & Bots smoothly with articulated humanoid rig
     const lerpFactor = Math.min(1, dt * 18);
     for (const rp of this.remotePlayers.values()) {
       if (!rp.alive) continue;
@@ -3548,23 +4358,7 @@ export class Game3D {
       while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
       rp.group.rotation.y += yawDiff * lerpFactor;
 
-      rp.armPivot.rotation.x += (rp.targetPitch - rp.armPivot.rotation.x) * 0.35;
-      rp.group.scale.y = rp.crouching ? 0.74 : 1.0;
-
-      // Hide third-person muzzle flash after 55ms
-      if (rp.gunMesh?.userData?.flashMesh && now - rp.lastShotFlashAt > 55) {
-        rp.gunMesh.userData.flashMesh.visible = false;
-      }
-
-      // Animate legs when walking
-      if (moveSpeed > 0.03) {
-        rp.walkPhase += dt * 12;
-        rp.leftLeg.rotation.x = Math.sin(rp.walkPhase) * 0.58;
-        rp.rightLeg.rotation.x = -Math.sin(rp.walkPhase) * 0.58;
-      } else {
-        rp.leftLeg.rotation.x *= 0.8;
-        rp.rightLeg.rotation.x *= 0.8;
-      }
+      this.animateHumanoidRig(rp, dt, now, moveSpeed > 0.025, moveSpeed);
     }
 
     // Rotate & bob 3D Health Packs
@@ -3573,6 +4367,46 @@ export class Game3D {
         item.crossGroup.rotation.y = now * 0.0024;
         item.crossGroup.position.y = 1.12 + Math.sin(now * 0.004) * 0.15;
       }
+    }
+
+    // Rotate, bob & expire 3D Dropped Primary Weapons (5s despawn + [F] proximity prompt)
+    const pickupRadius = MATCH_CONFIG.DROPPED_WEAPON_PICKUP_RADIUS || 2.8;
+    let closestDrop = null;
+    let closestDist = pickupRadius;
+    let closestRemSec = 0;
+
+    for (const [dropId, item] of this.droppedWeaponMeshes.entries()) {
+      const remMs = item.localExpiresAt - now;
+      if (remMs <= 0) {
+        this.removeDroppedWeapon(dropId);
+        continue;
+      }
+      item.gunSpinGroup.rotation.y = now * 0.0032;
+      item.gunSpinGroup.position.y = 0.36 + Math.sin(now * 0.006) * 0.07;
+      // Blink rapidly during the final 1.5 seconds before disappearing
+      if (remMs < 1500) {
+        const blink = Math.sin(now * 0.032) > 0 ? 0.92 : 0.25;
+        item.ringMat.opacity = blink;
+        item.gunSpinGroup.visible = blink > 0.5;
+      }
+
+      if (this.inMatch && this.alive) {
+        const dist = Math.hypot(item.x - this.position.x, item.z - this.position.z);
+        const dy = Math.abs((item.y || 0) - this.position.y);
+        if (dist <= closestDist && dy <= 2.2) {
+          closestDist = dist;
+          closestDrop = item;
+          closestRemSec = Math.max(0.1, remMs / 1000);
+        }
+      }
+    }
+
+    if (closestDrop) {
+      this.nearbyDrop = closestDrop;
+      this.callbacks.onNearbyWeaponChange?.(closestDrop, closestRemSec);
+    } else if (this.nearbyDrop) {
+      this.nearbyDrop = null;
+      this.callbacks.onNearbyWeaponChange?.(null, 0);
     }
 
     // Update ejected 3D brass shell casings
@@ -3742,6 +4576,18 @@ export class Game3D {
       else if (e.code === 'KeyB') {
         e.preventDefault();
         this.callbacks.onLoadoutToggle?.();
+      }
+      else if (e.code === 'KeyZ' && !e.repeat && this.alive && this.onGround) {
+        this.prone = !this.prone;
+        if (this.prone) {
+          this.isSprinting = false;
+          this.isSliding = false;
+          this.crouching = false;
+        }
+      }
+      else if (e.code === 'KeyF' && !e.repeat && this.alive && this.nearbyDrop) {
+        e.preventDefault();
+        this.callbacks.onPickupWeapon?.(this.nearbyDrop.id);
       }
       else if (e.code === 'KeyR') this.startReload();
       else if (e.code === 'KeyL') this.callbacks.onCopyLinkShortcut?.();

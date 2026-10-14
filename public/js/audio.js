@@ -251,53 +251,84 @@ export class SoundEffects {
     if (!ctx) return;
     const now = ctx.currentTime;
 
+    // 1. Crisp Kevlar / Flesh Impact Thump
+    const thud = ctx.createOscillator();
+    const thudGain = ctx.createGain();
+    thud.type = 'triangle';
+    thud.frequency.setValueAtTime(isHeadshot ? 320 : 210, now);
+    thud.frequency.exponentialRampToValueAtTime(52, now + 0.065);
+    thudGain.gain.setValueAtTime(isHeadshot ? 0.34 : 0.28, now);
+    thudGain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+    thud.connect(thudGain);
+    thudGain.connect(ctx.destination);
+    thud.start(now);
+    thud.stop(now + 0.075);
+
+    // 2. Crisp High-Frequency Hit Tick
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = isHeadshot ? 'sine' : 'triangle';
-    osc.frequency.setValueAtTime(isHeadshot ? 1720 : 960, now);
-    osc.frequency.exponentialRampToValueAtTime(isHeadshot ? 2550 : 460, now + 0.08);
+    osc.frequency.setValueAtTime(isHeadshot ? 2150 : 1180, now);
+    osc.frequency.exponentialRampToValueAtTime(isHeadshot ? 2980 : 540, now + 0.07);
 
-    gain.gain.setValueAtTime(isHeadshot ? 0.32 : 0.22, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+    gain.gain.setValueAtTime(isHeadshot ? 0.36 : 0.24, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
 
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.start(now);
-    osc.stop(now + 0.095);
+    osc.stop(now + 0.085);
 
     if (isHeadshot) {
-      // Extra crisp metallic dink for headshot
-      const dink = ctx.createOscillator();
-      const dinkGain = ctx.createGain();
-      dink.type = 'sine';
-      dink.frequency.setValueAtTime(2950, now + 0.02);
-      dink.frequency.exponentialRampToValueAtTime(3400, now + 0.12);
-      dinkGain.gain.setValueAtTime(0.24, now + 0.02);
-      dinkGain.gain.exponentialRampToValueAtTime(0.001, now + 0.13);
-      dink.connect(dinkGain);
-      dinkGain.connect(ctx.destination);
-      dink.start(now + 0.02);
-      dink.stop(now + 0.135);
+      // 3. Signature CS:GO Metallic Helmet "DINK!" dual-harmonic ring
+      [2880, 4120].forEach((freq, idx) => {
+        const dink = ctx.createOscillator();
+        const dinkGain = ctx.createGain();
+        dink.type = 'sine';
+        dink.frequency.setValueAtTime(freq, now + 0.012);
+        dink.frequency.exponentialRampToValueAtTime(freq * 1.08, now + 0.14);
+        dinkGain.gain.setValueAtTime(idx === 0 ? 0.28 : 0.18, now + 0.012);
+        dinkGain.gain.exponentialRampToValueAtTime(0.0008, now + 0.15);
+        dink.connect(dinkGain);
+        dinkGain.connect(ctx.destination);
+        dink.start(now + 0.012);
+        dink.stop(now + 0.16);
+      });
     }
   }
 
-  playKillConfirm() {
+  playKillConfirm(streak = 1) {
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;
 
-    const notes = [587.33, 880, 1174.66]; // D5, A5, D6
+    // Deep sub-bass kill impact drop
+    const sub = ctx.createOscillator();
+    const subGain = ctx.createGain();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(155, now);
+    sub.frequency.exponentialRampToValueAtTime(36, now + 0.22);
+    subGain.gain.setValueAtTime(0.36, now);
+    subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
+    sub.connect(subGain);
+    subGain.connect(ctx.destination);
+    sub.start(now);
+    sub.stop(now + 0.25);
+
+    // Rising tactical kill chime (pitch scales up slightly on multi-kill streaks)
+    const pitchBoost = 1 + Math.min(4, Math.max(0, streak - 1)) * 0.06;
+    const notes = [587.33 * pitchBoost, 880 * pitchBoost, 1174.66 * pitchBoost];
     notes.forEach((freq, i) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'sine';
-      osc.frequency.setValueAtTime(freq, now + i * 0.055);
-      gain.gain.setValueAtTime(0.22, now + i * 0.055);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.055 + 0.19);
+      osc.frequency.setValueAtTime(freq, now + i * 0.05);
+      gain.gain.setValueAtTime(0.24, now + i * 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.05 + 0.2);
       osc.connect(gain);
       gain.connect(ctx.destination);
-      osc.start(now + i * 0.055);
-      osc.stop(now + i * 0.055 + 0.21);
+      osc.start(now + i * 0.05);
+      osc.stop(now + i * 0.05 + 0.22);
     });
   }
 

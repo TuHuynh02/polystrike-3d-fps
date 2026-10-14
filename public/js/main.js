@@ -67,6 +67,9 @@ const hudHpBar = document.getElementById('hud-hp-bar');
 const reloadIndicator = document.getElementById('reload-indicator');
 const reloadText = document.getElementById('reload-text');
 const reloadBarFill = document.getElementById('reload-bar-fill');
+const weaponPickupPrompt = document.getElementById('weapon-pickup-prompt');
+const weaponPickupText = document.getElementById('weapon-pickup-text');
+const weaponPickupTimer = document.getElementById('weapon-pickup-timer');
 const hudWeaponName = document.getElementById('hud-weapon-name');
 const hudWeaponRole = document.getElementById('hud-weapon-role');
 const hudAmmoCurrent = document.getElementById('hud-ammo-current');
@@ -79,6 +82,16 @@ const hotbarName1 = document.getElementById('hotbar-name-1');
 const hotbarName2 = document.getElementById('hotbar-name-2');
 const hotbarName3 = document.getElementById('hotbar-name-3');
 const btnHudLoadout = document.getElementById('btn-hud-loadout');
+
+// Lobby 3D Operator Showcase Elements
+const operatorDragZone = document.getElementById('operator-drag-zone');
+const showcaseOperatorName = document.getElementById('showcase-operator-name');
+const showcaseWeaponName = document.getElementById('showcase-weapon-name');
+const operatorColorSwatches = document.getElementById('operator-color-swatches');
+const btnShowcaseWalk = document.getElementById('btn-showcase-walk');
+const btnShowcaseCrouch = document.getElementById('btn-showcase-crouch');
+const btnShowcaseFire = document.getElementById('btn-showcase-fire');
+const btnShowcaseRotate = document.getElementById('btn-showcase-rotate');
 
 // Modals
 const deathOverlay = document.getElementById('death-overlay');
@@ -139,6 +152,9 @@ if (savedName) {
 } else {
   playerNameInput.value = `Striker_${ Math.floor(100 + Math.random() * 899) }`;
 }
+if (showcaseOperatorName) {
+  showcaseOperatorName.textContent = (playerNameInput.value.trim() || 'STRIKER').toUpperCase();
+}
 
 // Initialize 3D Engine
 const game = new Game3D(canvasContainer, {
@@ -152,11 +168,12 @@ const game = new Game3D(canvasContainer, {
   onDryFire: () => {
     sfx.playDryFire();
   },
-  onReloadStart: (weaponId, reloadMs = 1600, mode = 'empty', currentAmmo = 0, magSize = 30) => {
+  onReloadStart: (weaponId, reloadMs = 1600, mode = 'empty', currentAmmo = 0, reserveAmmo = 0) => {
+    const cfg = WEAPONS[weaponId] || WEAPONS.rifle;
     reloadIndicator.classList.remove('hidden');
     if (reloadText) {
       if (mode === 'shell') {
-        reloadText.textContent = `NẠP ĐẠN SHOTGUN (${ currentAmmo }/${ magSize })...`;
+        reloadText.textContent = `NẠP ĐẠN SHOTGUN (${ currentAmmo }/${ cfg.magSize } • DỰ TRỮ ${ reserveAmmo })...`;
       } else if (mode === 'tactical') {
         reloadText.textContent = 'NẠP ĐẠN CHIẾN THUẬT (NHANH)...';
       } else {
@@ -165,7 +182,7 @@ const game = new Game3D(canvasContainer, {
     }
     if (reloadBarFill) {
       reloadBarFill.style.transition = 'none';
-      const startPct = mode === 'shell' ? Math.round((currentAmmo / Math.max(1, magSize)) * 100) : 0;
+      const startPct = mode === 'shell' ? Math.round((currentAmmo / Math.max(1, cfg.magSize)) * 100) : 0;
       reloadBarFill.style.width = `${ startPct }%`;
       void reloadBarFill.offsetWidth;
       reloadBarFill.style.transition = `width ${ reloadMs }ms linear`;
@@ -174,24 +191,45 @@ const game = new Game3D(canvasContainer, {
     sfx.playReload(reloadMs, mode);
     socket.emit('reload', { weapon: weaponId, mode });
   },
-  onShellInserted: (weaponId, currentAmmo, magSize, isFull) => {
+  onShellInserted: (weaponId, currentAmmo, reserveAmmo, isFull) => {
+    const cfg = WEAPONS[weaponId] || WEAPONS.shotgun;
     sfx.playShellInsert(isFull);
-    updateWeaponHud(weaponId, currentAmmo, magSize);
+    updateWeaponHud(weaponId, currentAmmo, reserveAmmo);
     if (reloadText && !isFull) {
-      reloadText.textContent = `NẠP ĐẠN SHOTGUN (${ currentAmmo }/${ magSize })...`;
+      reloadText.textContent = `NẠP ĐẠN SHOTGUN (${ currentAmmo }/${ cfg.magSize } • DỰ TRỮ ${ reserveAmmo })...`;
     }
   },
-  onReloadCancel: (weaponId, currentAmmo, magSize) => {
+  onReloadCancel: (weaponId, currentAmmo, reserveAmmo) => {
     reloadIndicator.classList.add('hidden');
-    updateWeaponHud(weaponId, currentAmmo, magSize);
+    updateWeaponHud(weaponId, currentAmmo, reserveAmmo);
   },
-  onReloadComplete: (weaponId, magSize) => {
+  onReloadComplete: (weaponId, currentAmmo, reserveAmmo) => {
     reloadIndicator.classList.add('hidden');
-    updateWeaponHud(weaponId, magSize, magSize);
+    updateWeaponHud(weaponId, currentAmmo, reserveAmmo);
   },
-  onWeaponChanged: (weaponId, currentAmmo, magSize) => {
+  onWeaponChanged: (weaponId, currentAmmo, reserveAmmo) => {
     reloadIndicator.classList.add('hidden');
-    updateWeaponHud(weaponId, currentAmmo, magSize);
+    updateWeaponHud(weaponId, currentAmmo, reserveAmmo);
+  },
+  onNearbyWeaponChange: (dropItem, remSec) => {
+    if (!weaponPickupPrompt) return;
+    if (!dropItem || !game.inMatch || !game.alive) {
+      weaponPickupPrompt.classList.add('hidden');
+      return;
+    }
+    const wCfg = WEAPONS[dropItem.weapon];
+    const wName = wCfg ? wCfg.name : dropItem.weapon.toUpperCase();
+    if (weaponPickupText) {
+      weaponPickupText.textContent = `Vứt súng chính & nhặt ${ wName } (${ dropItem.ammo }/${ dropItem.reserveAmmo })`;
+    }
+    if (weaponPickupTimer) {
+      weaponPickupTimer.textContent = `${ remSec.toFixed(1) }s`;
+    }
+    weaponPickupPrompt.classList.remove('hidden');
+  },
+  onPickupWeapon: (dropId) => {
+    if (!dropId) return;
+    socket.emit('pickupWeapon', { dropId });
   },
   onWeaponSwitchSound: () => {
     sfx.playWeaponSwitch();
@@ -220,6 +258,8 @@ const game = new Game3D(canvasContainer, {
         SPRINT: '⚡ SPRINT',
         SLIDE: '💨 SLIDE',
         CROUCH: '🔉 CROUCH',
+        PRONE: '🐍 PRONE',
+        PEEK: '📐 PEEK',
         AIR: '🚀 AIR'
       };
       hudStance.textContent = labels[stance] || stance;
@@ -392,19 +432,28 @@ function syncHotbarSlotsHud() {
   if (hotbarName3) hotbarName3.textContent = mCfg.name;
 }
 
-function updateWeaponHud(weaponId, currentAmmo, magSize) {
+function updateWeaponHud(weaponId, currentAmmo, reserveAmmo) {
   const cfg = WEAPONS[weaponId] || WEAPONS.rifle;
   hudWeaponName.textContent = cfg.name;
   hudWeaponRole.textContent = cfg.role;
 
+  const ammoBlock = hudAmmoCurrent.closest('.weapon-ammo-block');
   if (cfg.isMelee || cfg.infiniteAmmo) {
     hudAmmoCurrent.textContent = '∞';
     hudAmmoMag.textContent = '∞';
-    hudAmmoCurrent.classList.remove('low-ammo');
+    hudAmmoCurrent.classList.remove('low-ammo', 'ammo-empty');
+    hudAmmoMag.classList.remove('ammo-empty');
+    ammoBlock?.classList.remove('ammo-empty-box');
   } else {
-    hudAmmoCurrent.textContent = String(currentAmmo);
-    hudAmmoMag.textContent = String(magSize);
-    hudAmmoCurrent.classList.toggle('low-ammo', currentAmmo <= Math.max(1, Math.ceil(magSize * 0.25)));
+    const cleanCur = Math.max(0, Number(currentAmmo ?? cfg.magSize));
+    const cleanRes = Math.max(0, Number(reserveAmmo ?? cfg.reserveAmmo ?? cfg.magSize));
+    const isTotalEmpty = cleanCur === 0 && cleanRes === 0;
+    hudAmmoCurrent.textContent = String(cleanCur);
+    hudAmmoMag.textContent = String(cleanRes);
+    hudAmmoCurrent.classList.toggle('low-ammo', !isTotalEmpty && cleanCur <= Math.max(1, Math.ceil(cfg.magSize * 0.25)));
+    hudAmmoCurrent.classList.toggle('ammo-empty', isTotalEmpty);
+    hudAmmoMag.classList.toggle('ammo-empty', isTotalEmpty);
+    ammoBlock?.classList.toggle('ammo-empty-box', isTotalEmpty);
   }
 
   syncHotbarSlotsHud();
@@ -422,9 +471,10 @@ function renderLoadoutModal() {
     const w = WEAPONS[wId];
     if (!w) return '';
     const st = w.stats || { damage: 70, fireRate: 70, recoilControl: 70, mobility: 70 };
+    const ammoTag = w.magSize > 1 ? `${ w.magSize }/${ w.reserveAmmo ?? w.magSize * 3 } VIÊN` : 'CẬN CHIẾN';
     return `
       <button type="button" class="weapon-option ${ isSelected ? 'active' : '' }" data-loadout-weapon="${ w.id }" data-loadout-slot="${ w.slot }">
-        <span class="weapon-key">[${ slotTag || w.category }] • ${ w.magSize > 1 ? `${ w.magSize } VIÊN` : 'CẬN CHIẾN' }</span>
+        <span class="weapon-key">[${ slotTag || w.category }] • ${ ammoTag }</span>
         <span class="weapon-name">${ w.name }</span>
         <span class="weapon-desc">${ w.role }</span>
         <div class="weapon-stat-bars">
@@ -502,7 +552,7 @@ if (btnSaveLoadout) {
   btnSaveLoadout.addEventListener('click', () => {
     applySelectedLoadoutAndNotify();
     toggleLoadoutModal(false);
-    showToast(`🎒 Đã lưu Loadout: [1] ${ WEAPONS[selectedLoadout.primary].name } • [2] ${ WEAPONS[selectedLoadout.secondary].name } • [3] KARAMBIT-X`);
+    showToast(`🎒 Đã lưu Loadout (áp dụng khi hồi sinh): [1] ${ WEAPONS[selectedLoadout.primary].name } • [2] ${ WEAPONS[selectedLoadout.secondary].name }`);
   });
 }
 
@@ -556,6 +606,12 @@ function requestJoinRoom({ mode = 'public', roomCode = '' }) {
 }
 
 // Lobby Event Listeners
+playerNameInput.addEventListener('input', () => {
+  if (showcaseOperatorName) {
+    showcaseOperatorName.textContent = (playerNameInput.value.trim() || 'STRIKER').toUpperCase();
+  }
+});
+
 weaponGrid.addEventListener('click', (e) => {
   const btn = e.target.closest('.weapon-option');
   if (!btn) return;
@@ -564,7 +620,81 @@ weaponGrid.addEventListener('click', (e) => {
   weaponGrid.querySelectorAll('.weapon-option').forEach((el) => {
     el.classList.toggle('active', el === btn);
   });
+  game.setLobbyWeapon(selectedStartingWeapon);
+  if (showcaseWeaponName && WEAPONS[selectedStartingWeapon]) {
+    showcaseWeaponName.textContent = WEAPONS[selectedStartingWeapon].name;
+  }
 });
+
+// Interactive 3D Humanoid Showcase Turntable & Controls in Lobby
+if (operatorDragZone) {
+  let isDraggingShowcase = false;
+  let lastDragX = 0;
+
+  operatorDragZone.addEventListener('pointerdown', (e) => {
+    isDraggingShowcase = true;
+    lastDragX = e.clientX;
+    game.lobbyAutoRotate = false;
+    btnShowcaseRotate?.classList.remove('active');
+    operatorDragZone.setPointerCapture?.(e.pointerId);
+  });
+
+  operatorDragZone.addEventListener('pointermove', (e) => {
+    if (!isDraggingShowcase) return;
+    const dx = e.clientX - lastDragX;
+    lastDragX = e.clientX;
+    game.rotateLobbyOperator(dx * 0.011);
+  });
+
+  const endDrag = () => {
+    isDraggingShowcase = false;
+  };
+  operatorDragZone.addEventListener('pointerup', endDrag);
+  operatorDragZone.addEventListener('pointercancel', endDrag);
+}
+
+if (operatorColorSwatches) {
+  operatorColorSwatches.addEventListener('click', (e) => {
+    const sw = e.target.closest('.color-swatch');
+    if (!sw) return;
+    const hexVal = Number(sw.dataset.color);
+    if (!Number.isNaN(hexVal)) {
+      game.setLobbyOperatorColor(hexVal);
+      operatorColorSwatches.querySelectorAll('.color-swatch').forEach((el) => {
+        el.classList.toggle('active', el === sw);
+      });
+    }
+  });
+}
+
+if (btnShowcaseWalk) {
+  btnShowcaseWalk.addEventListener('click', () => {
+    const walking = game.toggleLobbyWalk();
+    btnShowcaseWalk.classList.toggle('active', walking);
+  });
+}
+
+if (btnShowcaseCrouch) {
+  btnShowcaseCrouch.addEventListener('click', () => {
+    const crouching = game.toggleLobbyCrouch();
+    btnShowcaseCrouch.classList.toggle('active', crouching);
+  });
+}
+
+if (btnShowcaseFire) {
+  btnShowcaseFire.addEventListener('click', () => {
+    sfx.ensureContext();
+    sfx.playShot(selectedStartingWeapon || 'rifle', 0.72);
+    game.triggerLobbyTestFire();
+  });
+}
+
+if (btnShowcaseRotate) {
+  btnShowcaseRotate.addEventListener('click', () => {
+    game.lobbyAutoRotate = !game.lobbyAutoRotate;
+    btnShowcaseRotate.classList.toggle('active', game.lobbyAutoRotate);
+  });
+}
 
 if (mapGrid) {
   mapGrid.addEventListener('click', (e) => {
@@ -621,6 +751,7 @@ btnLeaveRoom.addEventListener('click', () => {
   game.inMatch = false;
   game.exitPointerLock();
   game.clearAllRemotePlayers();
+  game.clearDroppedWeapons();
   pauseModal.classList.add('hidden');
   if (loadoutModal) loadoutModal.classList.add('hidden');
   deathOverlay.classList.add('hidden');
@@ -713,18 +844,20 @@ function renderScoreboard(players) {
     .join('');
 }
 
-// Add Kill Feed Entry
-function addKillFeedItem({ killerName, victimName, weapon, isHeadshot }) {
+// Add CS:GO-style Top-Right Kill Feed Entry
+function addKillFeedItem({ killerId, killerName, victimId, victimName, weapon, isHeadshot }) {
   const item = document.createElement('div');
-  item.className = 'kill-item';
+  const involvesMe = killerId === game.localId || victimId === game.localId;
+  item.className = `kill-item${ involvesMe ? ' kill-item-me' : '' }${ isHeadshot ? ' kill-item-hs' : '' }`;
 
   const killerSpan = document.createElement('span');
-  killerSpan.style.color = '#38bdf8';
+  killerSpan.className = 'kill-name killer-name';
+  killerSpan.style.color = killerId === game.localId ? '#facc15' : '#38bdf8';
   killerSpan.textContent = killerName;
 
   const weaponSpan = document.createElement('span');
   weaponSpan.className = 'kill-weapon-tag';
-  weaponSpan.textContent = weapon;
+  weaponSpan.textContent = `[${ weapon }]`;
 
   item.appendChild(killerSpan);
   item.appendChild(weaponSpan);
@@ -732,23 +865,24 @@ function addKillFeedItem({ killerName, victimName, weapon, isHeadshot }) {
   if (isHeadshot) {
     const hsSpan = document.createElement('span');
     hsSpan.className = 'kill-hs-tag';
-    hsSpan.textContent = '🎯 HEADSHOT';
+    hsSpan.textContent = '🎯 HS';
     item.appendChild(hsSpan);
   }
 
   const victimSpan = document.createElement('span');
-  victimSpan.style.color = '#fca5a5';
+  victimSpan.className = 'kill-name victim-name';
+  victimSpan.style.color = victimId === game.localId ? '#f87171' : '#fca5a5';
   victimSpan.textContent = victimName;
   item.appendChild(victimSpan);
 
   killFeed.prepend(item);
-  while (killFeed.children.length > 5) {
+  while (killFeed.children.length > 6) {
     killFeed.lastElementChild.remove();
   }
 
   setTimeout(() => {
     item.remove();
-  }, 5500);
+  }, 6000);
 }
 
 // ======================== SOCKET.IO EVENT HANDLERS ========================
@@ -790,19 +924,19 @@ socket.on('roomJoined', (data) => {
   } else {
     selectedLoadout.primary = data.player.weapon || selectedStartingWeapon;
   }
-  game.setLoadout(selectedLoadout, true);
+  game.setLoadout(selectedLoadout, selectedLoadout.primary);
   game.spawnLocalPlayer(data.player);
   updateHpHud(data.player.hp);
   triggerSpawnProtectionHud(data.player.spawnProtectionMs || MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500);
   const wCfg = WEAPONS[game.currentWeapon] || WEAPONS.rifle;
   updateWeaponHud(
     game.currentWeapon,
-    wCfg.isMelee ? 1 : wCfg.magSize,
-    wCfg.isMelee ? 1 : wCfg.magSize,
-    game.activeSlot
+    game.ammoByWeapon[game.currentWeapon] ?? wCfg.magSize,
+    game.reserveAmmoByWeapon[game.currentWeapon] ?? wCfg.reserveAmmo ?? wCfg.magSize
   );
 
   game.syncPickups(data.pickups || []);
+  game.syncDroppedWeapons(data.droppedWeapons || []);
   latestPlayers = data.players || [];
   game.syncPlayersState(latestPlayers);
 
@@ -827,8 +961,8 @@ socket.on('loadoutUpdated', (data) => {
       melee: data.loadout.melee || selectedLoadout.melee
     };
     selectedStartingWeapon = selectedLoadout.primary;
-    game.setLoadout(selectedLoadout, false);
-    updateHotbarLabels();
+    game.setLoadout(selectedLoadout);
+    syncHotbarSlotsHud();
   }
 });
 
@@ -843,6 +977,7 @@ socket.on('mapChanged', (data) => {
   game.loadMap(newMapId);
   updateMapHud(newMapId);
   game.syncPickups(data.pickups || []);
+  game.syncDroppedWeapons(data.droppedWeapons || []);
   latestPlayers = data.players || [];
   game.syncPlayersState(latestPlayers);
 
@@ -864,6 +999,9 @@ socket.on('stateUpdate', (snapshot) => {
   hudTimer.textContent = formatTime(snapshot.timeRemaining);
   latestPlayers = snapshot.players || [];
   game.syncPlayersState(latestPlayers);
+  if (Array.isArray(snapshot.droppedWeapons)) {
+    game.syncDroppedWeapons(snapshot.droppedWeapons);
+  }
 
   // Find leader and local stats
   let topPlayer = null;
@@ -972,6 +1110,7 @@ socket.on('killEvent', (data) => {
   if (data.victimId === game.localId) {
     game.alive = false;
     clearSpawnProtectionHud();
+    if (weaponPickupPrompt) weaponPickupPrompt.classList.add('hidden');
     sniperScope.classList.add('hidden');
     crosshair.classList.remove('hidden');
     deathKillerName.textContent = data.killerName;
@@ -994,6 +1133,13 @@ socket.on('playerRespawned', (data) => {
     if (respawnInterval) clearInterval(respawnInterval);
     deathOverlay.classList.add('hidden');
     damageOverlay.style.opacity = '0';
+    if (data.loadout) {
+      selectedLoadout = {
+        primary: data.loadout.primary || selectedLoadout.primary,
+        secondary: data.loadout.secondary || selectedLoadout.secondary,
+        melee: data.loadout.melee || selectedLoadout.melee
+      };
+    }
     game.spawnLocalPlayer(data);
     updateHpHud(data.hp);
     triggerSpawnProtectionHud(data.spawnProtectionMs || MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500);
@@ -1012,9 +1158,34 @@ socket.on('pickupState', (data) => {
   }
 });
 
+socket.on('weaponDropped', (drop) => {
+  if (!game.inMatch || !drop) return;
+  game.addDroppedWeapon(drop);
+});
+
+socket.on('weaponDropExpired', ({ dropId }) => {
+  if (!game.inMatch || !dropId) return;
+  game.removeDroppedWeapon(dropId);
+});
+
+socket.on('weaponSwapped', (data) => {
+  if (!game.inMatch || !data) return;
+  if (data.pickedDropId) {
+    game.removeDroppedWeapon(data.pickedDropId);
+  }
+  if (data.playerId === game.localId) {
+    selectedLoadout.primary = data.weapon;
+    game.applySwappedWeapon(data);
+    sfx.playWeaponDrop?.();
+    const wCfg = WEAPONS[data.weapon];
+    showCenterBanner(`🔫 ĐÃ NHẶT ${ wCfg ? wCfg.name : data.weapon } (${ data.ammo }/${ data.reserveAmmo })`);
+  }
+});
+
 socket.on('matchEnded', (data) => {
   if (!game.inMatch) return;
   clearSpawnProtectionHud();
+  if (weaponPickupPrompt) weaponPickupPrompt.classList.add('hidden');
   game.exitPointerLock();
   pauseModal.classList.add('hidden');
   deathOverlay.classList.add('hidden');
@@ -1060,6 +1231,7 @@ socket.on('matchStarted', (data) => {
     updateMapHud(data.mapId);
   }
   game.syncPickups(data.pickups || []);
+  game.syncDroppedWeapons(data.droppedWeapons || []);
   latestPlayers = data.players || [];
   game.syncPlayersState(latestPlayers);
   const me = latestPlayers.find((p) => p.id === game.localId);

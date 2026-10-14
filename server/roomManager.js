@@ -42,6 +42,14 @@ export function createInitialAmmoMap() {
   return map;
 }
 
+export function createInitialReserveAmmoMap() {
+  const map = {};
+  for (const [id, cfg] of Object.entries(WEAPONS)) {
+    map[id] = cfg.infiniteAmmo ? 0 : (cfg.reserveAmmo ?? cfg.magSize * 3);
+  }
+  return map;
+}
+
 export function sanitizeLoadout(raw = {}, fallbackPrimary = 'rifle') {
   const reqPrimary = raw?.primary || fallbackPrimary;
   const reqSecondary = raw?.secondary || 'pistol';
@@ -104,6 +112,7 @@ export class RoomManager {
       desiredBots: Math.max(0, Math.min(MATCH_CONFIG.MAX_BOTS, Number(desiredBots) || 0)),
       players: new Map(),
       pickups: this.createPickupsForMap(cleanMapId),
+      droppedWeapons: [],
       recentSpawns: []
     };
 
@@ -437,10 +446,15 @@ export class RoomManager {
       yaw: spawn.yaw || 0,
       pitch: 0,
       crouching: false,
+      prone: false,
+      lean: 0,
       loadout: cleanLoadout,
+      savedLoadoutPrimary: cleanLoadout.primary,
       weapon: initialWeapon,
       ammoByWeapon: createInitialAmmoMap(),
+      reserveAmmoByWeapon: createInitialReserveAmmoMap(),
       ammo: weaponCfg.magSize,
+      reserveAmmo: weaponCfg.infiniteAmmo ? 0 : (weaponCfg.reserveAmmo ?? weaponCfg.magSize * 3),
       hp: MATCH_CONFIG.MAX_HP,
       alive: true,
       kills: 0,
@@ -467,6 +481,7 @@ export class RoomManager {
     if (!room || !player || player.isBot) return null;
     const nextLoadout = sanitizeLoadout(payload, player.loadout?.primary || 'rifle');
     player.loadout = nextLoadout;
+    player.savedLoadoutPrimary = nextLoadout.primary;
 
     if (!player.ammoByWeapon) {
       player.ammoByWeapon = createInitialAmmoMap();
@@ -476,9 +491,18 @@ export class RoomManager {
       player.ammoByWeapon.knife = 1;
     }
 
+    if (!player.reserveAmmoByWeapon) {
+      player.reserveAmmoByWeapon = createInitialReserveAmmoMap();
+    } else {
+      player.reserveAmmoByWeapon[nextLoadout.primary] = WEAPONS[nextLoadout.primary].reserveAmmo ?? 90;
+      player.reserveAmmoByWeapon[nextLoadout.secondary] = WEAPONS[nextLoadout.secondary].reserveAmmo ?? 36;
+      player.reserveAmmoByWeapon.knife = 0;
+    }
+
     if (!player.alive) {
       player.weapon = nextLoadout.primary;
       player.ammo = WEAPONS[nextLoadout.primary].magSize;
+      player.reserveAmmo = WEAPONS[nextLoadout.primary].reserveAmmo ?? 90;
     } else {
       const curSlot = WEAPONS[player.weapon]?.slot || 1;
       if (curSlot === 1) {
@@ -490,6 +514,7 @@ export class RoomManager {
       player.reloadWeapon = null;
       player.nextShellAt = 0;
       player.ammo = player.ammoByWeapon[player.weapon] ?? WEAPONS[player.weapon].magSize;
+      player.reserveAmmo = player.reserveAmmoByWeapon[player.weapon] ?? (WEAPONS[player.weapon].reserveAmmo ?? 0);
     }
 
     return player.loadout;
@@ -502,6 +527,7 @@ export class RoomManager {
 
     room.mapId = nextMapId;
     room.pickups = this.createPickupsForMap(nextMapId);
+    room.droppedWeapons = [];
     room.recentSpawns = [];
 
     // Mark all players not yet placed so sequential respawn assigns distinct safe points
@@ -522,6 +548,7 @@ export class RoomManager {
       mapId: room.mapId,
       mapName: mapCfg.name,
       pickups: room.pickups,
+      droppedWeapons: room.droppedWeapons,
       players: this.serializePlayers(room)
     });
   }
@@ -553,18 +580,30 @@ export class RoomManager {
     const cfg = WEAPONS[wId] || WEAPONS.rifle;
 
     if (cfg.shellByShell) {
-      // Advance shell-by-shell insertion for shotgun
+      // Advance shell-by-shell insertion for shotgun, consuming from reserveAmmo
       const shellMs = cfg.shellReloadMs || 390;
       while (player.nextShellAt > 0 && now >= player.nextShellAt - 45) {
-        const cur = player.ammoByWeapon?.[wId] ?? player.ammo;
+        const cur = player.ammoByWeapon?.[wId] ?? player.ammo ?? 0;
+        const curRes = player.reserveAmmoByWeapon?.[wId] ?? (player.weapon === wId ? player.reserveAmmo : cfg.reserveAmmo) ?? 0;
+        if (curRes <= 0 || cur >= cfg.magSize) {
+          player.reloadingUntil = 0;
+          player.reloadWeapon = null;
+          player.nextShellAt = 0;
+          break;
+        }
         const nextAmmo = Math.min(cfg.magSize, cur + 1);
+        const nextRes = Math.max(0, curRes - (nextAmmo - cur));
         if (player.ammoByWeapon) {
           player.ammoByWeapon[wId] = nextAmmo;
         }
+        if (player.reserveAmmoByWeapon) {
+          player.reserveAmmoByWeapon[wId] = nextRes;
+        }
         if (player.weapon === wId) {
           player.ammo = nextAmmo;
+          player.reserveAmmo = nextRes;
         }
-        if (nextAmmo >= cfg.magSize) {
+        if (nextAmmo >= cfg.magSize || nextRes <= 0) {
           player.reloadingUntil = 0;
           player.reloadWeapon = null;
           player.nextShellAt = 0;
@@ -579,15 +618,25 @@ export class RoomManager {
         player.nextShellAt = 0;
       }
     } else {
-      // Magazine reload completes when timer finishes (with 120ms network jitter tolerance)
+      // Magazine reload completes when timer finishes (with 120ms network jitter tolerance), consuming from reserveAmmo
       if (now >= player.reloadingUntil - 120) {
         player.reloadingUntil = 0;
         player.reloadWeapon = null;
+        const curAmmo = player.ammoByWeapon?.[wId] ?? player.ammo ?? 0;
+        const curRes = player.reserveAmmoByWeapon?.[wId] ?? (player.weapon === wId ? player.reserveAmmo : cfg.reserveAmmo) ?? 0;
+        const needed = Math.max(0, cfg.magSize - curAmmo);
+        const added = Math.min(needed, Math.max(0, curRes));
+        const nextAmmo = curAmmo + added;
+        const nextRes = Math.max(0, curRes - added);
         if (player.ammoByWeapon) {
-          player.ammoByWeapon[wId] = cfg.magSize;
+          player.ammoByWeapon[wId] = nextAmmo;
+        }
+        if (player.reserveAmmoByWeapon) {
+          player.reserveAmmoByWeapon[wId] = nextRes;
         }
         if (player.weapon === wId) {
-          player.ammo = cfg.magSize;
+          player.ammo = nextAmmo;
+          player.reserveAmmo = nextRes;
         }
       }
     }
@@ -619,13 +668,23 @@ export class RoomManager {
     if (typeof payload.crouching === 'boolean') {
       player.crouching = payload.crouching;
     }
+    if (typeof payload.prone === 'boolean') {
+      player.prone = payload.prone;
+      if (player.prone) {
+        player.crouching = false;
+      }
+    }
+    if (typeof payload.lean === 'number' && Number.isFinite(payload.lean)) {
+      player.lean = Math.max(-1, Math.min(1, payload.lean));
+    }
     if (typeof payload.weapon === 'string' && WEAPONS[payload.weapon] && payload.weapon !== player.weapon) {
       // Cancel incomplete reload without granting free full magazine
       player.weapon = payload.weapon;
       player.reloadingUntil = 0;
       player.reloadWeapon = null;
       player.nextShellAt = 0;
-      player.ammo = player.ammoByWeapon[payload.weapon] ?? WEAPONS[payload.weapon].magSize;
+      player.ammo = player.ammoByWeapon?.[payload.weapon] ?? WEAPONS[payload.weapon].magSize;
+      player.reserveAmmo = player.reserveAmmoByWeapon?.[payload.weapon] ?? (WEAPONS[payload.weapon].reserveAmmo ?? 0);
     }
   }
 
@@ -639,14 +698,15 @@ export class RoomManager {
     this.syncPlayerReloadState(player, now);
     if (player.reloadingUntil > now) return;
 
-    const currentAmmo = player.ammoByWeapon?.[wId] ?? player.ammo;
-    if (currentAmmo >= cfg.magSize) return;
+    const currentAmmo = player.ammoByWeapon?.[wId] ?? player.ammo ?? 0;
+    const currentReserve = player.reserveAmmoByWeapon?.[wId] ?? (player.weapon === wId ? player.reserveAmmo : cfg.reserveAmmo) ?? 0;
+    if (currentAmmo >= cfg.magSize || currentReserve <= 0) return;
 
     player.reloadStartedAt = now;
     player.reloadWeapon = wId;
 
     if (cfg.shellByShell) {
-      const missing = Math.max(1, cfg.magSize - currentAmmo);
+      const missing = Math.max(1, Math.min(cfg.magSize - currentAmmo, currentReserve));
       const startDelay = cfg.shellReloadStartMs || 240;
       const shellMs = cfg.shellReloadMs || 390;
       player.nextShellAt = now + startDelay + shellMs;
@@ -672,6 +732,7 @@ export class RoomManager {
       shooter.reloadWeapon = null;
       shooter.nextShellAt = 0;
       shooter.ammo = shooter.ammoByWeapon?.[weaponId] ?? weaponCfg.magSize;
+      shooter.reserveAmmo = shooter.reserveAmmoByWeapon?.[weaponId] ?? (weaponCfg.reserveAmmo ?? 0);
     }
 
     // Rate limit check (allow 18% network jitter tolerance)
@@ -693,7 +754,10 @@ export class RoomManager {
       }
 
       if (shooter.ammo <= 0) {
-        this.handleReload(room, shooter, weaponId);
+        const curRes = shooter.reserveAmmoByWeapon?.[weaponId] ?? shooter.reserveAmmo ?? 0;
+        if (curRes > 0) {
+          this.handleReload(room, shooter, weaponId);
+        }
         return;
       }
 
@@ -701,8 +765,10 @@ export class RoomManager {
       if (shooter.ammoByWeapon) {
         shooter.ammoByWeapon[weaponId] = shooter.ammo;
       }
+      shooter.reserveAmmo = shooter.reserveAmmoByWeapon?.[weaponId] ?? shooter.reserveAmmo ?? 0;
     } else {
       shooter.ammo = 1;
+      shooter.reserveAmmo = 0;
     }
 
     shooter.lastShotAt = now;
@@ -728,11 +794,15 @@ export class RoomManager {
       hitPoint: payload?.hitPoint || null
     });
 
-    // Support both single hit (`targetId`) and multi-pellet hits (`hits: [{ targetId, isHeadshot }]`)
+    // Support both single hit (`targetId`) and multi-pellet hits (`hits: [{ targetId, isHeadshot, isLegshot }]`)
     const hitClaims = Array.isArray(payload?.hits)
       ? payload.hits.slice(0, weaponCfg.pellets)
       : payload?.targetId
-        ? [{ targetId: payload.targetId, isHeadshot: Boolean(payload.isHeadshot) }]
+        ? [{
+            targetId: payload.targetId,
+            isHeadshot: Boolean(payload.isHeadshot),
+            isLegshot: Boolean(payload.isLegshot)
+          }]
         : [];
 
     if (hitClaims.length === 0) return;
@@ -758,10 +828,22 @@ export class RoomManager {
       const maxRange = weaponCfg.isMelee ? weaponCfg.range * 1.45 : weaponCfg.range * 1.15;
       if (dist > maxRange) continue;
 
-      // Verify line of sight against active map obstacles (supports crouch/slide eye height and peek tolerance)
-      const eyeH = shooter.crouching ? 1.0 : 1.55;
-      const shooterEye = { x: shooter.x, y: shooter.y + eyeH, z: shooter.z };
-      const targetPoint = { x: target.x, y: target.y + (claim.isHeadshot ? 1.55 : 1.05), z: target.z };
+      // Verify line of sight against active map obstacles (supports prone/crouch/slide eye height and Q/E lean peek tolerance)
+      const eyeH = shooter.prone ? 0.46 : shooter.crouching ? 1.0 : 1.55;
+      const leanVal = (shooter.lean || 0) * (MATCH_CONFIG.LEAN_OFFSET || 0.42);
+      const rightX = Math.cos(shooter.yaw || 0);
+      const rightZ = -Math.sin(shooter.yaw || 0);
+      const shooterEye = {
+        x: shooter.x + rightX * leanVal,
+        y: shooter.y + eyeH,
+        z: shooter.z + rightZ * leanVal
+      };
+      const targetEyeH = target.prone ? 0.46 : target.crouching ? 1.0 : 1.55;
+      const targetPoint = {
+        x: target.x,
+        y: target.y + (claim.isHeadshot ? targetEyeH : target.prone ? 0.32 : 1.05),
+        z: target.z
+      };
       let losOk = hasLineOfSight(shooterEye, targetPoint, obstacles);
       if (!losOk && payload?.origin && typeof payload.origin.x === 'number') {
         const originOffset = Math.hypot(
@@ -769,7 +851,7 @@ export class RoomManager {
           payload.origin.y - (shooter.y + eyeH),
           payload.origin.z - shooter.z
         );
-        if (originOffset <= 1.35) {
+        if (originOffset <= 1.65) {
           losOk = hasLineOfSight(payload.origin, targetPoint, obstacles);
         }
       }
@@ -783,9 +865,15 @@ export class RoomManager {
         falloffMult = Math.max(0.42, 1 - (dist - 16) / 50);
       }
 
+      const hitZoneMult = claim.isHeadshot
+        ? weaponCfg.headshotMult
+        : claim.isLegshot
+          ? 0.78
+          : 1.0;
+
       const pelletDmg = Math.max(
         1,
-        Math.round(weaponCfg.damage * falloffMult * (claim.isHeadshot ? weaponCfg.headshotMult : 1))
+        Math.round(weaponCfg.damage * falloffMult * hitZoneMult)
       );
       const prev = damageMap.get(target.id) || { totalDamage: 0, anyHeadshot: false };
       prev.totalDamage += pelletDmg;
@@ -825,7 +913,167 @@ export class RoomManager {
     }
   }
 
+  spawnDroppedWeapon(room, dropData = {}, broadcast = true) {
+    if (!room) return null;
+    if (!Array.isArray(room.droppedWeapons)) {
+      room.droppedWeapons = [];
+    }
+    const weaponId = WEAPONS[dropData.weapon]?.slot === 1 ? dropData.weapon : 'rifle';
+    const wCfg = WEAPONS[weaponId] || WEAPONS.rifle;
+    const now = Date.now();
+    const despawnMs = MATCH_CONFIG.DROPPED_WEAPON_DESPAWN_MS || 5000;
+
+    const dropItem = {
+      id: `drop_${now}_${Math.random().toString(36).slice(2, 7)}`,
+      weapon: weaponId,
+      weaponName: wCfg.name,
+      ammo: Math.max(0, Math.min(wCfg.magSize, Math.floor(Number(dropData.ammo) ?? wCfg.magSize))),
+      reserveAmmo: Math.max(0, Math.floor(Number(dropData.reserveAmmo) ?? (wCfg.reserveAmmo ?? 60))),
+      x: Number((dropData.x || 0).toFixed(2)),
+      y: Number((dropData.y || 0).toFixed(2)),
+      z: Number((dropData.z || 0).toFixed(2)),
+      yaw: Number((dropData.yaw || 0).toFixed(2)),
+      droppedBy: dropData.droppedBy || 'Striker',
+      createdAt: now,
+      expiresAt: now + despawnMs
+    };
+
+    room.droppedWeapons.push(dropItem);
+    // Keep max 20 active drops in room
+    if (room.droppedWeapons.length > 20) {
+      room.droppedWeapons.shift();
+    }
+
+    if (broadcast) {
+      this.io.to(room.code).emit('weaponDropped', dropItem);
+    }
+    return dropItem;
+  }
+
+  updateDroppedWeapons(room, now = Date.now()) {
+    if (!room || !Array.isArray(room.droppedWeapons) || room.droppedWeapons.length === 0) return;
+    const beforeLen = room.droppedWeapons.length;
+    room.droppedWeapons = room.droppedWeapons.filter((d) => d && now < d.expiresAt);
+    if (room.droppedWeapons.length !== beforeLen) {
+      this.io.to(room.code).emit('droppedWeaponsUpdate', {
+        droppedWeapons: room.droppedWeapons
+      });
+    }
+  }
+
+  handlePickupWeapon(room, player, payload = {}) {
+    if (!room || !player || !player.alive || room.state !== 'PLAYING') return null;
+    const now = Date.now();
+    this.syncPlayerReloadState(player, now);
+    this.updateDroppedWeapons(room, now);
+
+    if (!Array.isArray(room.droppedWeapons) || room.droppedWeapons.length === 0) return null;
+
+    const maxPickupDist = (MATCH_CONFIG.DROPPED_WEAPON_PICKUP_RADIUS || 2.8) + 0.85;
+    let bestIdx = -1;
+    let bestDist = Infinity;
+
+    for (let i = 0; i < room.droppedWeapons.length; i++) {
+      const d = room.droppedWeapons[i];
+      if (!d || now >= d.expiresAt) continue;
+      const dist = Math.hypot(d.x - player.x, d.z - player.z);
+      if (dist > maxPickupDist) continue;
+      if (payload?.dropId && d.id === payload.dropId) {
+        bestIdx = i;
+        bestDist = dist;
+        break;
+      }
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestIdx = i;
+      }
+    }
+
+    if (bestIdx === -1) return null;
+
+    const [pickedDrop] = room.droppedWeapons.splice(bestIdx, 1);
+
+    // Determine player's current Slot 1 primary weapon and its exact remaining ammo + reserveAmmo
+    const oldPrimary = (player.loadout?.primary && WEAPONS[player.loadout.primary]?.slot === 1)
+      ? player.loadout.primary
+      : 'rifle';
+    const oldCfg = WEAPONS[oldPrimary] || WEAPONS.rifle;
+    const oldAmmo = player.ammoByWeapon?.[oldPrimary] ?? (player.weapon === oldPrimary ? player.ammo : oldCfg.magSize);
+    const oldReserve = player.reserveAmmoByWeapon?.[oldPrimary] ?? (player.weapon === oldPrimary ? player.reserveAmmo : oldCfg.reserveAmmo) ?? 0;
+
+    // Throw the old primary weapon onto the ground at the player's feet for 5 seconds
+    const thrownDrop = this.spawnDroppedWeapon(
+      room,
+      {
+        weapon: oldPrimary,
+        ammo: oldAmmo,
+        reserveAmmo: oldReserve,
+        x: player.x,
+        y: player.y || 0,
+        z: player.z,
+        yaw: player.yaw || 0,
+        droppedBy: player.name
+      },
+      false
+    );
+
+    // Equip the picked-up primary weapon into player's Slot 1 and make it active
+    if (!player.loadout) {
+      player.loadout = { primary: pickedDrop.weapon, secondary: 'pistol', melee: 'knife' };
+    } else {
+      player.loadout.primary = pickedDrop.weapon;
+    }
+
+    if (!player.ammoByWeapon) player.ammoByWeapon = createInitialAmmoMap();
+    if (!player.reserveAmmoByWeapon) player.reserveAmmoByWeapon = createInitialReserveAmmoMap();
+
+    player.ammoByWeapon[pickedDrop.weapon] = pickedDrop.ammo;
+    player.reserveAmmoByWeapon[pickedDrop.weapon] = pickedDrop.reserveAmmo;
+    player.weapon = pickedDrop.weapon;
+    player.ammo = pickedDrop.ammo;
+    player.reserveAmmo = pickedDrop.reserveAmmo;
+    player.reloadingUntil = 0;
+    player.reloadWeapon = null;
+    player.nextShellAt = 0;
+
+    const swapEvent = {
+      playerId: player.id,
+      pickedDropId: pickedDrop.id,
+      weapon: player.weapon,
+      ammo: player.ammo,
+      reserveAmmo: player.reserveAmmo,
+      loadout: player.loadout,
+      thrownDrop,
+      droppedWeapons: room.droppedWeapons
+    };
+
+    this.io.to(room.code).emit('weaponSwapped', swapEvent);
+    return swapEvent;
+  }
+
   handlePlayerKilled(room, killer, victim, weaponId, isHeadshot) {
+    // Drop victim's primary weapon with its remaining ammo + reserveAmmo at their death location for 5s
+    const victimPrimary = (victim.loadout?.primary && WEAPONS[victim.loadout.primary]?.slot === 1)
+      ? victim.loadout.primary
+      : (WEAPONS[victim.weapon]?.slot === 1 ? victim.weapon : 'rifle');
+    const primaryCfg = WEAPONS[victimPrimary] || WEAPONS.rifle;
+    const dropMagAmmo = victim.ammoByWeapon?.[victimPrimary]
+      ?? (victim.weapon === victimPrimary ? victim.ammo : primaryCfg.magSize);
+    const dropReserveAmmo = victim.reserveAmmoByWeapon?.[victimPrimary]
+      ?? (victim.weapon === victimPrimary ? victim.reserveAmmo : primaryCfg.reserveAmmo)
+      ?? 0;
+
+    const droppedWeapon = this.spawnDroppedWeapon(room, {
+      weapon: victimPrimary,
+      ammo: dropMagAmmo,
+      reserveAmmo: dropReserveAmmo,
+      x: victim.x,
+      y: victim.y || 0,
+      z: victim.z,
+      yaw: victim.yaw || 0,
+      droppedBy: victim.name
+    });
+
     victim.alive = false;
     victim.hp = 0;
     victim.deaths += 1;
@@ -853,7 +1101,8 @@ export class RoomManager {
       weapon: WEAPONS[weaponId]?.name || weaponId.toUpperCase(),
       weaponId,
       isHeadshot: Boolean(isHeadshot),
-      killerStreak: killer ? killer.streak : 0
+      killerStreak: killer ? killer.streak : 0,
+      droppedWeapon
     });
 
     // Check win condition (20 kills)
@@ -866,8 +1115,14 @@ export class RoomManager {
     const now = Date.now();
     const protectionMs = MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500;
     const sp = this.pickSafeSpawnPoint(room, player.id);
-    if (!player.isBot && player.loadout?.primary && WEAPONS[player.loadout.primary]) {
-      player.weapon = player.loadout.primary;
+    if (!player.isBot) {
+      const basePrimary = player.savedLoadoutPrimary || player.loadout?.primary || 'rifle';
+      if (player.loadout && WEAPONS[basePrimary]?.slot === 1) {
+        player.loadout.primary = basePrimary;
+      }
+      if (player.loadout?.primary && WEAPONS[player.loadout.primary]) {
+        player.weapon = player.loadout.primary;
+      }
     }
     const wCfg = WEAPONS[player.weapon] || WEAPONS.rifle;
     player.x = sp.x;
@@ -875,6 +1130,9 @@ export class RoomManager {
     player.z = sp.z;
     player.yaw = sp.yaw || 0;
     player.pitch = 0;
+    player.crouching = false;
+    player.prone = false;
+    player.lean = 0;
     player.hp = MATCH_CONFIG.MAX_HP;
     player.alive = true;
     player.reloadingUntil = 0;
@@ -882,10 +1140,10 @@ export class RoomManager {
     player.nextShellAt = 0;
     player.respawnAt = 0;
     player.invulnerableUntil = now + protectionMs;
+    player.ammoByWeapon = createInitialAmmoMap();
+    player.reserveAmmoByWeapon = createInitialReserveAmmoMap();
     player.ammo = wCfg.magSize;
-    if (player.ammoByWeapon) {
-      player.ammoByWeapon = createInitialAmmoMap();
-    }
+    player.reserveAmmo = wCfg.infiniteAmmo ? 0 : (wCfg.reserveAmmo ?? wCfg.magSize * 3);
 
     this.io.to(room.code).emit('playerRespawned', {
       playerId: player.id,
@@ -897,6 +1155,9 @@ export class RoomManager {
       weapon: player.weapon,
       loadout: player.loadout || null,
       ammo: player.ammo,
+      reserveAmmo: player.reserveAmmo,
+      ammoByWeapon: player.ammoByWeapon,
+      reserveAmmoByWeapon: player.reserveAmmoByWeapon,
       invulnerable: true,
       invulnerableUntil: player.invulnerableUntil,
       spawnProtectionMs: protectionMs
@@ -984,6 +1245,7 @@ export class RoomManager {
     room.matchStartedAt = now;
     room.matchEndsAt = now + MATCH_CONFIG.MATCH_DURATION_SEC * 1000;
     room.nextMatchAt = 0;
+    room.droppedWeapons = [];
     room.recentSpawns = [];
 
     // Reset all pickups
@@ -1012,6 +1274,7 @@ export class RoomManager {
       timeRemaining: MATCH_CONFIG.MATCH_DURATION_SEC,
       killLimit: MATCH_CONFIG.KILL_LIMIT,
       pickups: room.pickups,
+      droppedWeapons: room.droppedWeapons,
       players: this.serializePlayers(room)
     });
   }
@@ -1031,8 +1294,12 @@ export class RoomManager {
         z: Number(p.z.toFixed(2)),
         yaw: Number(p.yaw.toFixed(3)),
         pitch: Number(p.pitch.toFixed(3)),
-        crouching: p.crouching,
+        crouching: Boolean(p.crouching),
+        prone: Boolean(p.prone),
+        lean: Number((p.lean || 0).toFixed(2)),
         weapon: p.weapon,
+        ammo: p.ammo,
+        reserveAmmo: p.reserveAmmo ?? 0,
         hp: p.hp,
         alive: p.alive,
         invulnerable,
@@ -1082,12 +1349,14 @@ export class RoomManager {
         onBotShoot: (bot, shotPayload) => this.handleShoot(room, bot, shotPayload)
       });
 
-      // Update Health Pack pickups & respawns
+      // Update Health Pack pickups & 5s Dropped Weapons expiration
       this.updateHealthPacks(room, now);
+      this.updateDroppedWeapons(room, now);
 
       // Broadcast compact state snapshot
       this.io.to(room.code).emit('stateUpdate', {
         timeRemaining,
+        droppedWeapons: room.droppedWeapons,
         players: this.serializePlayers(room)
       });
     }

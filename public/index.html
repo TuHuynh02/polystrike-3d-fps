@@ -3,7 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>POLYSTRIKE 3D — Web FPS Deathmatch</title>
+  <title>POLYSTRIKE 3D — Tactical WebGL FPS Deathmatch</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,500;0,600;0,700;1,700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="./css/style.css" />
 </head>
 <body>
@@ -16,11 +19,24 @@
   <!-- ======================== LOBBY OVERLAY ======================== -->
   <div id="lobby-screen" class="overlay-screen">
     <div class="lobby-container">
-      <div class="lobby-header">
-        <div class="brand-badge">WEBGL 3D MULTIPLAYER FPS</div>
-        <h1 class="brand-title">POLY<span>STRIKE</span> 3D</h1>
-        <p class="brand-subtitle">Đấu trường FPS góc nhìn thứ nhất — Tạo phòng & Gửi link chiến ngay cùng bạn bè</p>
-      </div>
+      <!-- Top Esports Command Bar -->
+      <header class="lobby-header">
+        <div class="header-brand-group">
+          <div class="brand-badge">
+            <span class="pulse-dot"></span>
+            ENGINE 3D HUMANOID RIG // 60 FPS
+          </div>
+          <h1 class="brand-title">POLY<span>STRIKE</span> <em>3D</em></h1>
+        </div>
+        <p class="brand-subtitle">
+          Đấu trường FPS góc nhìn thứ nhất — Chiến binh 3D khớp chuyển động chân thực, tạo phòng &amp; gửi link chiến ngay
+        </p>
+        <div class="header-meta-pills">
+          <span class="meta-pill"><strong>11</strong> VŨ KHÍ 3 SLOT</span>
+          <span class="meta-pill"><strong>04</strong> BẢN ĐỒ LỚN</span>
+          <span class="meta-pill"><strong>P2P / WS</strong> ONLINE</span>
+        </div>
+      </header>
 
       <!-- Invite Link Banner (Shown automatically when URL has ?room=CODE) -->
       <div id="invite-banner" class="invite-banner hidden">
@@ -36,85 +52,112 @@
 
       <div class="lobby-grid">
         <!-- Left Panel: Loadout, Map & Settings -->
-        <div class="lobby-card">
-          <h2 class="card-title">1. THIẾT LẬP CHIẾN BINH & BẢN ĐỒ</h2>
+        <section class="lobby-card">
+          <div class="card-header-row">
+            <h2 class="card-title"><span class="step-tag">01</span> THIẾT LẬP CHIẾN BINH &amp; BẢN ĐỒ</h2>
+            <span class="card-subtag">LOADOUT READY</span>
+          </div>
 
-          <label class="field-label" for="player-name">Tên nhân vật (Nickname)</label>
-          <input
-            type="text"
-            id="player-name"
-            class="text-input"
-            maxlength="16"
-            placeholder="Nhập tên của bạn (VD: AceSniper)..."
-          />
+          <label class="field-label" for="player-name">Định danh Chiến Binh (Callsign)</label>
+          <div class="input-with-tag">
+            <span class="input-prefix">ID //</span>
+            <input
+              type="text"
+              id="player-name"
+              class="text-input"
+              maxlength="16"
+              placeholder="Nhập tên của bạn (VD: AceSniper)..."
+            />
+          </div>
 
-          <label class="field-label">Vũ khí chính khởi đầu (Slot [1] • Trong trận bấm [B] để đổi Loadout 3 Slot)</label>
+          <label class="field-label">Vũ khí chính khởi đầu (Slot [1] • Trong trận bấm [B] đổi Loadout 3 Slot)</label>
           <div class="weapon-select-grid" id="lobby-weapon-grid">
             <button type="button" class="weapon-option active" data-weapon="rifle">
-              <span class="weapon-key">[AR]</span>
+              <div class="weapon-opt-top">
+                <span class="weapon-key">AR // 7.62</span>
+                <span class="weapon-dmg-pill">27 DMG</span>
+              </div>
               <span class="weapon-name">VANDAL-AK</span>
               <span class="weapon-desc">AR Hạng Nặng • Sát thương cao</span>
             </button>
             <button type="button" class="weapon-option" data-weapon="m4a1">
-              <span class="weapon-key">[AR]</span>
+              <div class="weapon-opt-top">
+                <span class="weapon-key">AR // SILENCED</span>
+                <span class="weapon-dmg-pill">22 DMG</span>
+              </div>
               <span class="weapon-name">PHANTOM-M4</span>
               <span class="weapon-desc">AR Giảm Thanh • Tốc bắn nhanh, êm</span>
             </button>
             <button type="button" class="weapon-option" data-weapon="scar">
-              <span class="weapon-key">[AR]</span>
+              <div class="weapon-opt-top">
+                <span class="weapon-key">BR // ACOG</span>
+                <span class="weapon-dmg-pill">34 DMG</span>
+              </div>
               <span class="weapon-name">SCAR-H 7.62</span>
               <span class="weapon-desc">Battle Rifle • 2-Tap Headshot</span>
             </button>
             <button type="button" class="weapon-option" data-weapon="smg">
-              <span class="weapon-key">[SMG]</span>
+              <div class="weapon-opt-top">
+                <span class="weapon-key">SMG // 880RPM</span>
+                <span class="weapon-dmg-pill">16 DMG</span>
+              </div>
               <span class="weapon-name">VECTOR-KRISS</span>
-              <span class="weapon-desc">Tiểu liên 880 RPM • Cơ động cao</span>
+              <span class="weapon-desc">Tiểu liên CQB • Cơ động cao</span>
             </button>
             <button type="button" class="weapon-option" data-weapon="shotgun">
-              <span class="weapon-key">[SG]</span>
+              <div class="weapon-opt-top">
+                <span class="weapon-key">SG // 8 PELLETS</span>
+                <span class="weapon-dmg-pill">112 MAX</span>
+              </div>
               <span class="weapon-name">BUCKSHOT-8</span>
               <span class="weapon-desc">Pump Shotgun • Nạp từng viên</span>
             </button>
             <button type="button" class="weapon-option" data-weapon="sniper">
-              <span class="weapon-key">[SNP]</span>
+              <div class="weapon-opt-top">
+                <span class="weapon-key">SNP // 3.5X</span>
+                <span class="weapon-dmg-pill">105 DMG</span>
+              </div>
               <span class="weapon-name">AWP-PHANTOM</span>
-              <span class="weapon-desc">Sniper Scope 3.5x • 1-Shot Kill</span>
+              <span class="weapon-desc">Sniper Scope • 1-Shot Kill</span>
             </button>
             <button type="button" class="weapon-option" data-weapon="lmg">
-              <span class="weapon-key">[LMG]</span>
+              <div class="weapon-opt-top">
+                <span class="weapon-key">LMG // 80 RDS</span>
+                <span class="weapon-dmg-pill">24 DMG</span>
+              </div>
               <span class="weapon-name">ODIN-M249</span>
               <span class="weapon-desc">Machinegun • Băng đạn 80 viên</span>
             </button>
           </div>
 
-          <label class="field-label">Chọn Bản Đồ Chiến Đấu (Rộng 120m+ • Nhiều Vật Cản Nấp)</label>
+          <label class="field-label">Chọn Bản Đồ Chiến Đấu (120m+ • Đa Tầng &amp; Nhiều Góc Nấp)</label>
           <div class="map-select-grid" id="lobby-map-grid">
             <button type="button" class="map-option active" data-map="cyber_citadel">
-              <span class="map-badge">120x120m • Cân bằng</span>
+              <span class="map-badge">120x120m • CÂN BẰNG</span>
               <span class="map-name">CYBER CITADEL</span>
-              <span class="map-desc">Thành cổ công nghệ, 4 đài bắn tỉa & boong-ke</span>
+              <span class="map-desc">Thành cổ công nghệ, 4 đài bắn tỉa &amp; boong-ke</span>
             </button>
             <button type="button" class="map-option" data-map="cargo_dock">
-              <span class="map-badge">128x128m • Nhiều vật cản</span>
+              <span class="map-badge">128x128m • CONTAINER</span>
               <span class="map-name">CARGO DOCKYARD</span>
-              <span class="map-desc">Bến cảng container mê cung & cầu vượt trung tâm</span>
+              <span class="map-desc">Bến cảng container mê cung &amp; cầu vượt trung tâm</span>
             </button>
             <button type="button" class="map-option" data-map="desert_outpost">
-              <span class="map-badge">124x124m • Chiến thuật</span>
+              <span class="map-badge">124x124m • CHIẾN THUẬT</span>
               <span class="map-name">SOLAR OUTPOST</span>
-              <span class="map-desc">Pháo đài sa mạc, giao thông hào & 4 tháp canh</span>
+              <span class="map-desc">Pháo đài sa mạc, giao thông hào &amp; 4 tháp canh</span>
             </button>
             <button type="button" class="map-option" data-map="neon_lab">
-              <span class="map-badge">120x120m • Cận chiến & Tầm trung</span>
+              <span class="map-badge">120x120m • CẬN CHIẾN</span>
               <span class="map-name">QUANTUM LAB</span>
-              <span class="map-desc">Phòng thí nghiệm lượng tử & hành lang máy chủ</span>
+              <span class="map-desc">Phòng thí nghiệm lượng tử &amp; hành lang máy chủ</span>
             </button>
           </div>
 
           <div class="bot-setting-row">
             <div>
               <div class="field-label" style="margin-bottom:2px;">Số lượng Bot AI trong phòng</div>
-              <div class="field-hint">Giúp trận đấu luôn sôi động ngay cả khi chỉ có 1 người test link</div>
+              <div class="field-hint">Chiến binh AI 3D tự động di chuyển, ẩn nấp &amp; giao tranh</div>
             </div>
             <select id="lobby-bot-count" class="select-input">
               <option value="0">0 Bot (Chỉ người thật)</option>
@@ -124,11 +167,55 @@
               <option value="8">8 Bot AI (Hỗn chiến)</option>
             </select>
           </div>
-        </div>
+        </section>
+
+        <!-- Center Stage: Live 3D Humanoid Operator Showcase -->
+        <section class="operator-showcase-stage" id="operator-showcase-stage">
+          <div class="showcase-top-hud">
+            <div class="showcase-tag">MÔ HÌNH 3D CON NGƯỜI // KHỚP TAY &amp; CHÂN ĐỘNG HỌC</div>
+            <div class="showcase-identity">
+              <span id="showcase-callsign">STRIKER</span>
+              <span class="showcase-sep">•</span>
+              <strong id="showcase-weapon-label">VANDAL-AK</strong>
+            </div>
+          </div>
+
+          <!-- Interactive 360 Drag Zone over the 3D Operator -->
+          <div class="showcase-drag-zone" id="operator-drag-zone" title="Giữ chuột trái và kéo để xoay nhân vật 3D 360°">
+            <div class="reticle-corner rc-tl"></div>
+            <div class="reticle-corner rc-tr"></div>
+            <div class="reticle-corner rc-bl"></div>
+            <div class="reticle-corner rc-br"></div>
+            <div class="showcase-drag-hint">🖱️ Kéo chuột xoay 360° • Xem khớp tay chân &amp; vũ khí 3D</div>
+          </div>
+
+          <!-- Bottom Operator Control Dock -->
+          <div class="showcase-dock">
+            <div class="suit-color-row">
+              <span class="dock-label">MÀU GIÁP (SUIT):</span>
+              <div class="color-swatches" id="operator-color-swatches">
+                <button type="button" class="color-swatch active" data-color="0x38bdf8" style="--swatch:#38bdf8;" title="Cyber Cyan"></button>
+                <button type="button" class="color-swatch" data-color="0xf43f5e" style="--swatch:#f43f5e;" title="Crimson Ops"></button>
+                <button type="button" class="color-swatch" data-color="0xf59e0b" style="--swatch:#f59e0b;" title="Solar Gold"></button>
+                <button type="button" class="color-swatch" data-color="0x10b981" style="--swatch:#10b981;" title="Viper Emerald"></button>
+                <button type="button" class="color-swatch" data-color="0xa855f7" style="--swatch:#a855f7;" title="Phantom Violet"></button>
+              </div>
+            </div>
+            <div class="showcase-actions-row">
+              <button type="button" id="btn-showcase-walk" class="showcase-btn">🏃 Chạy Bộ</button>
+              <button type="button" id="btn-showcase-crouch" class="showcase-btn">🦵 Đứng / Ngồi</button>
+              <button type="button" id="btn-showcase-fire" class="showcase-btn accent">🔥 Thử Bắn</button>
+              <button type="button" id="btn-showcase-rotate" class="showcase-btn active">🔄 Xoay 360°</button>
+            </div>
+          </div>
+        </section>
 
         <!-- Right Panel: Matchmaking & Room Link -->
-        <div class="lobby-card">
-          <h2 class="card-title">2. CHỌN CHẾ ĐỘ VÀO TRẬN</h2>
+        <section class="lobby-card">
+          <div class="card-header-row">
+            <h2 class="card-title"><span class="step-tag">02</span> CHỌN CHẾ ĐỘ VÀO TRẬN</h2>
+            <span class="card-subtag">INSTANT DEPLOY</span>
+          </div>
 
           <div id="lobby-error" class="error-box hidden"></div>
 
@@ -138,7 +225,7 @@
           </button>
 
           <button id="btn-create-private" class="btn btn-secondary btn-large">
-            <span>🔒 TẠO PHÒNG RIÊNG & LẤY LINK MỜI</span>
+            <span>🔒 TẠO PHÒNG RIÊNG &amp; LẤY LINK MỜI</span>
             <small>Tạo mã phòng riêng để copy link gửi bạn bè</small>
           </button>
 
@@ -150,7 +237,7 @@
               id="room-code-input"
               class="text-input code-input"
               maxlength="6"
-              placeholder="NHẬP MÃ 6 KÝ TỰ (VD: A9F2K1)"
+              placeholder="MÃ 6 KÝ TỰ (VD: A9F2K1)"
             />
             <button id="btn-join-code" class="btn btn-outline">VÀO PHÒNG</button>
           </div>
@@ -166,18 +253,18 @@
           </div>
 
           <div class="controls-guide">
-            <div><kbd>WASD</kbd> Di chuyển</div>
-            <div><kbd>SHIFT</kbd> Chạy nhanh (Sprint)</div>
-            <div><kbd>C / CTRL</kbd> Ngồi / Trượt (Slide)</div>
-            <div><kbd>SPACE</kbd> Nhảy / Bunnyhop</div>
-            <div><kbd>CHUỘT TRÁI</kbd> Bắn / Chém dao</div>
-            <div><kbd>CHUỘT PHẢI</kbd> Ngắm ADS / Scope</div>
-            <div><kbd>1 / 2 / 3</kbd> Chính / Phụ / Dao</div>
-            <div><kbd>B</kbd> Đổi Loadout Súng</div>
-            <div><kbd>R</kbd> Nạp đạn (Tactical / Dry)</div>
-            <div><kbd>L</kbd> Copy Link Mời</div>
+            <div><kbd>WASD</kbd> Di chuyển / Counter-Strafe</div>
+            <div><kbd>Q / E</kbd> Nghiêng người Peek góc</div>
+            <div><kbd>SHIFT + CTRL</kbd> Lướt (Slide)</div>
+            <div><kbd>Z</kbd> Nằm bắn (Prone)</div>
+            <div><kbd>C / CTRL</kbd> Ngồi (Crouch)</div>
+            <div><kbd>F</kbd> Vứt &amp; Nhặt súng rơi (5s)</div>
+            <div><kbd>1 / 2 / 3</kbd> Đổi 3 Slot Vũ Khí</div>
+            <div><kbd>B</kbd> Kho Súng Loadout</div>
+            <div><kbd>R</kbd> Nạp Đạn (Trừ đạn dự trữ)</div>
+            <div><kbd>L</kbd> Copy Link Phòng</div>
           </div>
-        </div>
+        </section>
       </div>
     </div>
   </div>
@@ -255,6 +342,13 @@
 
     <div id="center-banner" class="center-banner hidden"></div>
 
+    <!-- Dropped Primary Weapon [F] Swap Prompt -->
+    <div id="weapon-pickup-prompt" class="weapon-pickup-prompt hidden">
+      <kbd>F</kbd>
+      <span id="weapon-pickup-text">Vứt súng đang cầm &amp; Nhặt <strong>VANDAL-AK</strong> (24/60)</span>
+      <span id="weapon-pickup-timer" class="pickup-timer-pill">4.8s</span>
+    </div>
+
     <!-- Bottom Left: Health, Movement Stance & K/D Status -->
     <div class="hud-bottom-left">
       <div id="spawn-shield-badge" class="spawn-shield-badge hidden">
@@ -262,9 +356,9 @@
         <strong id="spawn-shield-timer">1.5s</strong>
       </div>
       <div class="player-stats-row">
-        <div class="mini-stat">KILLS: <strong id="hud-kills">0</strong></div>
-        <div class="mini-stat">DEATHS: <strong id="hud-deaths">0</strong></div>
-        <div class="mini-stat">STREAK: <strong id="hud-streak">0</strong>🔥</div>
+        <div class="mini-stat">KILLS <strong id="hud-kills">0</strong></div>
+        <div class="mini-stat">DEATHS <strong id="hud-deaths">0</strong></div>
+        <div class="mini-stat">STREAK <strong id="hud-streak">0</strong>🔥</div>
       </div>
       <div class="movement-telemetry-row">
         <span id="hud-stance" class="stance-badge">🏃 WALK</span>
@@ -272,7 +366,7 @@
       </div>
       <div class="hp-card" id="hud-hp-card">
         <div class="hp-header">
-          <span class="hp-label">MÁU (HP)</span>
+          <span class="hp-label">SINH LỰC // HP</span>
           <span class="hp-value" id="hud-hp-value">100</span>
         </div>
         <div class="hp-bar-track">
@@ -309,7 +403,7 @@
           <span class="slot-name" id="hotbar-name-2">PULSE-P9</span>
         </div>
         <div class="hotbar-slot" id="hotbar-slot-3" data-slot-num="3" data-slot="knife">
-          <span class="slot-num">[3] CẬN CHIẾN</span>
+          <span class="slot-num">[3] DAO</span>
           <span class="slot-name" id="hotbar-name-3">KARAMBIT-X</span>
         </div>
         <button type="button" class="hotbar-slot hotbar-loadout-btn" id="btn-hud-loadout" title="Bấm [B] để đổi Loadout Vũ Khí">
@@ -338,9 +432,9 @@
 
   <!-- ======================== [B] LOADOUT SELECTION MODAL ======================== -->
   <div id="loadout-modal" class="modal-backdrop hidden">
-    <div class="pause-card loadout-card" style="max-width: 780px; width: 94%;">
+    <div class="pause-card loadout-card" style="max-width: 820px; width: 94%;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-        <h2 class="pause-title" style="margin:0;">🎒 KHO VŨ KHÍ 3 SLOT (LOADOUT)</h2>
+        <h2 class="pause-title" style="margin:0;">🎒 KHO VŨ KHÍ 3 SLOT (TACTICAL LOADOUT)</h2>
         <span class="stat-pill">Phím tắt <kbd>B</kbd></span>
       </div>
       <p class="pause-subtitle" style="margin-bottom:12px;">
@@ -350,12 +444,12 @@
       <div class="field-label">SLOT [1] — VŨ KHÍ CHÍNH (PRIMARY: AR / SMG / SHOTGUN / SNIPER / MACHINEGUN)</div>
       <div id="loadout-primary-grid" class="weapon-select-grid" style="grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); margin-bottom: 14px;"></div>
 
-      <div class="field-label">SLOT [2] — VŨ KHÍ PHỤ (SECONDARY SIDEARM) & SLOT [3] — DAO CẬN CHIẾN</div>
+      <div class="field-label">SLOT [2] — VŨ KHÍ PHỤ (SECONDARY SIDEARM) &amp; SLOT [3] — DAO CẬN CHIẾN</div>
       <div id="loadout-secondary-grid" class="weapon-select-grid" style="grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); margin-bottom: 16px;"></div>
 
       <div class="pause-actions">
         <button id="btn-save-loadout" type="button" class="btn btn-primary btn-large">
-          ✅ XÁC NHẬN LOADOUT & TIẾP TỤC CHIẾN ĐẤU [B]
+          ✅ XÁC NHẬN LOADOUT &amp; TIẾP TỤC CHIẾN ĐẤU [B]
         </button>
       </div>
     </div>
@@ -364,7 +458,7 @@
   <!-- ======================== PAUSE / INVITE MODAL (ESC) ======================== -->
   <div id="pause-modal" class="modal-backdrop hidden">
     <div class="pause-card">
-      <h2 class="pause-title">TẠM DỪNG / CÀI ĐẶT PHÒNG</h2>
+      <h2 class="pause-title">TẠM DỪNG // CÀI ĐẶT PHÒNG</h2>
       <p class="pause-subtitle">Gửi đường link bên dưới cho bạn bè để họ vào bắn chung ngay lập tức:</p>
 
       <div class="invite-share-box">
@@ -400,7 +494,7 @@
         </div>
 
         <div class="setting-item">
-          <label for="sound-checkbox">Âm thanh súng & hiệu ứng 3D</label>
+          <label for="sound-checkbox">Âm thanh súng &amp; hiệu ứng 3D</label>
           <input type="checkbox" id="sound-checkbox" checked />
         </div>
       </div>

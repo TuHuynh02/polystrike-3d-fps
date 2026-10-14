@@ -85,12 +85,16 @@ io.on('connection', (socket) => {
           loadout: player.loadout,
           hp: player.hp,
           ammo: player.ammo,
+          reserveAmmo: player.reserveAmmo,
+          ammoByWeapon: player.ammoByWeapon,
+          reserveAmmoByWeapon: player.reserveAmmoByWeapon,
           invulnerable: true,
           invulnerableUntil: player.invulnerableUntil,
           spawnProtectionMs: MATCH_CONFIG.SPAWN_PROTECTION_MS
         },
         players: roomManager.serializePlayers(room),
-        pickups: room.pickups
+        pickups: room.pickups,
+        droppedWeapons: room.droppedWeapons || []
       });
 
       socket.to(room.code).emit('playerJoined', {
@@ -131,6 +135,15 @@ io.on('connection', (socket) => {
     roomManager.handleReload(room, player, payload?.weapon);
   });
 
+  socket.on('pickupWeapon', (payload = {}) => {
+    if (!currentRoomCode) return;
+    const room = roomManager.rooms.get(currentRoomCode);
+    if (!room) return;
+    const player = room.players.get(socket.id);
+    if (!player) return;
+    roomManager.handlePickupWeapon(room, player, payload);
+  });
+
   socket.on('updateLoadout', (payload = {}) => {
     if (!currentRoomCode) return;
     const room = roomManager.rooms.get(currentRoomCode);
@@ -143,6 +156,9 @@ io.on('connection', (socket) => {
         loadout,
         weapon: player.weapon,
         ammo: player.ammo,
+        reserveAmmo: player.reserveAmmo,
+        ammoByWeapon: player.ammoByWeapon,
+        reserveAmmoByWeapon: player.reserveAmmoByWeapon,
         alive: player.alive
       });
     }

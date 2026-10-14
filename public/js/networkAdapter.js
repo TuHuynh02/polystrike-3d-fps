@@ -149,12 +149,16 @@ class PeerRoomSocketAdapter {
         loadout: player.loadout,
         hp: player.hp,
         ammo: player.ammo,
+        reserveAmmo: player.reserveAmmo,
+        ammoByWeapon: player.ammoByWeapon,
+        reserveAmmoByWeapon: player.reserveAmmoByWeapon,
         invulnerable: true,
         invulnerableUntil: player.invulnerableUntil,
         spawnProtectionMs: MATCH_CONFIG.SPAWN_PROTECTION_MS
       },
       players: this.roomManager.serializePlayers(room),
-      pickups: room.pickups
+      pickups: room.pickups,
+      droppedWeapons: room.droppedWeapons || []
     });
   }
 
@@ -219,12 +223,16 @@ class PeerRoomSocketAdapter {
               loadout: player.loadout,
               hp: player.hp,
               ammo: player.ammo,
+              reserveAmmo: player.reserveAmmo,
+              ammoByWeapon: player.ammoByWeapon,
+              reserveAmmoByWeapon: player.reserveAmmoByWeapon,
               invulnerable: true,
               invulnerableUntil: player.invulnerableUntil,
               spawnProtectionMs: MATCH_CONFIG.SPAWN_PROTECTION_MS
             },
             players: this.roomManager.serializePlayers(room),
-            pickups: room.pickups
+            pickups: room.pickups,
+            droppedWeapons: room.droppedWeapons || []
           }
         });
 
@@ -245,6 +253,8 @@ class PeerRoomSocketAdapter {
         this.roomManager.handleShoot(room, player, payload);
       } else if (event === 'reload') {
         this.roomManager.handleReload(room, player, payload?.weapon);
+      } else if (event === 'pickupWeapon') {
+        this.roomManager.handlePickupWeapon(room, player, payload);
       } else if (event === 'updateLoadout') {
         const loadout = this.roomManager.handleUpdateLoadout(room, player, payload);
         if (loadout && conn.open) {
@@ -255,6 +265,9 @@ class PeerRoomSocketAdapter {
               loadout,
               weapon: player.weapon,
               ammo: player.ammo,
+              reserveAmmo: player.reserveAmmo,
+              ammoByWeapon: player.ammoByWeapon,
+              reserveAmmoByWeapon: player.reserveAmmoByWeapon,
               alive: player.alive
             }
           });
@@ -445,6 +458,8 @@ class PeerRoomSocketAdapter {
       this.roomManager.handleShoot(room, player, payload);
     } else if (event === 'reload' && player) {
       this.roomManager.handleReload(room, player, payload?.weapon);
+    } else if (event === 'pickupWeapon' && player) {
+      this.roomManager.handlePickupWeapon(room, player, payload);
     } else if (event === 'updateLoadout' && player) {
       const loadout = this.roomManager.handleUpdateLoadout(room, player, payload);
       if (loadout) {
@@ -452,6 +467,9 @@ class PeerRoomSocketAdapter {
           loadout,
           weapon: player.weapon,
           ammo: player.ammo,
+          reserveAmmo: player.reserveAmmo,
+          ammoByWeapon: player.ammoByWeapon,
+          reserveAmmoByWeapon: player.reserveAmmoByWeapon,
           alive: player.alive
         });
       }
