@@ -832,6 +832,11 @@ socket.on('loadoutUpdated', (data) => {
   }
 });
 
+socket.on('playerJoined', (data) => {
+  if (!game.inMatch || !data?.name) return;
+  showToast(`👤 Chiến binh ${ data.name } đã tham gia phòng #${ activeRoomCode }!`);
+});
+
 socket.on('mapChanged', (data) => {
   if (!game.inMatch) return;
   const newMapId = data.mapId || DEFAULT_MAP_ID;

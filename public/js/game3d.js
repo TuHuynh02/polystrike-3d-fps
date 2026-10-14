@@ -26,13 +26,16 @@ export class Game3D {
     this.scene.add(this.camera);
 
     this.renderer = new THREE.WebGLRenderer({
-      antialias: true,
+      antialias: window.devicePixelRatio <= 1.5,
       powerPreference: 'high-performance'
     });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.maxPixelRatio = Math.min(window.devicePixelRatio || 1, 1.35);
+    this.currentPixelRatio = this.maxPixelRatio;
+    this.renderer.setPixelRatio(this.currentPixelRatio);
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.shadowMap.autoUpdate = false;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.22;
     this.container.appendChild(this.renderer.domElement);
@@ -194,16 +197,16 @@ export class Game3D {
   }
 
   setupLights() {
-    this.hemiLight = new THREE.HemisphereLight(0x93c5fd, 0x0f172a, 0.98);
+    this.hemiLight = new THREE.HemisphereLight(0x93c5fd, 0x0f172a, 1.08);
     this.hemiLight.position.set(0, 75, 0);
     this.scene.add(this.hemiLight);
 
-    // Primary warm directional sunlight with crisp shadows covering large 128x128m maps
-    this.dirLight = new THREE.DirectionalLight(0xfff7ed, 1.48);
+    // Primary warm directional sunlight with static baked shadow map covering the arena
+    this.dirLight = new THREE.DirectionalLight(0xfff7ed, 1.55);
     this.dirLight.position.set(56, 86, 46);
     this.dirLight.castShadow = true;
-    this.dirLight.shadow.mapSize.width = 2048;
-    this.dirLight.shadow.mapSize.height = 2048;
+    this.dirLight.shadow.mapSize.width = 1024;
+    this.dirLight.shadow.mapSize.height = 1024;
     this.dirLight.shadow.camera.near = 5;
     this.dirLight.shadow.camera.far = 230;
     const d = 68;
@@ -211,33 +214,18 @@ export class Game3D {
     this.dirLight.shadow.camera.right = d;
     this.dirLight.shadow.camera.top = d;
     this.dirLight.shadow.camera.bottom = -d;
-    this.dirLight.shadow.bias = -0.00035;
+    this.dirLight.shadow.bias = -0.0005;
     this.scene.add(this.dirLight);
 
     // Cool rim light from opposite angle for 3D depth & metallic specular highlights
-    this.rimLight = new THREE.DirectionalLight(0x38bdf8, 0.62);
+    this.rimLight = new THREE.DirectionalLight(0x38bdf8, 0.72);
     this.rimLight.position.set(-58, 52, -52);
     this.scene.add(this.rimLight);
 
     // Central Citadel energy core point light
-    this.citadelLight = new THREE.PointLight(0x38bdf8, 3.2, 42, 1.4);
+    this.citadelLight = new THREE.PointLight(0x38bdf8, 2.8, 42, 1.4);
     this.citadelLight.position.set(0, 8.5, 0);
     this.scene.add(this.citadelLight);
-
-    // 4 Quadrant atmospheric point lights for richer 3D metallic reflections across the arena
-    this.accentPointLights = [];
-    const quadOffsets = [
-      [-34, 6.5, -34],
-      [34, 6.5, -34],
-      [-34, 6.5, 34],
-      [34, 6.5, 34]
-    ];
-    for (let i = 0; i < quadOffsets.length; i++) {
-      const pl = new THREE.PointLight(0x38bdf8, 1.35, 34, 1.6);
-      pl.position.set(quadOffsets[i][0], quadOffsets[i][1], quadOffsets[i][2]);
-      this.scene.add(pl);
-      this.accentPointLights.push(pl);
-    }
   }
 
   disposeMapResources() {
@@ -249,7 +237,11 @@ export class Game3D {
 
     for (const m of this.arenaDecorMeshes) {
       this.scene.remove(m);
-      m.geometry?.dispose();
+      if (m.isInstancedMesh) {
+        m.dispose?.();
+      } else {
+        m.geometry?.dispose();
+      }
     }
     this.arenaDecorMeshes.length = 0;
     this.citadelRings.length = 0;
@@ -310,18 +302,12 @@ export class Game3D {
     this.scene.fog = new THREE.FogExp2(theme.fogColor || 0x091224, (theme.fogDensity || 0.005) * 0.82);
 
     const accentHex = theme.accentHex || 0x38bdf8;
-    const secondaryHex = theme.secondaryHex || 0xf59e0b;
 
     if (this.citadelLight) {
       this.citadelLight.color.setHex(accentHex);
     }
     if (this.rimLight) {
       this.rimLight.color.setHex(accentHex);
-    }
-    if (this.accentPointLights) {
-      for (let i = 0; i < this.accentPointLights.length; i++) {
-        this.accentPointLights[i].color.setHex(i % 2 === 0 ? accentHex : secondaryHex);
-      }
     }
     if (this.dirLight) {
       const d = this.arenaHalfSize + 6;
@@ -334,6 +320,7 @@ export class Game3D {
 
     this.buildSkyAndAtmosphere(theme, this.arenaHalfSize);
     this.buildArena(mapCfg);
+    this.renderer.shadowMap.needsUpdate = true;
   }
 
   buildSkyAndAtmosphere(theme = {}, halfSize = 60) {
@@ -904,28 +891,41 @@ export class Game3D {
     this.arenaGeometries.add(unitCylGeo);
     this.arenaGeometries.add(unitOctGeo);
 
-    const addDecorBox = (x, y, z, w, h, d, mat, castShadow = false) => {
-      const m = new THREE.Mesh(unitBoxGeo, mat);
-      m.position.set(x, y, z);
-      m.scale.set(w, h, d);
-      if (castShadow) {
-        m.castShadow = true;
-        m.receiveShadow = true;
+    // Batch all static decorative boxes & cylinders into THREE.InstancedMesh by (geometry, material)
+    // to collapse ~1,500 separate draw calls into ~8 instanced draw calls for locked 60 FPS on any GPU
+    const decorBatches = new Map();
+    const registerInstancedItem = (geo, mat, x, y, z, sx, sy, sz, rx = 0, ry = 0, rz = 0, castShadow = false) => {
+      let groupMap = decorBatches.get(geo);
+      if (!groupMap) {
+        groupMap = new Map();
+        decorBatches.set(geo, groupMap);
       }
-      this.scene.add(m);
-      this.arenaDecorMeshes.push(m);
-      return m;
+      let batch = groupMap.get(mat);
+      if (!batch) {
+        batch = { items: [], castShadow: false };
+        groupMap.set(mat, batch);
+      }
+      if (castShadow) batch.castShadow = true;
+      const item = {
+        x,
+        y,
+        z,
+        sx,
+        sy,
+        sz,
+        rotation: { x: rx, y: ry, z: rz }
+      };
+      batch.items.push(item);
+      return item;
     };
 
+    const addDecorBox = (x, y, z, w, h, d, mat, castShadow = false) =>
+      registerInstancedItem(unitBoxGeo, mat, x, y, z, w, h, d, 0, 0, 0, castShadow);
+
     const addDecorCyl = (x, y, z, radius, len, mat, axis = 'y') => {
-      const m = new THREE.Mesh(unitCylGeo, mat);
-      m.position.set(x, y, z);
-      m.scale.set(radius * 2, len, radius * 2);
-      if (axis === 'x') m.rotation.z = Math.PI / 2;
-      else if (axis === 'z') m.rotation.x = Math.PI / 2;
-      this.scene.add(m);
-      this.arenaDecorMeshes.push(m);
-      return m;
+      const rx = axis === 'z' ? Math.PI / 2 : 0;
+      const rz = axis === 'x' ? Math.PI / 2 : 0;
+      return registerInstancedItem(unitCylGeo, mat, x, y, z, radius * 2, len, radius * 2, rx, 0, rz, false);
     };
 
     // Helper to build a detailed 3D corrugated shipping container assembly
@@ -1017,6 +1017,8 @@ export class Game3D {
       mesh.position.set(obs.x, obs.y, obs.z);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
+      mesh.updateMatrix();
+      mesh.matrixAutoUpdate = false;
       this.scene.add(mesh);
       this.worldMeshes.push(mesh);
 
@@ -1207,6 +1209,32 @@ export class Game3D {
       trimSecondaryMat
     );
 
+    // Materialize all collected decorative pieces into GPU InstancedMeshes (~8 draw calls instead of ~1,500)
+    const dummy = new THREE.Object3D();
+    for (const [geo, groupMap] of decorBatches.entries()) {
+      for (const [mat, batch] of groupMap.entries()) {
+        const count = batch.items.length;
+        if (count === 0) continue;
+        const instMesh = new THREE.InstancedMesh(geo, mat, count);
+        instMesh.castShadow = batch.castShadow;
+        instMesh.receiveShadow = batch.castShadow;
+        for (let i = 0; i < count; i++) {
+          const it = batch.items[i];
+          dummy.position.set(it.x, it.y, it.z);
+          dummy.rotation.set(it.rotation.x, it.rotation.y, it.rotation.z);
+          dummy.scale.set(it.sx, it.sy, it.sz);
+          dummy.updateMatrix();
+          instMesh.setMatrixAt(i, dummy.matrix);
+        }
+        instMesh.instanceMatrix.needsUpdate = true;
+        instMesh.frustumCulled = false;
+        instMesh.updateMatrix();
+        instMesh.matrixAutoUpdate = false;
+        this.scene.add(instMesh);
+        this.arenaDecorMeshes.push(instMesh);
+      }
+    }
+
     const ringGeo = new THREE.RingGeometry(7.2, 7.65, 4);
     this.arenaGeometries.add(ringGeo);
     const ringMat = new THREE.MeshBasicMaterial({
@@ -1218,6 +1246,8 @@ export class Game3D {
     ringMesh.rotation.x = -Math.PI / 2;
     ringMesh.rotation.z = Math.PI / 4;
     ringMesh.position.set(0, 2.43, 0);
+    ringMesh.updateMatrix();
+    ringMesh.matrixAutoUpdate = false;
     this.scene.add(ringMesh);
     this.arenaDecorMeshes.push(ringMesh);
 
@@ -2397,6 +2427,7 @@ export class Game3D {
 
   syncPlayersState(playersArray = []) {
     const seenIds = new Set();
+    let hitboxesDirty = false;
 
     for (const p of playersArray) {
       if (p.id === this.localId) {
@@ -2409,15 +2440,29 @@ export class Game3D {
       if (!rp) {
         rp = this.createRemotePlayerMesh(p);
         rp.group.position.set(p.x, p.y, p.z);
+        rp.group.rotation.y = p.yaw || 0;
         this.remotePlayers.set(p.id, rp);
+        hitboxesDirty = true;
+      }
+
+      const nowAlive = Boolean(p.alive);
+      if (rp.alive !== nowAlive) {
+        hitboxesDirty = true;
+        if (nowAlive) {
+          // Snap immediately to spawn point upon respawn
+          rp.group.position.set(p.x, p.y, p.z);
+          rp.group.rotation.y = p.yaw || 0;
+        }
+      } else if (Math.hypot(p.x - rp.group.position.x, p.z - rp.group.position.z) > 15) {
+        rp.group.position.set(p.x, p.y, p.z);
       }
 
       rp.targetPos.set(p.x, p.y, p.z);
       rp.targetYaw = p.yaw || 0;
       rp.targetPitch = p.pitch || 0;
       rp.crouching = Boolean(p.crouching);
-      rp.alive = Boolean(p.alive);
-      rp.group.visible = rp.alive;
+      rp.alive = nowAlive;
+      rp.group.visible = nowAlive;
 
       // Update held weapon model if remote player changed weapons
       if (p.weapon && WEAPONS[p.weapon] && p.weapon !== rp.currentWeapon) {
@@ -2441,10 +2486,13 @@ export class Game3D {
       if (!seenIds.has(id)) {
         this.disposeRemotePlayer(rp);
         this.remotePlayers.delete(id);
+        hitboxesDirty = true;
       }
     }
 
-    this.rebuildHitboxList();
+    if (hitboxesDirty) {
+      this.rebuildHitboxList();
+    }
   }
 
   spawnLocalPlayer(data) {
@@ -3444,13 +3492,21 @@ export class Game3D {
     const dt = Math.min(0.1, (now - this.lastFrameTime) / 1000);
     this.lastFrameTime = now;
 
-    // FPS Counter
+    // FPS Counter & Adaptive Resolution Scaling for low-end laptops
     this.frameCount++;
     if (now - this.lastFpsUpdate >= 500) {
       this.currentFps = Math.round((this.frameCount * 1000) / (now - this.lastFpsUpdate));
       this.frameCount = 0;
       this.lastFpsUpdate = now;
       this.callbacks.onFpsUpdate?.(this.currentFps);
+
+      if (this.inMatch && this.currentFps < 46 && this.currentPixelRatio > 0.9) {
+        this.currentPixelRatio = Math.max(0.85, Number((this.currentPixelRatio - 0.2).toFixed(2)));
+        this.renderer.setPixelRatio(this.currentPixelRatio);
+      } else if (this.inMatch && this.currentFps >= 58 && this.currentPixelRatio < this.maxPixelRatio) {
+        this.currentPixelRatio = Math.min(this.maxPixelRatio, Number((this.currentPixelRatio + 0.1).toFixed(2)));
+        this.renderer.setPixelRatio(this.currentPixelRatio);
+      }
     }
 
     if (!this.inMatch) {
@@ -3476,8 +3532,8 @@ export class Game3D {
       this.ambientParticles.rotation.y = now * 0.00008;
     }
 
-    // Interpolate Remote Players & Bots smoothly
-    const lerpFactor = Math.min(1, dt * 15);
+    // Interpolate Remote Players & Bots smoothly with shortest-angle yaw interpolation
+    const lerpFactor = Math.min(1, dt * 18);
     for (const rp of this.remotePlayers.values()) {
       if (!rp.alive) continue;
 
@@ -3486,7 +3542,12 @@ export class Game3D {
       const moveSpeed = Math.hypot(dx, dz);
 
       rp.group.position.lerp(rp.targetPos, lerpFactor);
-      rp.group.rotation.y = rp.targetYaw;
+
+      let yawDiff = rp.targetYaw - rp.group.rotation.y;
+      while (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
+      while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
+      rp.group.rotation.y += yawDiff * lerpFactor;
+
       rp.armPivot.rotation.x += (rp.targetPitch - rp.armPivot.rotation.x) * 0.35;
       rp.group.scale.y = rp.crouching ? 0.74 : 1.0;
 
