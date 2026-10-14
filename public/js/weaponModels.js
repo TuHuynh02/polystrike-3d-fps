@@ -161,91 +161,108 @@ function buildDetailedOptic(type, yPos, zPos, darkMetal, gunMetal, accentMat, gl
   const opticGroup = new THREE.Group();
   opticGroup.position.set(0, yPos, zPos);
 
+  const hoodMetal = darkMetal.clone();
+  hoodMetal.side = THREE.DoubleSide;
+  const reticleGroup = new THREE.Group();
+  reticleGroup.position.set(0, 0.038, type === 'reflex' ? -0.004 : 0.006);
+
   if (type === 'reflex') {
-    // Kobra / Aimpoint Open Reflex Red-Dot Housing with Riser Clamp & Coated Lens
-    const riserMount = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.016, 0.088), darkMetal);
-    const clampBolt = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.007, 0.052, 8), gunMetal);
+    // Kobra / Aimpoint Open Reflex Red-Dot Housing with Riser Clamp & Unobstructed Coated Lens
+    const riserMount = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.012, 0.086), darkMetal);
+    riserMount.position.set(0, 0.002, 0);
+    const clampBolt = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.052, 8), gunMetal);
     clampBolt.rotation.z = Math.PI / 2;
     clampBolt.position.set(0, 0.002, 0.015);
 
-    const emitterDeck = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.012, 0.094), gunMetal);
-    emitterDeck.position.set(0, 0.012, 0);
+    const emitterDeck = new THREE.Mesh(new THREE.BoxGeometry(0.050, 0.008, 0.092), gunMetal);
+    emitterDeck.position.set(0, 0.011, 0);
 
-    const windageDial = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.014, 10), darkMetal);
+    const windageDial = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.012, 10), darkMetal);
     windageDial.rotation.z = Math.PI / 2;
-    windageDial.position.set(0.026, 0.012, -0.018);
+    windageDial.position.set(0.027, 0.011, -0.018);
+
+    // Side protective pillars & upward-curving top reflex arch (rotation.x = -Math.PI / 2 curves over +Y)
+    const pillarL = new THREE.Mesh(new THREE.BoxGeometry(0.0055, 0.026, 0.032), hoodMetal);
+    pillarL.position.set(-0.0265, 0.027, -0.006);
+    const pillarR = new THREE.Mesh(new THREE.BoxGeometry(0.0055, 0.026, 0.032), hoodMetal);
+    pillarR.position.set(0.0265, 0.027, -0.006);
 
     const archFrame = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.027, 0.027, 0.032, 14, 1, true, -Math.PI * 0.52, Math.PI * 1.04),
-      darkMetal
+      new THREE.CylinderGeometry(0.028, 0.028, 0.034, 18, 1, true, -Math.PI * 0.52, Math.PI * 1.04),
+      hoodMetal
     );
-    archFrame.rotation.x = Math.PI / 2;
+    archFrame.rotation.x = -Math.PI / 2;
     archFrame.scale.set(1.0, 1.0, 0.88);
-    archFrame.position.set(0, 0.035, -0.022);
+    archFrame.position.set(0, 0.038, -0.006);
 
-    const reflexLens = new THREE.Mesh(new THREE.CircleGeometry(0.023, 14), glassMat);
-    reflexLens.position.set(0, 0.034, -0.022);
-    reflexLens.rotation.x = -0.08;
+    const reflexLens = new THREE.Mesh(new THREE.CircleGeometry(0.025, 20), glassMat);
+    reflexLens.position.set(0, 0.038, -0.006);
+    reflexLens.userData.isOpticLens = true;
 
-    const redDot = new THREE.Mesh(new THREE.SphereGeometry(0.0038, 8, 8), reticleMat);
-    redDot.position.set(0, 0.034, -0.018);
+    const redDot = new THREE.Mesh(new THREE.CircleGeometry(0.0024, 16), reticleMat);
+    redDot.userData.isOpticReticle = true;
+    reticleGroup.add(redDot);
 
-    opticGroup.add(riserMount, clampBolt, emitterDeck, windageDial, archFrame, reflexLens, redDot);
-  } else if (type === 'holo') {
-    // EOTech EXPS3 Holographic Weapon Sight
-    const baseMount = new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.018, 0.105), gunMetal);
-    const batteryCyl = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.050, 10), darkMetal);
+    opticGroup.add(riserMount, clampBolt, emitterDeck, windageDial, pillarL, pillarR, archFrame, reflexLens, reticleGroup);
+    opticGroup.userData = {
+      opticType: 'reddot',
+      centerOffset: new THREE.Vector3(0, 0.038, -0.006),
+      reticleGroup,
+      lensMesh: reflexLens
+    };
+  } else {
+    // EOTech EXPS3 Holographic Weapon Sight (also used when 'holo' or 'acog' is requested for 1.25x Holo sightline)
+    const baseMount = new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.012, 0.102), gunMetal);
+    baseMount.position.set(0, 0.002, 0);
+    const batteryCyl = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.052, 10), darkMetal);
     batteryCyl.rotation.z = Math.PI / 2;
-    batteryCyl.position.set(0, 0.012, -0.032);
+    batteryCyl.position.set(0, 0.008, -0.035);
 
-    // Outer protective aluminum hood arch
-    const hoodLeft = new THREE.Mesh(new THREE.BoxGeometry(0.009, 0.052, 0.068), darkMetal);
-    hoodLeft.position.set(-0.026, 0.034, 0.005);
-    const hoodRight = new THREE.Mesh(new THREE.BoxGeometry(0.009, 0.052, 0.068), darkMetal);
-    hoodRight.position.set(0.026, 0.034, 0.005);
-    const hoodTop = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.030, 0.030, 0.068, 12, 1, false, -Math.PI * 0.5, Math.PI),
-      darkMetal
+    const hoodBase = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.005, 0.066), darkMetal);
+    hoodBase.position.set(0, 0.012, 0.004);
+
+    // Outer protective aluminum hood frame (wide, unobstructed rectangular sight window centered at y = 0.038)
+    const hoodLeft = new THREE.Mesh(new THREE.BoxGeometry(0.0065, 0.048, 0.066), hoodMetal);
+    hoodLeft.position.set(-0.0275, 0.038, 0.004);
+    const hoodRight = new THREE.Mesh(new THREE.BoxGeometry(0.0065, 0.048, 0.066), hoodMetal);
+    hoodRight.position.set(0.0275, 0.038, 0.004);
+    const hoodTopBar = new THREE.Mesh(new THREE.BoxGeometry(0.060, 0.0055, 0.066), hoodMetal);
+    hoodTopBar.position.set(0, 0.062, 0.004);
+
+    const hoodTopArch = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.029, 0.029, 0.066, 16, 1, true, -Math.PI * 0.5, Math.PI),
+      hoodMetal
     );
-    hoodTop.rotation.x = Math.PI / 2;
-    hoodTop.scale.set(1.0, 1.0, 0.42);
-    hoodTop.position.set(0, 0.056, 0.005);
+    hoodTopArch.rotation.x = -Math.PI / 2;
+    hoodTopArch.scale.set(1.0, 1.0, 0.32);
+    hoodTopArch.position.set(0, 0.056, 0.004);
 
-    const lens = new THREE.Mesh(new THREE.PlaneGeometry(0.044, 0.038), glassMat);
-    lens.position.set(0, 0.035, 0.005);
-    const holoRing = new THREE.Mesh(new THREE.RingGeometry(0.009, 0.012, 16), reticleMat);
-    holoRing.position.set(0, 0.035, 0.002);
-    const holoDot = new THREE.Mesh(new THREE.SphereGeometry(0.0035, 8, 8), reticleMat);
-    holoDot.position.set(0, 0.035, 0.002);
+    const lens = new THREE.Mesh(new THREE.PlaneGeometry(0.048, 0.042), glassMat);
+    lens.position.set(0, 0.038, 0.004);
+    lens.userData.isOpticLens = true;
 
-    opticGroup.add(baseMount, batteryCyl, hoodLeft, hoodRight, hoodTop, lens, holoRing, holoDot);
-  } else if (type === 'acog') {
-    // Trijicon ACOG 4x32 Combat Optical Gunsight with Top Fiber-Optic Tube
-    const mountBase = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.022, 0.11), darkMetal);
-    const mainPrism = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.085, 12), gunMetal);
-    mainPrism.rotation.x = Math.PI / 2;
-    mainPrism.position.set(0, 0.032, 0);
+    const holoRing = new THREE.Mesh(new THREE.RingGeometry(0.0092, 0.0108, 28), reticleMat);
+    const holoDot = new THREE.Mesh(new THREE.CircleGeometry(0.0018, 12), reticleMat);
+    const tickTop = new THREE.Mesh(new THREE.BoxGeometry(0.0014, 0.0042, 0.001), reticleMat);
+    tickTop.position.set(0, 0.0122, 0);
+    const tickBot = new THREE.Mesh(new THREE.BoxGeometry(0.0014, 0.0042, 0.001), reticleMat);
+    tickBot.position.set(0, -0.0122, 0);
+    const tickLeft = new THREE.Mesh(new THREE.BoxGeometry(0.0042, 0.0014, 0.001), reticleMat);
+    tickLeft.position.set(-0.0122, 0, 0);
+    const tickRight = new THREE.Mesh(new THREE.BoxGeometry(0.0042, 0.0014, 0.001), reticleMat);
+    tickRight.position.set(0.0122, 0, 0);
+    for (const part of [holoRing, holoDot, tickTop, tickBot, tickLeft, tickRight]) {
+      part.userData.isOpticReticle = true;
+    }
+    reticleGroup.add(holoRing, holoDot, tickTop, tickBot, tickLeft, tickRight);
 
-    const objBell = new THREE.Mesh(new THREE.CylinderGeometry(0.030, 0.022, 0.058, 14), darkMetal);
-    objBell.rotation.x = Math.PI / 2;
-    objBell.position.set(0, 0.032, -0.068);
-
-    const ocularBell = new THREE.Mesh(new THREE.CylinderGeometry(0.021, 0.026, 0.052, 14), darkMetal);
-    ocularBell.rotation.x = Math.PI / 2;
-    ocularBell.position.set(0, 0.032, 0.065);
-
-    const fiberTube = new THREE.Mesh(new THREE.CapsuleGeometry(0.0055, 0.072, 6, 8), reticleMat);
-    fiberTube.rotation.x = Math.PI / 2;
-    fiberTube.position.set(0, 0.058, -0.015);
-
-    const turretTop = new THREE.Mesh(new THREE.CylinderGeometry(0.010, 0.010, 0.018, 10), darkMetal);
-    turretTop.position.set(0, 0.056, 0.022);
-    const lensRear = new THREE.Mesh(new THREE.CircleGeometry(0.022, 14), glassMat);
-    lensRear.position.set(0, 0.032, 0.092);
-    const chevronReticle = new THREE.Mesh(new THREE.ConeGeometry(0.006, 0.010, 3), reticleMat);
-    chevronReticle.position.set(0, 0.032, 0.088);
-
-    opticGroup.add(mountBase, mainPrism, objBell, ocularBell, fiberTube, turretTop, lensRear, chevronReticle);
+    opticGroup.add(baseMount, batteryCyl, hoodBase, hoodLeft, hoodRight, hoodTopBar, hoodTopArch, lens, reticleGroup);
+    opticGroup.userData = {
+      opticType: 'holo',
+      centerOffset: new THREE.Vector3(0, 0.038, 0.004),
+      reticleGroup,
+      lensMesh: lens
+    };
   }
   return opticGroup;
 }
@@ -301,17 +318,21 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
     roughness: 0.34,
     metalness: 0.68
   });
-  const reticleMat = new THREE.MeshBasicMaterial({ color: 0x22c55e });
-  const redReticleMat = new THREE.MeshBasicMaterial({ color: 0xef4444 });
+  const reticleMat = new THREE.MeshBasicMaterial({ color: 0x22c55e, side: THREE.DoubleSide });
+  const redReticleMat = new THREE.MeshBasicMaterial({ color: 0xef4444, side: THREE.DoubleSide });
   const glassMat = new THREE.MeshBasicMaterial({
     color: 0x38bdf8,
     transparent: true,
-    opacity: 0.32,
+    opacity: 0.14,
+    depthWrite: false,
     side: THREE.DoubleSide
   });
 
   let magMesh = null;
   let boltMesh = null;
+  let activeOptic = null;
+  let opticCenterY = 0.106;
+  let opticCenterZ = 0.02;
   let muzzleZ = -0.78;
 
   if (weaponId === 'rifle') {
@@ -361,10 +382,10 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
     cleaningRod.rotation.x = Math.PI / 2;
     cleaningRod.position.set(0, -0.015, -0.60);
 
-    const frontSightTower = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.072, 0.038), darkMetal);
-    frontSightTower.position.set(0, 0.034, -0.73);
-    const sightHoodRing = new THREE.Mesh(new THREE.TorusGeometry(0.018, 0.0035, 8, 14, Math.PI), darkMetal);
-    sightHoodRing.position.set(0, 0.062, -0.73);
+    const frontSightTower = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.064, 0.038), darkMetal);
+    frontSightTower.position.set(0, 0.028, -0.73);
+    const sightHoodRing = new THREE.Mesh(new THREE.TorusGeometry(0.016, 0.0032, 8, 14, Math.PI), darkMetal);
+    sightHoodRing.position.set(0, 0.054, -0.73);
 
     // AK-103 Multi-Port Muzzle Brake + Hollow Dark Bore
     const muzzleBrake = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.021, 0.085, 12), gunMetal);
@@ -408,6 +429,9 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
     // Dovetail Side-Mount Picatinny Rail + Kobra Red-Dot Reflex Sight
     const topRail = buildPicatinnyRail(0.18, 0.062, 0.02, gunMetal, 7);
     const kobraSight = buildDetailedOptic('reflex', 0.068, 0.02, darkMetal, gunMetal, accentMat, glassMat, redReticleMat);
+    activeOptic = kobraSight;
+    opticCenterY = 0.068 + 0.038;
+    opticCenterZ = 0.02;
 
     group.add(
       lowerReceiver,
@@ -464,12 +488,12 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
 
     const fullTopRail = buildPicatinnyRail(0.62, 0.068, -0.16, darkMetal, 18);
 
-    // Top-Mounted AN/PEQ-15 Tactical Laser Box near Front of Handguard
-    const peqBox = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.028, 0.095), fdePolymerMat);
-    peqBox.position.set(0, 0.088, -0.39);
-    const peqLens = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.014, 8), reticleMat);
+    // Side-Offset AN/PEQ-15 Tactical Laser Box near Front of Handguard (clear of Holo sightline)
+    const peqBox = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.022, 0.092), fdePolymerMat);
+    peqBox.position.set(0.024, 0.074, -0.39);
+    const peqLens = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.007, 0.014, 8), reticleMat);
     peqLens.rotation.x = Math.PI / 2;
-    peqLens.position.set(-0.016, 0.088, -0.44);
+    peqLens.position.set(0.028, 0.074, -0.44);
 
     // Angled Magpul AFG Foregrip under Handguard
     const afgGrip = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.026, 0.12, 8), polymerMat);
@@ -530,7 +554,10 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
     boltMesh.position.set(0, 0.028, -0.02);
     boltMesh.userData.baseZ = -0.02;
 
-    const holoSight = buildDetailedOptic('holo', 0.074, 0.02, darkMetal, fdeAnodizedMat, accentMat, glassMat, reticleMat);
+    const holoSight = buildDetailedOptic('holo', 0.074, 0.02, darkMetal, fdeAnodizedMat, accentMat, glassMat, redReticleMat);
+    activeOptic = holoSight;
+    opticCenterY = 0.074 + 0.038;
+    opticCenterZ = 0.02;
 
     group.add(
       upperReceiver,
@@ -562,6 +589,7 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
     monoUpper.position.set(0, 0.032, -0.12);
     const upperChamfer = new THREE.Mesh(new THREE.CylinderGeometry(0.044, 0.044, 0.64, 6), fdeAnodizedMat);
     upperChamfer.rotation.x = Math.PI / 2;
+    upperChamfer.scale.set(0.96, 1, 0.42);
     upperChamfer.position.set(0, 0.068, -0.12);
 
     const lowerPolymer = new THREE.Mesh(new THREE.BoxGeometry(0.078, 0.068, 0.34), polymerMat);
@@ -601,11 +629,11 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
     const stockBody = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.118, 0.26), fdePolymerMat);
     stockBody.position.set(0, 0.005, 0.35);
     const cheekRiser = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.039, 0.039, 0.22, 12, 1, false, -Math.PI * 0.5, Math.PI),
+      new THREE.CylinderGeometry(0.036, 0.036, 0.22, 12, 1, false, -Math.PI * 0.5, Math.PI),
       fdePolymerMat
     );
     cheekRiser.rotation.x = Math.PI / 2;
-    cheekRiser.position.set(0, 0.068, 0.34);
+    cheekRiser.position.set(0, 0.048, 0.34);
     const buttPad = new THREE.Mesh(new THREE.BoxGeometry(0.076, 0.142, 0.034), darkMetal);
     buttPad.position.set(0, -0.008, 0.49);
 
@@ -636,8 +664,11 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
     boltMesh.position.set(0, 0.038, -0.05);
     boltMesh.userData.baseZ = -0.05;
 
-    // Trijicon ACOG 4x32 Scope
-    const acogSight = buildDetailedOptic('acog', 0.098, -0.03, darkMetal, fdeAnodizedMat, accentMat, glassMat, redReticleMat);
+    // EOTech Holographic Combat Sight on Monolithic Top Rail
+    const acogSight = buildDetailedOptic('holo', 0.098, 0.01, darkMetal, fdeAnodizedMat, accentMat, glassMat, redReticleMat);
+    activeOptic = acogSight;
+    opticCenterY = 0.098 + 0.038;
+    opticCenterZ = 0.01;
 
     group.add(
       monoUpper,
@@ -713,7 +744,10 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
     boltMesh.position.set(0.012, 0.042, -0.10);
     boltMesh.userData.baseZ = -0.10;
 
-    const holoSight = buildDetailedOptic('holo', 0.084, -0.04, darkMetal, gunMetal, accentMat, glassMat, reticleMat);
+    const holoSight = buildDetailedOptic('holo', 0.086, -0.02, darkMetal, gunMetal, accentMat, glassMat, redReticleMat);
+    activeOptic = holoSight;
+    opticCenterY = 0.086 + 0.038;
+    opticCenterZ = -0.02;
 
     group.add(
       upperRailReceiver,
@@ -742,7 +776,7 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
       gunMetal
     );
     feedCover.rotation.x = Math.PI / 2;
-    feedCover.scale.set(1, 0.65, 1);
+    feedCover.scale.set(1, 1, 0.65);
     feedCover.position.set(0, 0.074, 0.01);
     const feedRail = buildPicatinnyRail(0.30, 0.110, 0.01, darkMetal, 9);
 
@@ -821,6 +855,11 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
     boltMesh.position.set(0.022, 0.036, -0.06);
     boltMesh.userData.baseZ = -0.06;
 
+    const lmgHoloSight = buildDetailedOptic('holo', 0.114, 0.01, darkMetal, gunMetal, accentMat, glassMat, redReticleMat);
+    activeOptic = lmgHoloSight;
+    opticCenterY = 0.114 + 0.038;
+    opticCenterZ = 0.01;
+
     group.add(
       receiverBox,
       feedCover,
@@ -839,7 +878,8 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
       stockBlock,
       gripAsm,
       magMesh,
-      boltMesh
+      boltMesh,
+      lmgHoloSight
     );
     muzzleZ = -0.98;
   } else if (weaponId === 'shotgun') {
@@ -852,7 +892,7 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
       darkMetal
     );
     receiverCrown.rotation.x = Math.PI / 2;
-    receiverCrown.scale.set(1, 0.65, 1);
+    receiverCrown.scale.set(1, 1, 0.65);
     receiverCrown.position.set(0, 0.048, -0.02);
 
     const topRail = buildPicatinnyRail(0.26, 0.078, -0.01, gunMetal, 8);
@@ -884,13 +924,16 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
     muzzleBore.rotation.x = Math.PI / 2;
     muzzleBore.position.set(0, 0.042, -0.852);
 
-    // Ghost-Ring Rear Sight + Winged Front Sight Post
-    const ghostRing = new THREE.Mesh(new THREE.TorusGeometry(0.016, 0.004, 8, 14), darkMetal);
-    ghostRing.position.set(0, 0.095, 0.14);
-    const frontSightPost = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.036, 0.024), darkMetal);
-    frontSightPost.position.set(0, 0.075, -0.76);
-    const frontFiberDot = new THREE.Mesh(new THREE.SphereGeometry(0.005, 8, 8), reticleMat);
-    frontFiberDot.position.set(0, 0.088, -0.75);
+    // Low-Profile Winged Front Sight Post + Top-Rail Red-Dot Reflex Sight
+    const frontSightPost = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.032, 0.024), darkMetal);
+    frontSightPost.position.set(0, 0.068, -0.76);
+    const frontFiberDot = new THREE.Mesh(new THREE.SphereGeometry(0.0045, 8, 8), reticleMat);
+    frontFiberDot.position.set(0, 0.080, -0.75);
+
+    const shotgunReflex = buildDetailedOptic('reflex', 0.082, 0.01, darkMetal, gunMetal, accentMat, glassMat, redReticleMat);
+    activeOptic = shotgunReflex;
+    opticCenterY = 0.082 + 0.038;
+    opticCenterZ = 0.01;
 
     // Sliding Cylindrical Ribbed Corncob Pump Forend (`boltMesh` so it pumps on each shot!)
     boltMesh = new THREE.Group();
@@ -948,9 +991,9 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
       barrelClamp,
       breacherChoke,
       muzzleBore,
-      ghostRing,
       frontSightPost,
       frontFiberDot,
+      shotgunReflex,
       boltMesh,
       magMesh,
       stockTube,
@@ -966,7 +1009,7 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
     chassisForend.position.set(0, -0.008, -0.08);
     const chassisBevel = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.042, 0.68, 8), oliveChassisMat);
     chassisBevel.rotation.x = Math.PI / 2;
-    chassisBevel.scale.set(0.98, 0.55, 1);
+    chassisBevel.scale.set(0.98, 1, 0.55);
     chassisBevel.position.set(0, -0.048, -0.08);
 
     const steelAction = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.036, 0.34, 12), darkMetal);
@@ -1066,6 +1109,9 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
     const parallaxTurret = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.028, 12), gunMetal);
     parallaxTurret.rotation.z = Math.PI / 2;
     parallaxTurret.position.set(-0.035, 0.135, -0.05);
+
+    opticCenterY = 0.135;
+    opticCenterZ = 0.04;
 
     // 5-Round Detachable Steel Box Magazine (`magMesh`)
     magMesh = new THREE.Group();
@@ -1225,7 +1271,7 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
       slideMat
     );
     slideCrown.rotation.x = Math.PI / 2;
-    slideCrown.scale.set(1, 0.45, 1);
+    slideCrown.scale.set(1, 1, 0.42);
     slideCrown.position.set(0, isDeagle ? 0.028 : 0.024, 0);
 
     const ejectionPort = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.026, 0.068), isDeagle ? darkMetal : chromeMetal);
@@ -1249,19 +1295,22 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
       boltMesh.add(selector);
     }
 
-    const rearSight = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.018, 0.020), darkMetal);
-    rearSight.position.set(0, isDeagle ? 0.048 : 0.042, slideLen * 0.42);
-    const rearDots = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.008, 0.022), reticleMat);
-    rearDots.position.set(0, isDeagle ? 0.050 : 0.044, slideLen * 0.42);
+    const frontSight = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.016, 0.020), darkMetal);
+    frontSight.position.set(0, isDeagle ? 0.044 : 0.038, -slideLen * 0.43);
+    const frontDot = new THREE.Mesh(new THREE.SphereGeometry(0.004, 8, 8), reticleMat);
+    frontDot.position.set(0, isDeagle ? 0.048 : 0.042, -slideLen * 0.42);
 
-    const frontSight = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.018, 0.022), darkMetal);
-    frontSight.position.set(0, isDeagle ? 0.048 : 0.042, -slideLen * 0.43);
-    const frontDot = new THREE.Mesh(new THREE.SphereGeometry(0.0045, 8, 8), reticleMat);
-    frontDot.position.set(0, isDeagle ? 0.051 : 0.045, -slideLen * 0.42);
-
-    boltMesh.add(slideLower, slideCrown, ejectionPort, rearSight, rearDots, frontSight, frontDot);
+    boltMesh.add(slideLower, slideCrown, ejectionPort, frontSight, frontDot);
     boltMesh.position.set(0, 0.024, -0.03);
     boltMesh.userData.baseZ = -0.03;
+
+    // Compact Micro Red-Dot Reflex Sight (RMR / DeltaPoint) mounted over Rear Slide (above slideCrown)
+    const pistolOpticBaseY = isDeagle ? 0.070 : 0.062;
+    const pistolRmr = buildDetailedOptic('reflex', pistolOpticBaseY, 0.04, darkMetal, gunMetal, accentMat, glassMat, redReticleMat);
+    pistolRmr.scale.setScalar(0.76);
+    activeOptic = pistolRmr;
+    opticCenterY = pistolOpticBaseY + 0.038 * 0.76;
+    opticCenterZ = 0.04;
 
     // Detachable Magazine (`magMesh` — Extended 33-Round Mag for Glock 18, Heavy Mag for Deagle/P9)
     magMesh = new THREE.Group();
@@ -1274,7 +1323,7 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
     magMesh.rotation.x = -0.28;
     magMesh.userData.basePos = magMesh.position.clone();
 
-    group.add(frame, gripAsm, lightBody, lightBezel, lightLens, barrel, muzzleBore, boltMesh, magMesh);
+    group.add(frame, gripAsm, lightBody, lightBezel, lightLens, barrel, muzzleBore, boltMesh, pistolRmr, magMesh);
     muzzleZ = isDeagle ? -0.28 : -0.26;
   }
 
@@ -1286,6 +1335,10 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
   group.userData.magMesh = magMesh;
   group.userData.boltMesh = boltMesh;
   group.userData.muzzleZ = muzzleZ;
+  group.userData.opticType = activeOptic?.userData?.opticType || WEAPONS[weaponId]?.opticType || 'none';
+  group.userData.opticCenter = { x: 0, y: opticCenterY, z: opticCenterZ };
+  group.userData.opticReticle = activeOptic?.userData?.reticleGroup || null;
+  group.userData.opticLens = activeOptic?.userData?.lensMesh || null;
 
   return group;
 }
@@ -1315,7 +1368,15 @@ export function buildFirstPersonViewmodel(groupOrWeaponId = 'rifle', weaponId, m
     resolvedMuzzleZ = resolvedMuzzleZ ?? group.muzzleZ ?? group.userData?.muzzleZ ?? -0.5;
   }
 
-  group.scale.setScalar(1.14);
+  const vmScale = 1.14;
+  group.scale.setScalar(vmScale);
+
+  const opticCenter = group.userData?.opticCenter || { x: 0, y: 0.106, z: 0.02 };
+  group.userData.adsPosition = {
+    x: 0.0,
+    y: -Number((opticCenter.y * vmScale).toFixed(4)),
+    z: -Number((0.22 + opticCenter.z * vmScale).toFixed(4))
+  };
 
   const bduSleeveMat = createProceduralMaterial('polymer', 0x262e36, {
     roughness: 0.76,
@@ -1501,15 +1562,19 @@ export function buildFirstPersonViewmodel(groupOrWeaponId = 'rifle', weaponId, m
     opacity: 0.94,
     side: THREE.DoubleSide
   });
-  const coreCone = new THREE.Mesh(new THREE.ConeGeometry(0.082, 0.28, 6), flashMat);
+  const coreCone = new THREE.Mesh(new THREE.ConeGeometry(0.065, 0.24, 6), flashMat);
   coreCone.rotation.x = -Math.PI / 2;
-  const crossPlaneA = new THREE.Mesh(new THREE.PlaneGeometry(0.30, 0.30), flashMat);
-  const crossPlaneB = new THREE.Mesh(new THREE.PlaneGeometry(0.30, 0.30), flashMat);
+  coreCone.userData.isMuzzleFlash = true;
+  const crossPlaneA = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.22), flashMat);
+  const crossPlaneB = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.22), flashMat);
   crossPlaneA.rotation.y = Math.PI / 4;
   crossPlaneB.rotation.y = -Math.PI / 4;
+  crossPlaneA.userData.isMuzzleFlash = true;
+  crossPlaneB.userData.isMuzzleFlash = true;
   flashGroup.add(coreCone, crossPlaneA, crossPlaneB);
-  flashGroup.position.set(0, 0.025, resolvedMuzzleZ);
+  flashGroup.position.set(0, 0.020, resolvedMuzzleZ);
   flashGroup.visible = false;
+  flashGroup.userData.isMuzzleFlash = true;
   group.add(flashGroup);
 
   group.userData.flashMesh = flashGroup;

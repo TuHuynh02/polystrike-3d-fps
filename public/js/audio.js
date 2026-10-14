@@ -9,12 +9,17 @@ export class SoundEffects {
     }
     this.ctx = null;
     this._ctxCtor = null;
+    this._autoCreatedCtx = null;
+    this._noiseBufferCtx = null;
     this.enabled = true;
     this.noiseBuffer = null;
     this._lastNonSpatialShot = null;
     this._lastHeadshotDinkGains = null;
     this._lastKillConfirm = null;
     this._lastNonSpatialExplosion = null;
+    this._pendingCleanups = [];
+    this._cleanupTickTimer = null;
+    this._cleanupTickDueAt = 0;
     SoundEffects._instance = this;
   }
 
@@ -24,23 +29,316 @@ export class SoundEffects {
       (typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext)) ||
       globalThis.AudioContext ||
       globalThis.webkitAudioContext;
-    if (!this.ctx || (this._ctxCtor && AudioCtx && this._ctxCtor !== AudioCtx)) {
+    if (
+      !this.ctx ||
+      (this.ctx === this._autoCreatedCtx && this._ctxCtor && AudioCtx && this._ctxCtor !== AudioCtx)
+    ) {
       if (!AudioCtx) return null;
       this._ctxCtor = AudioCtx;
       this.ctx = new AudioCtx();
+      this._autoCreatedCtx = this.ctx;
       this.createNoiseBuffer();
     }
-    if (!this.noiseBuffer && this.ctx) {
+    if ((!this.noiseBuffer || this._noiseBufferCtx !== this.ctx) && this.ctx) {
       this.createNoiseBuffer();
     }
     if (this.ctx.state === 'suspended' && typeof this.ctx.resume === 'function') {
       this.ctx.resume().catch(() => {});
     }
+    this.flushPendingCleanups();
     return this.ctx;
+  }
+
+  flushPendingCleanups(forceAll = false) {
+    if (!this._pendingCleanups || this._pendingCleanups.length === 0) {
+      if (this._cleanupTickTimer) {
+        clearTimeout(this._cleanupTickTimer);
+        this._cleanupTickTimer = null;
+        this._cleanupTickDueAt = 0;
+      }
+      return;
+    }
+    const nowPerf = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    for (let i = this._pendingCleanups.length - 1; i >= 0; i--) {
+      const entry = this._pendingCleanups[i];
+      if (!entry || entry.done || entry.chain?.disposed) {
+        this._pendingCleanups.splice(i, 1);
+        continue;
+      }
+      const perfExpired = forceAll || nowPerf >= entry.expireAtPerf;
+      const ctxExpired =
+        entry.ctx &&
+        typeof entry.ctx.currentTime === 'number' &&
+        entry.expireAtCtx !== null &&
+        entry.ctx.currentTime >= entry.expireAtCtx;
+      if (perfExpired || ctxExpired) {
+        this._pendingCleanups.splice(i, 1);
+        entry.done = true;
+        try {
+          entry.cleanup();
+        } catch {
+          // Ignore cleanup errors
+        }
+      }
+    }
+    if (this._pendingCleanups.length === 0 && this._cleanupTickTimer) {
+      clearTimeout(this._cleanupTickTimer);
+      this._cleanupTickTimer = null;
+      this._cleanupTickDueAt = 0;
+    }
+  }
+
+  _scheduleQueueFlush(delayMs = 60) {
+    const nowPerf = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const waitMs = Math.max(1, Math.min(250, Math.ceil(delayMs)));
+    const dueAt = nowPerf + waitMs;
+    if (this._cleanupTickTimer) {
+      if (this._cleanupTickDueAt > 0 && dueAt + 2 < this._cleanupTickDueAt) {
+        clearTimeout(this._cleanupTickTimer);
+        this._cleanupTickTimer = null;
+        this._cleanupTickDueAt = 0;
+      } else {
+        return;
+      }
+    }
+    this._cleanupTickDueAt = dueAt;
+    const timer = setTimeout(() => {
+      this._cleanupTickTimer = null;
+      this._cleanupTickDueAt = 0;
+      this.flushPendingCleanups();
+      if (this._pendingCleanups.length > 0) {
+        const nextNow = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        let nextMs = 80;
+        for (let i = 0; i < this._pendingCleanups.length; i++) {
+          const rem = this._pendingCleanups[i].expireAtPerf - nextNow;
+          if (rem < nextMs) nextMs = rem;
+        }
+        this._scheduleQueueFlush(Math.max(1, nextMs));
+      }
+    }, waitMs);
+    if (timer && typeof timer.unref === 'function') {
+      timer.unref();
+    }
+    this._cleanupTickTimer = timer;
+  }
+
+  _evictOverflowCleanups(maxEntries = 128) {
+    while (this._pendingCleanups.length > maxEntries) {
+      const oldest = this._pendingCleanups.shift();
+      if (!oldest || oldest.done) continue;
+      oldest.done = true;
+      try {
+        oldest.cleanup();
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+  }
+
+  _enqueueNodeCleanup(cleanup, durationSec = 0.25, ctx = this.ctx) {
+    if (typeof cleanup !== 'function') return null;
+    const dur = Number.isFinite(durationSec) ? Math.max(0, durationSec) : 0.25;
+    const nowPerf = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const delayMs = Math.max(1, Math.ceil(dur * 1000));
+    const expireAtPerf = nowPerf + dur * 1000;
+    const expireAtCtx = ctx && typeof ctx.currentTime === 'number' ? ctx.currentTime + dur : null;
+    const entry = {
+      chain: null,
+      cleanup,
+      expireAtPerf,
+      expireAtCtx,
+      ctx,
+      done: false
+    };
+    this._pendingCleanups.push(entry);
+    if (this._pendingCleanups.length > 128) {
+      this.flushPendingCleanups();
+      if (this._pendingCleanups.length > 128) {
+        this._evictOverflowCleanups(128);
+      }
+    }
+    this._scheduleQueueFlush(delayMs);
+    return entry;
+  }
+
+  _disposeChain(chain) {
+    if (!chain || chain.disposed) return;
+    chain.disposed = true;
+    if (chain._cleanupTimer) {
+      clearTimeout(chain._cleanupTimer);
+      chain._cleanupTimer = null;
+    }
+    if (chain._cleanupEntry) {
+      const entry = chain._cleanupEntry;
+      chain._cleanupEntry = null;
+      entry.done = true;
+      const idx = this._pendingCleanups.indexOf(entry);
+      if (idx !== -1) {
+        this._pendingCleanups.splice(idx, 1);
+      }
+    }
+    if (Array.isArray(chain._sourceCleanups)) {
+      const cleanups = chain._sourceCleanups;
+      chain._sourceCleanups = null;
+      for (let i = 0; i < cleanups.length; i++) {
+        try {
+          cleanups[i]();
+        } catch {
+          // Ignore source cleanup errors
+        }
+      }
+    }
+    const chainNodes = [chain.input, chain.filter, chain.gain, chain.distGain, chain.panner];
+    const seen = new Set();
+    for (let i = 0; i < chainNodes.length; i++) {
+      const node = chainNodes[i];
+      if (!node || seen.has(node)) continue;
+      seen.add(node);
+      try {
+        node.disconnect?.();
+      } catch {
+        // Ignore disconnect errors
+      }
+    }
+  }
+
+  scheduleChainCleanup(chain, durationSec = 0.25) {
+    if (!chain || chain.disposed) return chain;
+    this.flushPendingCleanups();
+
+    chain._sealed = true;
+    const dur = Number.isFinite(durationSec) ? Math.max(0, durationSec) : 0.25;
+
+    if (dur <= 0 || (chain._hadSources && chain._pendingSources === 0)) {
+      this._disposeChain(chain);
+      return chain;
+    }
+
+    const nowPerf = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const delayMs = Math.max(1, Math.ceil(dur * 1000));
+    const expireAtPerf = nowPerf + dur * 1000;
+    const ctx =
+      chain._ctx ||
+      chain.gain?.context ||
+      chain.distGain?.context ||
+      chain.filter?.context ||
+      chain.panner?.context ||
+      this.ctx;
+    const expireAtCtx = ctx && typeof ctx.currentTime === 'number' ? ctx.currentTime + dur : null;
+
+    let entry = chain._cleanupEntry;
+    if (entry && !entry.done) {
+      entry.expireAtPerf = expireAtPerf;
+      entry.expireAtCtx = expireAtCtx;
+      entry.ctx = ctx;
+    } else {
+      entry = {
+        chain,
+        cleanup: () => this._disposeChain(chain),
+        expireAtPerf,
+        expireAtCtx,
+        ctx,
+        done: false
+      };
+      chain._cleanupEntry = entry;
+      this._pendingCleanups.push(entry);
+      if (this._pendingCleanups.length > 128) {
+        this._evictOverflowCleanups(128);
+      }
+    }
+
+    if (chain._cleanupTimer) {
+      clearTimeout(chain._cleanupTimer);
+    }
+    const timer = setTimeout(() => {
+      chain._cleanupTimer = null;
+      this._disposeChain(chain);
+    }, delayMs);
+    if (timer && typeof timer.unref === 'function') {
+      timer.unref();
+    }
+    chain._cleanupTimer = timer;
+    this._scheduleQueueFlush(delayMs);
+
+    return chain;
+  }
+
+  _bindSourceCleanup(source, nodes = [], chain = null, durationSec = 0.3) {
+    if (!source) return null;
+    const nodeList = Array.isArray(nodes) ? nodes : [nodes];
+    if (chain) {
+      chain._hadSources = true;
+      chain._pendingSources = (chain._pendingSources || 0) + 1;
+    }
+
+    const ctx = source.context || chain?._ctx || this.ctx;
+    let cleaned = false;
+    let queueEntry = null;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      if (queueEntry) {
+        queueEntry.done = true;
+        const idx = this._pendingCleanups.indexOf(queueEntry);
+        if (idx !== -1) {
+          this._pendingCleanups.splice(idx, 1);
+        }
+        queueEntry = null;
+      }
+      try {
+        if (source.onended === cleanup) {
+          source.onended = null;
+        }
+      } catch {
+        // Ignore read-only onended property
+      }
+      try {
+        source.disconnect?.();
+      } catch {
+        // Ignore disconnect errors
+      }
+      for (let i = 0; i < nodeList.length; i++) {
+        try {
+          nodeList[i]?.disconnect?.();
+        } catch {
+          // Ignore disconnect errors
+        }
+      }
+      if (chain) {
+        chain._pendingSources = Math.max(0, (chain._pendingSources || 1) - 1);
+        if (chain._sealed && chain._pendingSources === 0) {
+          this._disposeChain(chain);
+        }
+      }
+    };
+
+    if (chain) {
+      if (!chain._sourceCleanups) {
+        chain._sourceCleanups = [];
+      }
+      chain._sourceCleanups.push(cleanup);
+    }
+    queueEntry = this._enqueueNodeCleanup(cleanup, durationSec, ctx);
+
+    try {
+      source.onended = cleanup;
+    } catch {
+      // Ignore if mock does not allow setting onended
+    }
+    if (typeof source.addEventListener === 'function') {
+      try {
+        source.addEventListener('ended', cleanup, { once: true });
+      } catch {
+        // Ignore addEventListener errors
+      }
+    }
+
+    return cleanup;
   }
 
   createNoiseBuffer() {
     if (!this.ctx) return;
+    this._noiseBufferCtx = this.ctx;
     const sampleRate = this.ctx.sampleRate || 44100;
     const length = Math.floor(sampleRate * 1.2);
     if (typeof this.ctx.createBuffer === 'function') {
@@ -108,33 +406,90 @@ export class SoundEffects {
   }
 
   createSpatialChain(ctx, pan, gainValue, now, lowpassFreq = null) {
+    this.flushPendingCleanups();
+    if (ctx && typeof ctx === 'object' && typeof ctx.createGain !== 'function') {
+      pan = ctx;
+      ctx = this.ensureContext();
+    }
+    if (!ctx) {
+      ctx = this.ensureContext();
+    }
+    if (!ctx) return null;
+
+    if (pan && typeof pan === 'object') {
+      const params = pan;
+      pan = params.pan ?? 0;
+      gainValue = params.gain ?? params.gainValue ?? 1;
+      now = params.now ?? (ctx?.currentTime || 0);
+      lowpassFreq = params.lowpassFreq ?? params.muffledFreq ?? params.cutoff ?? null;
+    }
+    if (typeof pan !== 'number') pan = 0;
+    if (typeof gainValue !== 'number') gainValue = 1;
+    if (typeof now !== 'number') now = ctx?.currentTime || 0;
+
     const distGain = ctx.createGain();
-    distGain.gain.value = gainValue;
-    distGain.gain.setValueAtTime?.(gainValue, now);
+    if (distGain.gain) {
+      distGain.gain.value = gainValue;
+      distGain.gain.setValueAtTime?.(gainValue, now);
+    }
 
     let panner = null;
     if (typeof ctx.createStereoPanner === 'function') {
       panner = ctx.createStereoPanner();
-      if (panner.pan) {
+      if (panner?.pan) {
         panner.pan.value = pan;
         panner.pan.setValueAtTime?.(pan, now);
       }
+      distGain.connect(panner);
+      panner.connect(ctx.destination);
+    } else if (typeof ctx.createPanner === 'function') {
+      panner = ctx.createPanner();
       distGain.connect(panner);
       panner.connect(ctx.destination);
     } else {
       distGain.connect(ctx.destination);
     }
 
-    if (typeof lowpassFreq === 'number' && lowpassFreq > 0) {
-      const lpFilter = ctx.createBiquadFilter();
+    const resolvedFreq =
+      typeof lowpassFreq === 'number' && lowpassFreq > 0
+        ? lowpassFreq
+        : lowpassFreq === false || lowpassFreq === 0
+          ? null
+          : 5200;
+
+    let lpFilter = null;
+    if (resolvedFreq && typeof ctx.createBiquadFilter === 'function') {
+      lpFilter = ctx.createBiquadFilter();
       lpFilter.type = 'lowpass';
-      lpFilter.frequency.value = lowpassFreq;
-      lpFilter.frequency.setValueAtTime?.(lowpassFreq, now);
+      if (lpFilter.frequency) {
+        lpFilter.frequency.value = resolvedFreq;
+        lpFilter.frequency.setValueAtTime?.(resolvedFreq, now);
+      }
       lpFilter.connect(distGain);
-      return { input: lpFilter, distGain, panner, filter: lpFilter };
     }
 
-    return { input: distGain, distGain, panner, filter: null };
+    const inputNode = lpFilter || distGain;
+    const chain = {
+      input: inputNode,
+      distGain,
+      gain: distGain,
+      panner,
+      filter: lpFilter,
+      disposed: false,
+      _ctx: ctx,
+      _hadSources: false,
+      _pendingSources: 0,
+      _sealed: false,
+      _sourceCleanups: null,
+      _cleanupTimer: null,
+      _cleanupEntry: null,
+      dispose: () => this._disposeChain(chain),
+      disposeAfter: (durationSec) => this.scheduleChainCleanup(chain, durationSec)
+    };
+    if (lpFilter && typeof lpFilter === 'object') lpFilter._spatialChain = chain;
+    if (distGain && typeof distGain === 'object') distGain._spatialChain = chain;
+    if (panner && typeof panner === 'object') panner._spatialChain = chain;
+    return chain;
   }
 
   playShot(weaponId = 'rifle', volumeScale = 1.0, targetNode = null) {
@@ -143,7 +498,12 @@ export class SoundEffects {
 
     const now = ctx.currentTime;
     const vol = Math.max(0.04, Math.min(1.0, volumeScale));
-    const out = targetNode || ctx.destination;
+    const spatialChain =
+      targetNode?._spatialChain ||
+      (targetNode?.input && (targetNode?.distGain || targetNode?.gain) ? targetNode : null);
+    const out =
+      (targetNode?.input && typeof targetNode.connect !== 'function' ? targetNode.input : targetNode) ||
+      ctx.destination;
 
     // 1. Gunpowder crack / blast (filtered noise)
     const noise = ctx.createBufferSource();
@@ -305,10 +665,15 @@ export class SoundEffects {
     mechOsc.connect(mechGain);
     mechGain.connect(out);
 
+    const cleanNoise = this._bindSourceCleanup(noise, [filter, noiseGain], spatialChain, 0.5);
+    const cleanSub = this._bindSourceCleanup(subOsc, [subGain], spatialChain, 0.45);
+    const cleanMech = this._bindSourceCleanup(mechOsc, [mechGain], spatialChain, 0.07);
+
     if (!targetNode && vol <= 0.62) {
       this._lastNonSpatialShot = {
         at: typeof performance !== 'undefined' ? performance.now() : Date.now(),
-        gains: [noiseGain, subGain, mechGain]
+        gains: [noiseGain, subGain, mechGain],
+        cleanups: [cleanNoise, cleanSub, cleanMech]
       };
     }
 
@@ -318,6 +683,10 @@ export class SoundEffects {
     subOsc.stop(now + 0.45);
     mechOsc.start(now);
     mechOsc.stop(now + 0.07);
+
+    if (spatialChain) {
+      this.scheduleChainCleanup(spatialChain, 0.55);
+    }
 
     // Subtle brass shell casing clink on floor for local shooter (except knife)
     if (!targetNode && vol > 0.75 && weaponId !== 'knife') {
@@ -336,6 +705,8 @@ export class SoundEffects {
     gain.gain.exponentialRampToValueAtTime(0.0005, startAt + 0.04);
     osc.connect(gain);
     gain.connect(ctx.destination);
+    const relDur = Math.max(0.05, startAt - (ctx.currentTime || 0) + 0.05);
+    this._bindSourceCleanup(osc, [gain], null, relDur);
     osc.start(startAt);
     osc.stop(startAt + 0.045);
   }
@@ -351,6 +722,8 @@ export class SoundEffects {
       gain.gain.exponentialRampToValueAtTime(0.001, startAt + offset + 0.065);
       osc.connect(gain);
       gain.connect(ctx.destination);
+      const relDur = Math.max(0.08, startAt + offset - (ctx.currentTime || 0) + 0.08);
+      this._bindSourceCleanup(osc, [gain], null, relDur);
       osc.start(startAt + offset);
       osc.stop(startAt + offset + 0.07);
     });
@@ -371,6 +744,7 @@ export class SoundEffects {
     thudGain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
     thud.connect(thudGain);
     thudGain.connect(ctx.destination);
+    this._bindSourceCleanup(thud, [thudGain], null, 0.08);
     thud.start(now);
     thud.stop(now + 0.075);
 
@@ -386,12 +760,14 @@ export class SoundEffects {
 
     osc.connect(gain);
     gain.connect(ctx.destination);
+    this._bindSourceCleanup(osc, [gain], null, 0.09);
     osc.start(now);
     osc.stop(now + 0.085);
 
     if (isHeadshot) {
       // 3. Signature CS:GO Metallic Helmet "DINK!" dual-harmonic ring
       const dinkGains = [];
+      const dinkCleanups = [];
       [2880, 4120].forEach((freq, idx) => {
         const dink = ctx.createOscillator();
         const dinkGain = ctx.createGain();
@@ -402,13 +778,16 @@ export class SoundEffects {
         dinkGain.gain.exponentialRampToValueAtTime(0.0008, now + 0.15);
         dink.connect(dinkGain);
         dinkGain.connect(ctx.destination);
+        const cleanDink = this._bindSourceCleanup(dink, [dinkGain], null, 0.17);
         dink.start(now + 0.012);
         dink.stop(now + 0.16);
         dinkGains.push(dinkGain);
+        dinkCleanups.push(cleanDink);
       });
       this._lastHeadshotDinkGains = {
         at: typeof performance !== 'undefined' ? performance.now() : Date.now(),
-        gains: dinkGains
+        gains: dinkGains,
+        cleanups: dinkCleanups
       };
     }
   }
@@ -418,6 +797,7 @@ export class SoundEffects {
     if (!ctx) return;
     const now = ctx.currentTime;
     const confirmGains = [];
+    const confirmCleanups = [];
 
     // Deep sub-bass kill impact drop
     const sub = ctx.createOscillator();
@@ -429,6 +809,7 @@ export class SoundEffects {
     subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
     sub.connect(subGain);
     subGain.connect(ctx.destination);
+    confirmCleanups.push(this._bindSourceCleanup(sub, [subGain], null, 0.26));
     sub.start(now);
     sub.stop(now + 0.25);
     confirmGains.push(subGain);
@@ -445,6 +826,7 @@ export class SoundEffects {
       gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.05 + 0.2);
       osc.connect(gain);
       gain.connect(ctx.destination);
+      confirmCleanups.push(this._bindSourceCleanup(osc, [gain], null, i * 0.05 + 0.23));
       osc.start(now + i * 0.05);
       osc.stop(now + i * 0.05 + 0.22);
       confirmGains.push(gain);
@@ -452,7 +834,8 @@ export class SoundEffects {
 
     this._lastKillConfirm = {
       at: typeof performance !== 'undefined' ? performance.now() : Date.now(),
-      gains: confirmGains
+      gains: confirmGains,
+      cleanups: confirmCleanups
     };
   }
 
@@ -472,6 +855,7 @@ export class SoundEffects {
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.055);
       osc.connect(gain);
       gain.connect(ctx.destination);
+      this._bindSourceCleanup(osc, [gain], null, 0.07);
       osc.start(now);
       osc.stop(now + 0.06);
       return;
@@ -502,6 +886,7 @@ export class SoundEffects {
       gain.gain.exponentialRampToValueAtTime(0.001, now + st.t + 0.075);
       osc.connect(gain);
       gain.connect(ctx.destination);
+      this._bindSourceCleanup(osc, [gain], null, st.t + 0.09);
       osc.start(now + st.t);
       osc.stop(now + st.t + 0.085);
     });
@@ -522,6 +907,7 @@ export class SoundEffects {
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.065);
     osc.connect(gain);
     gain.connect(ctx.destination);
+    this._bindSourceCleanup(osc, [gain], null, 0.08);
     osc.start(now);
     osc.stop(now + 0.07);
 
@@ -544,6 +930,7 @@ export class SoundEffects {
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.03);
     osc.connect(gain);
     gain.connect(ctx.destination);
+    this._bindSourceCleanup(osc, [gain], null, 0.04);
     osc.start(now);
     osc.stop(now + 0.035);
   }
@@ -562,6 +949,7 @@ export class SoundEffects {
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.055);
     osc.connect(gain);
     gain.connect(ctx.destination);
+    this._bindSourceCleanup(osc, [gain], null, 0.07);
     osc.start(now);
     osc.stop(now + 0.06);
   }
@@ -585,6 +973,7 @@ export class SoundEffects {
     noise.connect(filter);
     filter.connect(gain);
     gain.connect(ctx.destination);
+    this._bindSourceCleanup(noise, [filter, gain], null, 0.08);
     noise.start(now);
     noise.stop(now + 0.075);
   }
@@ -608,6 +997,7 @@ export class SoundEffects {
     noise.connect(filter);
     filter.connect(gain);
     gain.connect(ctx.destination);
+    this._bindSourceCleanup(noise, [filter, gain], null, 0.43);
     noise.start(now);
     noise.stop(now + 0.42);
   }
@@ -627,6 +1017,7 @@ export class SoundEffects {
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.11);
     osc.connect(gain);
     gain.connect(ctx.destination);
+    this._bindSourceCleanup(osc, [gain], null, 0.13);
     osc.start(now);
     osc.stop(now + 0.12);
   }
@@ -645,6 +1036,7 @@ export class SoundEffects {
       gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.045 + 0.14);
       osc.connect(gain);
       gain.connect(ctx.destination);
+      this._bindSourceCleanup(osc, [gain], null, idx * 0.045 + 0.16);
       osc.start(now + idx * 0.045);
       osc.stop(now + idx * 0.045 + 0.15);
     });
@@ -663,6 +1055,7 @@ export class SoundEffects {
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
     osc.connect(gain);
     gain.connect(ctx.destination);
+    this._bindSourceCleanup(osc, [gain], null, 0.12);
     osc.start(now);
     osc.stop(now + 0.11);
   }
@@ -680,6 +1073,7 @@ export class SoundEffects {
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.065);
     osc.connect(gain);
     gain.connect(ctx.destination);
+    this._bindSourceCleanup(osc, [gain], null, 0.08);
     osc.start(now);
     osc.stop(now + 0.07);
   }
@@ -694,7 +1088,7 @@ export class SoundEffects {
 
     const baseVol = isSprinting ? 0.30 : 0.18;
     const stepGain = baseVol * spatial.gain;
-    const chain = this.createSpatialChain(ctx, spatial.pan, stepGain, now);
+    const chain = this.createSpatialChain(ctx, spatial.pan, stepGain, now, spatial.muffledFreq);
 
     // 1. Low-mid boot heel thud
     const thudOsc = ctx.createOscillator();
@@ -708,12 +1102,12 @@ export class SoundEffects {
     thudGain.gain.exponentialRampToValueAtTime(0.001, now + dur + 0.008);
     thudOsc.connect(thudGain);
     thudGain.connect(chain.input);
-    thudOsc.start(now);
-    thudOsc.stop(now + dur + 0.012);
+    this._bindSourceCleanup(thudOsc, [thudGain], chain, dur + 0.012);
 
     // 2. Filtered surface step scuff
+    let noise = null;
     if (this.noiseBuffer) {
-      const noise = ctx.createBufferSource();
+      noise = ctx.createBufferSource();
       noise.buffer = this.noiseBuffer;
       const filter = ctx.createBiquadFilter();
       filter.type = 'lowpass';
@@ -728,9 +1122,17 @@ export class SoundEffects {
       noise.connect(filter);
       filter.connect(noiseGain);
       noiseGain.connect(chain.input);
+      this._bindSourceCleanup(noise, [filter, noiseGain], chain, dur + 0.01);
+    }
+
+    thudOsc.start(now);
+    thudOsc.stop(now + dur + 0.012);
+    if (noise) {
       noise.start(now);
       noise.stop(now + dur + 0.01);
     }
+
+    this.scheduleChainCleanup(chain, dur + 0.04);
 
     return { pan: spatial.pan, gain: stepGain, dist: spatial.dist };
   }
@@ -740,15 +1142,26 @@ export class SoundEffects {
     if (!rec) return;
     const nowPerf = typeof performance !== 'undefined' ? performance.now() : Date.now();
     if (nowPerf - rec.at < windowMs) {
-      for (const g of rec.gains) {
-        try {
-          if (g?.gain && this.ctx) {
-            g.gain.value = 0.0001;
-            g.gain.setValueAtTime?.(0.0001, this.ctx.currentTime);
+      if (Array.isArray(rec.gains)) {
+        for (const g of rec.gains) {
+          try {
+            if (g?.gain && this.ctx) {
+              g.gain.value = 0.0001;
+              g.gain.setValueAtTime?.(0.0001, this.ctx.currentTime);
+            }
+            g?.disconnect?.();
+          } catch {
+            // Ignore disconnect errors
           }
-          g?.disconnect?.();
-        } catch {
-          // Ignore disconnect errors
+        }
+      }
+      if (Array.isArray(rec.cleanups)) {
+        for (const fn of rec.cleanups) {
+          try {
+            fn?.();
+          } catch {
+            // Ignore cleanup errors
+          }
         }
       }
     }
@@ -795,6 +1208,7 @@ export class SoundEffects {
 
     const chain = this.createSpatialChain(ctx, spatial.pan, shotGain, now, cutoff);
     this.playShot(weaponId, 0.72, chain.input);
+    this.scheduleChainCleanup(chain, 0.55);
 
     return { pan: spatial.pan, gain: shotGain, dist: spatial.dist, cutoff };
   }
@@ -808,10 +1222,11 @@ export class SoundEffects {
     const now = ctx.currentTime;
 
     let out = ctx.destination;
+    let chain = null;
     if (listener && sourcePos && typeof listener === 'object' && typeof sourcePos === 'object') {
       const spatial = this.computeSpatialParams(listener, sourcePos, 40);
       if (spatial.outOfRange || spatial.gain <= 0.001) return null;
-      const chain = this.createSpatialChain(ctx, spatial.pan, spatial.gain * 0.88, now, spatial.muffledFreq);
+      chain = this.createSpatialChain(ctx, spatial.pan, spatial.gain * 0.88, now, spatial.muffledFreq);
       out = chain.input;
     }
 
@@ -825,10 +1240,10 @@ export class SoundEffects {
     impactGain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
     impact.connect(impactGain);
     impactGain.connect(out);
-    impact.start(now);
-    impact.stop(now + 0.055);
+    this._bindSourceCleanup(impact, [impactGain], chain, 0.055);
 
     // Dual-harmonic CS-style metallic helmet "DINK!" ring
+    const dinkOscs = [];
     [2880, 4120].forEach((freq, idx) => {
       const dink = ctx.createOscillator();
       const dinkGain = ctx.createGain();
@@ -839,9 +1254,20 @@ export class SoundEffects {
       dinkGain.gain.exponentialRampToValueAtTime(0.0008, now + 0.165);
       dink.connect(dinkGain);
       dinkGain.connect(out);
-      dink.start(now + 0.008);
-      dink.stop(now + 0.175);
+      this._bindSourceCleanup(dink, [dinkGain], chain, 0.175);
+      dinkOscs.push(dink);
     });
+
+    impact.start(now);
+    impact.stop(now + 0.055);
+    for (let i = 0; i < dinkOscs.length; i++) {
+      dinkOscs[i].start(now + 0.008);
+      dinkOscs[i].stop(now + 0.175);
+    }
+
+    if (chain) {
+      this.scheduleChainCleanup(chain, 0.22);
+    }
   }
 
   playGrenadeThrow() {
@@ -859,6 +1285,7 @@ export class SoundEffects {
     pinGain.gain.exponentialRampToValueAtTime(0.001, now + 0.055);
     pinOsc.connect(pinGain);
     pinGain.connect(ctx.destination);
+    this._bindSourceCleanup(pinOsc, [pinGain], null, 0.065);
     pinOsc.start(now);
     pinOsc.stop(now + 0.06);
 
@@ -876,6 +1303,7 @@ export class SoundEffects {
       noise.connect(filter);
       filter.connect(gain);
       gain.connect(ctx.destination);
+      this._bindSourceCleanup(noise, [filter, gain], null, 0.19);
       noise.start(now + 0.03);
       noise.stop(now + 0.18);
     }
@@ -888,13 +1316,14 @@ export class SoundEffects {
 
     let out = ctx.destination;
     let volScale = 1.0;
+    let chain = null;
 
     if (typeof listener === 'number') {
       volScale = Math.max(0.05, Math.min(1.2, listener));
     } else if (listener && sourcePos && typeof listener === 'object' && typeof sourcePos === 'object') {
       const spatial = this.computeSpatialParams(listener, sourcePos, 24);
       if (spatial.outOfRange || spatial.gain <= 0.001) return null;
-      const chain = this.createSpatialChain(ctx, spatial.pan, spatial.gain * 0.78, now, spatial.muffledFreq);
+      chain = this.createSpatialChain(ctx, spatial.pan, spatial.gain * 0.78, now, spatial.muffledFreq);
       out = chain.input;
     }
 
@@ -908,8 +1337,7 @@ export class SoundEffects {
     clinkGain.gain.exponentialRampToValueAtTime(0.001, now + 0.065);
     clink.connect(clinkGain);
     clinkGain.connect(out);
-    clink.start(now);
-    clink.stop(now + 0.07);
+    this._bindSourceCleanup(clink, [clinkGain], chain, 0.07);
 
     // 2. High metallic shell ring
     const ring = ctx.createOscillator();
@@ -921,8 +1349,16 @@ export class SoundEffects {
     ringGain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
     ring.connect(ringGain);
     ringGain.connect(out);
+    this._bindSourceCleanup(ring, [ringGain], chain, 0.055);
+
+    clink.start(now);
+    clink.stop(now + 0.07);
     ring.start(now);
     ring.stop(now + 0.055);
+
+    if (chain) {
+      this.scheduleChainCleanup(chain, 0.11);
+    }
   }
 
   playGrenadeExplosion(listener = null, sourcePos = null) {
@@ -934,6 +1370,7 @@ export class SoundEffects {
     let volScale = 1.0;
     let isSpatial = false;
     let spatialInfo = { pan: 0, gain: 0.85, dist: 0 };
+    let chain = null;
 
     if (typeof listener === 'number') {
       volScale = Math.max(0.05, Math.min(1.2, listener));
@@ -945,12 +1382,13 @@ export class SoundEffects {
       if (spatial.outOfRange || spatial.gain <= 0.001) return null;
       const blastGain = Math.min(1.0, spatial.gain * 0.95);
       const cutoff = Math.max(380, Math.round(5200 * Math.exp(-spatial.dist / 22)));
-      const chain = this.createSpatialChain(ctx, spatial.pan, blastGain, now, cutoff);
+      chain = this.createSpatialChain(ctx, spatial.pan, blastGain, now, cutoff);
       out = chain.input;
       spatialInfo = { pan: spatial.pan, gain: blastGain, dist: spatial.dist };
     }
 
     const activeGains = [];
+    const activeCleanups = [];
 
     // 1. Deep shockwave sub-bass drop
     const subOsc = ctx.createOscillator();
@@ -962,13 +1400,13 @@ export class SoundEffects {
     subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.62);
     subOsc.connect(subGain);
     subGain.connect(out);
-    subOsc.start(now);
-    subOsc.stop(now + 0.65);
+    activeCleanups.push(this._bindSourceCleanup(subOsc, [subGain], chain, 0.65));
     activeGains.push(subGain);
 
     // 2. Concussive HE detonation rumble (filtered noise burst)
+    let noise = null;
     if (this.noiseBuffer) {
-      const noise = ctx.createBufferSource();
+      noise = ctx.createBufferSource();
       noise.buffer = this.noiseBuffer;
       const filter = ctx.createBiquadFilter();
       filter.type = 'lowpass';
@@ -982,8 +1420,7 @@ export class SoundEffects {
       noise.connect(filter);
       filter.connect(noiseGain);
       noiseGain.connect(out);
-      noise.start(now);
-      noise.stop(now + 0.72);
+      activeCleanups.push(this._bindSourceCleanup(noise, [filter, noiseGain], chain, 0.72));
       activeGains.push(noiseGain);
     }
 
@@ -997,14 +1434,27 @@ export class SoundEffects {
     crackGain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
     crackOsc.connect(crackGain);
     crackGain.connect(out);
+    activeCleanups.push(this._bindSourceCleanup(crackOsc, [crackGain], chain, 0.19));
+    activeGains.push(crackGain);
+
+    subOsc.start(now);
+    subOsc.stop(now + 0.65);
+    if (noise) {
+      noise.start(now);
+      noise.stop(now + 0.72);
+    }
     crackOsc.start(now);
     crackOsc.stop(now + 0.19);
-    activeGains.push(crackGain);
+
+    if (chain) {
+      this.scheduleChainCleanup(chain, 0.78);
+    }
 
     if (!isSpatial) {
       this._lastNonSpatialExplosion = {
         at: typeof performance !== 'undefined' ? performance.now() : Date.now(),
-        gains: activeGains
+        gains: activeGains,
+        cleanups: activeCleanups
       };
     }
 
@@ -1041,6 +1491,7 @@ export class SoundEffects {
     subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
     sub.connect(subGain);
     subGain.connect(ctx.destination);
+    this._bindSourceCleanup(sub, [subGain], null, 0.3);
     sub.start(now);
     sub.stop(now + 0.3);
 
@@ -1066,6 +1517,7 @@ export class SoundEffects {
       gain.gain.exponentialRampToValueAtTime(0.001, startAt + dur);
       osc.connect(gain);
       gain.connect(ctx.destination);
+      this._bindSourceCleanup(osc, [gain], null, i * 0.052 + dur + 0.02);
       osc.start(startAt);
       osc.stop(startAt + dur + 0.02);
     }
@@ -1073,3 +1525,7 @@ export class SoundEffects {
 }
 
 export const sfx = new SoundEffects();
+
+export function scheduleChainCleanup(chain, durationSec = 0.25) {
+  return sfx.scheduleChainCleanup(chain, durationSec);
+}

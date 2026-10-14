@@ -4,6 +4,7 @@ import {
   MATCH_CONFIG,
   WEAPONS,
   WEAPON_ORDER,
+  getEffectiveFireRateMs,
   getMapConfig
 } from '../shared/constants.js';
 import { buildSkyAndAtmosphere, buildArena } from './arenaBuilder.js';
@@ -1465,6 +1466,7 @@ export class Game3D {
       this.switchWeapon(data.weapon);
     }
     const wCfg = WEAPONS[this.currentWeapon] || WEAPONS.rifle;
+    this.callbacks.onAimChange?.(false, this.currentWeapon);
     this.callbacks.onWeaponChanged?.(
       this.currentWeapon,
       this.ammoByWeapon[this.currentWeapon] ?? wCfg.magSize,
@@ -1638,49 +1640,111 @@ export class Game3D {
     }
   }
 
+  _damagePopupTexCache = new Map();
+  damagePopupPool = [];
+
   spawnDamagePopup(targetId, damage, isHeadshot = false) {
     const rp = this.remotePlayers.get(targetId);
     if (!rp) return;
 
-    const canvas = document.createElement('canvas');
-    canvas.width = 160;
-    canvas.height = 64;
-    const ctx = canvas.getContext('2d');
+    if (!this._damagePopupTexCache) {
+      this._damagePopupTexCache = new Map();
+    }
+    if (!this.damagePopupPool) {
+      this.damagePopupPool = [];
+    }
 
-    ctx.font = isHeadshot ? '900 34px Segoe UI, sans-serif' : '800 28px Segoe UI, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
-    ctx.lineWidth = 5;
-    const text = isHeadshot ? `🎯 -${damage}` : `-${damage}`;
-    ctx.strokeText(text, 80, 44);
-    ctx.fillStyle = isHeadshot ? '#facc15' : '#f8fafc';
-    ctx.fillText(text, 80, 44);
+    const roundedDamage = Math.round(Number(damage) || 0);
+    const cacheKey = `${roundedDamage}_${isHeadshot ? 1 : 0}`;
 
-    const tex = new THREE.CanvasTexture(canvas);
-    const mat = new THREE.SpriteMaterial({
-      map: tex,
-      transparent: true,
-      depthTest: false
-    });
-    const sprite = new THREE.Sprite(mat);
+    let tex = this._damagePopupTexCache.get(cacheKey);
+    if (!tex) {
+      const canvas = typeof document !== 'undefined' && typeof document.createElement === 'function'
+        ? document.createElement('canvas')
+        : { width: 160, height: 64, getContext: () => null };
+      canvas.width = 160;
+      canvas.height = 64;
+      const ctx = canvas.getContext?.('2d');
+      if (ctx) {
+        ctx.font = isHeadshot ? '900 34px Segoe UI, sans-serif' : '800 28px Segoe UI, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
+        ctx.lineWidth = 5;
+        const text = isHeadshot ? `🎯 -${roundedDamage}` : `-${roundedDamage}`;
+        ctx.strokeText(text, 80, 44);
+        ctx.fillStyle = isHeadshot ? '#facc15' : '#f8fafc';
+        ctx.fillText(text, 80, 44);
+      }
+      tex = new THREE.CanvasTexture(canvas);
+      this._damagePopupTexCache.set(cacheKey, tex);
+    }
+
+    let pooled = this.damagePopupPool.pop();
+    let sprite;
+    let mat;
+    if (pooled) {
+      sprite = pooled.sprite;
+      mat = pooled.mat;
+      const hadMap = Boolean(mat.map);
+      mat.map = tex;
+      if (!hadMap) {
+        mat.needsUpdate = true;
+      }
+      mat.opacity = 1;
+      sprite.visible = true;
+      if (!sprite.parent) {
+        this.scene.add(sprite);
+      }
+    } else {
+      mat = new THREE.SpriteMaterial({
+        map: tex,
+        transparent: true,
+        depthTest: false
+      });
+      sprite = new THREE.Sprite(mat);
+      sprite.renderOrder = 15;
+      this.scene.add(sprite);
+      pooled = {
+        type: 'popup',
+        sprite,
+        mat,
+        tex,
+        vy: 1.65,
+        createdAt: 0,
+        duration: 650
+      };
+    }
+
     sprite.position.set(
       rp.group.position.x + (Math.random() - 0.5) * 0.45,
       rp.group.position.y + (isHeadshot ? 2.15 : 1.55),
       rp.group.position.z + (Math.random() - 0.5) * 0.45
     );
     sprite.scale.set(isHeadshot ? 1.45 : 1.1, isHeadshot ? 0.58 : 0.44, 1);
-    sprite.renderOrder = 15;
-    this.scene.add(sprite);
 
-    this.activeEffects.push({
-      type: 'popup',
-      sprite,
-      tex,
-      mat,
-      vy: 1.65,
-      createdAt: performance.now(),
-      duration: 620
-    });
+    pooled.type = 'popup';
+    pooled.sprite = sprite;
+    pooled.mat = mat;
+    pooled.tex = tex;
+    pooled.vy = 1.65;
+    pooled.createdAt = performance.now();
+    pooled.duration = 650;
+    this.activeEffects.push(pooled);
+  }
+
+  clearDamagePopups() {
+    if (!this.damagePopupPool) {
+      this.damagePopupPool = [];
+    }
+    if (!this.activeEffects) return;
+    for (let i = this.activeEffects.length - 1; i >= 0; i--) {
+      const fx = this.activeEffects[i];
+      if (fx.type === 'popup') {
+        fx.sprite.visible = false;
+        this.damagePopupPool.push(fx);
+        this.activeEffects.splice(i, 1);
+      }
+    }
   }
 
   applyDamageFlinch(damage = 20) {
@@ -1721,7 +1785,8 @@ export class Game3D {
     const cfg = WEAPONS[this.currentWeapon];
 
     if (this.equipUntil > now) return;
-    if (now - this.lastShotAt < cfg.fireRateMs) return;
+    const effectiveFireRateMs = getEffectiveFireRateMs(cfg, this.isAiming);
+    if (now - this.lastShotAt < effectiveFireRateMs) return;
 
     const isMelee = Boolean(cfg.isMelee || cfg.infiniteAmmo);
     const currentAmmo = this.ammoByWeapon[this.currentWeapon];
@@ -1863,7 +1928,8 @@ export class Game3D {
       origin: eyeOrigin,
       dir: { x: forward.x, y: forward.y, z: forward.z },
       hits,
-      hitPoint: primaryHitPoint
+      hitPoint: primaryHitPoint,
+      isAiming: this.isAiming
     });
 
     if (isMelee) {
@@ -1894,7 +1960,7 @@ export class Game3D {
     if (activeVm?.userData?.flashMesh) {
       activeVm.userData.flashMesh.visible = true;
       activeVm.userData.flashMesh.rotation.z = Math.random() * Math.PI * 2;
-      const s = 0.85 + Math.random() * 0.35;
+      const s = this.isAiming ? (0.32 + Math.random() * 0.08) : (0.85 + Math.random() * 0.35);
       activeVm.userData.flashMesh.scale.set(s, s, s);
     }
     this.muzzleLight.color.setHex(cfg.color || 0xfef08a);
@@ -2278,7 +2344,8 @@ export class Game3D {
     this.position.z = Math.max(-limit, Math.min(limit, this.position.z));
 
     // Decay crosshair recoil kick & reset spray index smoothly without touching camera pitch/yaw!
-    const recDelay = cfg.recoilRecoveryDelayMs || (cfg.fireRateMs + 35);
+    const effectiveFireRateMs = getEffectiveFireRateMs(cfg, this.isAiming);
+    const recDelay = cfg.recoilRecoveryDelayMs || (effectiveFireRateMs + 35);
     this.crosshairRecoilKick = Math.max(0, this.crosshairRecoilKick - dt * (cfg.recoilRecovery || 14.0) * 0.018);
     if (now - this.lastShotAt > recDelay) {
       this.recoilShotIndex = Math.max(0, this.recoilShotIndex - dt * 28);
@@ -2325,7 +2392,7 @@ export class Game3D {
     );
     this.camera.quaternion.setFromEuler(this.tmpEuler);
 
-    // Smooth Dynamic FOV
+    // Smooth Dynamic FOV (+0.25x / 1.25x zoomFov 54.4 for Holo & Red-Dot optics, 26 for Sniper)
     const targetFov = this.isAiming
       ? cfg.zoomFov
       : this.isSliding
@@ -2333,8 +2400,8 @@ export class Game3D {
         : this.isSprinting
           ? 74
           : 68;
-    if (Math.abs(this.camera.fov - targetFov) > 0.08) {
-      this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * 15);
+    if (Math.abs(this.camera.fov - targetFov) > 0.05) {
+      this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * 16);
       this.camera.updateProjectionMatrix();
     }
 
@@ -2350,30 +2417,44 @@ export class Game3D {
     const isSniperScoped = this.isAiming && this.currentWeapon === 'sniper';
     this.viewmodelRig.visible = !isSniperScoped;
 
-    const equipProgress = isEquipping ? 1 - (this.equipUntil - now) / this.equipDuration : 1;
-    const equipDropY = isEquipping ? (1 - equipProgress) * -0.26 : 0;
-
-    const targetVmX = (this.isAiming ? 0.0 : this.isSprinting ? 0.17 : 0.24) + this.currentLean * 0.03;
-    const targetVmY = (isReloading ? -0.27 : this.isAiming ? -0.165 : -0.21) + equipDropY + this.landingDip * 0.45;
-    const targetVmZ = this.isAiming ? -0.33 : -0.40;
-
-    const bobAmp = this.isAiming ? 0.22 : this.isSprinting ? 1.35 : 0.95;
-    const bobX = Math.cos(this.weaponBobTime * 0.5) * 0.012 * bobAmp;
-    const bobY = Math.abs(Math.sin(this.weaponBobTime)) * 0.014 * bobAmp;
-
-    const vmPosBlend = 1 - Math.exp(-18 * dt);
-    const vmRotBlend = 1 - Math.exp(-16 * dt);
-    this.viewmodelRig.position.x += (targetVmX + bobX + this.swayX - this.viewmodelRig.position.x) * vmPosBlend;
-    this.viewmodelRig.position.y += (targetVmY - bobY + this.swayY - this.viewmodelRig.position.y) * vmPosBlend;
-    this.viewmodelRig.position.z += (targetVmZ + this.recoilOffset - this.viewmodelRig.position.z) * Math.min(1, dt * 28);
-
-    let targetRotX = this.recoilOffset * 1.15;
-    let targetRotY = 0;
-    let targetRotZ = -this.cameraRoll * 0.85;
-
     const activeVm = this.viewmodelMeshes[this.currentWeapon];
     const magMesh = activeVm?.userData?.magMesh;
     const boltMesh = activeVm?.userData?.boltMesh;
+    if (activeVm?.userData?.opticReticle) {
+      activeVm.userData.opticReticle.visible = !this.isAiming;
+    }
+
+    const equipProgress = isEquipping ? 1 - (this.equipUntil - now) / this.equipDuration : 1;
+    const equipDropY = isEquipping ? (1 - equipProgress) * -0.26 : 0;
+
+    // Align 3D weapon optic center (Holo / Red-Dot) directly onto screen center (0, 0) during ADS
+    const isAimingSteady = this.isAiming && !isReloading;
+    const adsPos = activeVm?.userData?.adsPosition || { x: 0.0, y: -0.1208, z: -0.2428 };
+    const targetVmX = isAimingSteady
+      ? adsPos.x
+      : (this.isSprinting ? 0.17 : 0.24) + this.currentLean * 0.03;
+    const targetVmY = (isReloading
+      ? -0.27
+      : isAimingSteady
+        ? adsPos.y
+        : -0.21) + equipDropY + this.landingDip * (isAimingSteady ? 0 : 0.45);
+    const targetVmZ = isAimingSteady ? adsPos.z : -0.40;
+
+    const bobAmp = isAimingSteady ? 0 : this.isSprinting ? 1.35 : 0.95;
+    const bobX = Math.cos(this.weaponBobTime * 0.5) * 0.012 * bobAmp;
+    const bobY = Math.abs(Math.sin(this.weaponBobTime)) * 0.014 * bobAmp;
+    const swayScale = isAimingSteady ? 0 : 1.0;
+    const recoilZScale = isAimingSteady ? 0.22 : 1.0;
+
+    const vmPosBlend = 1 - Math.exp(-(isAimingSteady ? 32 : 18) * dt);
+    const vmRotBlend = 1 - Math.exp(-(isAimingSteady ? 32 : 16) * dt);
+    this.viewmodelRig.position.x += (targetVmX + bobX + this.swayX * swayScale - this.viewmodelRig.position.x) * vmPosBlend;
+    this.viewmodelRig.position.y += (targetVmY - bobY + this.swayY * swayScale - this.viewmodelRig.position.y) * vmPosBlend;
+    this.viewmodelRig.position.z += (targetVmZ + this.recoilOffset * recoilZScale - this.viewmodelRig.position.z) * Math.min(1, dt * 28);
+
+    let targetRotX = isAimingSteady ? 0 : this.recoilOffset * 1.15;
+    let targetRotY = 0;
+    let targetRotZ = isAimingSteady ? 0 : -this.cameraRoll * 0.85;
 
     if (isReloading) {
       const reloadPct = Math.max(0, Math.min(1, 1 - (this.reloadingUntil - now) / this.reloadDuration));
@@ -2514,6 +2595,7 @@ export class Game3D {
         Math.abs(qpitch - prev.pitch) >= 0.003 ||
         this.crouching !== prev.crouching ||
         this.prone !== prev.prone ||
+        this.isAiming !== prev.isAiming ||
         Math.abs(qlean - prev.lean) >= 0.02 ||
         this.currentWeapon !== prev.weapon;
 
@@ -2532,6 +2614,7 @@ export class Game3D {
           pitch: qpitch,
           crouching: this.crouching,
           prone: this.prone,
+          isAiming: this.isAiming,
           lean: qlean,
           weapon: this.currentWeapon
         };
@@ -2930,9 +3013,9 @@ export class Game3D {
       const elapsed = now - fx.createdAt;
       if (elapsed >= fx.duration) {
         if (fx.type === 'popup') {
-          this.scene.remove(fx.sprite);
-          fx.tex.dispose();
-          fx.mat.dispose();
+          fx.sprite.visible = false;
+          if (!this.damagePopupPool) this.damagePopupPool = [];
+          this.damagePopupPool.push(fx);
         } else if (fx.type === 'explosion') {
           this.scene.remove(fx.coreSphere);
           this.scene.remove(fx.fireballSphere);
@@ -3033,8 +3116,42 @@ export class Game3D {
     this.renderer.render(this.scene, this.camera);
   }
 
+  get mouseSensitivity() {
+    return this.sensitivity;
+  }
+
+  set mouseSensitivity(val) {
+    const clean = Number(val);
+    if (Number.isFinite(clean)) {
+      this.sensitivity = clean;
+    }
+  }
+
   requestPointerLock() {
     this.renderer.domElement.requestPointerLock?.();
+    if (typeof navigator !== 'undefined' && navigator.keyboard && typeof navigator.keyboard.lock === 'function') {
+      try {
+        navigator.keyboard.lock([
+          'KeyW',
+          'KeyA',
+          'KeyS',
+          'KeyD',
+          'KeyR',
+          'KeyQ',
+          'KeyE',
+          'KeyF',
+          'KeyG',
+          'KeyC',
+          'ControlLeft',
+          'ShiftLeft',
+          'Space',
+          'Tab',
+          'Escape'
+        ])?.catch?.(() => {});
+      } catch {
+        // Ignore unsupported Keyboard Lock API errors
+      }
+    }
   }
 
   exitPointerLock() {
@@ -3052,10 +3169,35 @@ export class Game3D {
 
     document.addEventListener('pointerlockchange', () => {
       this.isPointerLocked = document.pointerLockElement === this.renderer.domElement;
-      if (!this.isPointerLocked) {
+      if (this.isPointerLocked) {
+        if (typeof navigator !== 'undefined' && navigator.keyboard && typeof navigator.keyboard.lock === 'function') {
+          try {
+            navigator.keyboard.lock([
+              'KeyW',
+              'KeyA',
+              'KeyS',
+              'KeyD',
+              'KeyR',
+              'KeyQ',
+              'KeyE',
+              'KeyF',
+              'KeyG',
+              'KeyC',
+              'ControlLeft',
+              'ShiftLeft',
+              'Space',
+              'Tab',
+              'Escape'
+            ])?.catch?.(() => {});
+          } catch {
+            // Ignore unsupported Keyboard Lock API errors
+          }
+        }
+      } else {
         this.isMouseDown = false;
         this.isAiming = false;
         this.isSprinting = false;
+        this.callbacks.onAimChange?.(false, this.currentWeapon);
       }
       this.callbacks.onPointerLockChange?.(this.isPointerLocked);
     });
@@ -3087,7 +3229,7 @@ export class Game3D {
         this.attemptShoot();
       } else if (e.button === 2) {
         const wCfg = WEAPONS[this.currentWeapon];
-        if (!wCfg?.isMelee && this.reloadingUntil <= performance.now()) {
+        if (this.alive && !wCfg?.isMelee && this.reloadingUntil <= performance.now()) {
           this.isAiming = true;
           this.isSprinting = false;
           this.callbacks.onAimChange?.(this.isAiming, this.currentWeapon);
@@ -3117,12 +3259,54 @@ export class Game3D {
       this.callbacks.onAimChange?.(false, this.currentWeapon);
     }, { passive: true });
 
+    const protectedActionKeys = new Set([
+      'KeyW',
+      'KeyA',
+      'KeyS',
+      'KeyD',
+      'KeyR',
+      'KeyF',
+      'KeyG',
+      'KeyQ',
+      'KeyE',
+      'KeyC',
+      'KeyZ',
+      'KeyX',
+      'KeyB',
+      'KeyL',
+      'KeyT',
+      'KeyN',
+      'Tab',
+      'Space',
+      'ControlLeft',
+      'ControlRight',
+      'ShiftLeft',
+      'ShiftRight'
+    ]);
+
     window.addEventListener('keydown', (e) => {
       const activeTag = document.activeElement?.tagName;
-      if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT') return;
+      if (
+        !this.isPointerLocked &&
+        (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT')
+      ) {
+        return;
+      }
 
       if (e.code in this.keys) {
         this.keys[e.code] = true;
+      } else if (e.code === 'ControlRight') {
+        this.keys.ControlLeft = true;
+      }
+
+      if (this.inMatch || this.isPointerLocked) {
+        if (
+          e.code === 'F5' ||
+          ((e.ctrlKey || e.metaKey || e.altKey) && protectedActionKeys.has(e.code))
+        ) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
       }
 
       if (!this.inMatch) return;
@@ -3157,16 +3341,18 @@ export class Game3D {
       else if (e.code === 'Tab') {
         this.callbacks.onScoreboardToggle?.(true);
       }
-    });
+    }, { capture: true });
 
     window.addEventListener('keyup', (e) => {
       if (e.code in this.keys) {
         this.keys[e.code] = false;
+      } else if (e.code === 'ControlRight') {
+        this.keys.ControlLeft = false;
       }
       if (e.code === 'Tab') {
         e.preventDefault();
         this.callbacks.onScoreboardToggle?.(false);
       }
-    });
+    }, { capture: true });
   }
 }

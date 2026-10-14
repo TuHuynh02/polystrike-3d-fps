@@ -1131,6 +1131,139 @@ kbd {
   transform: translate(-50%, -50%);
 }
 
+/* Tactical Holo & Red-Dot 1.25x ADS Optic Reticle Overlay */
+.optic-scope {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 23;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(
+    circle at 50% 50%,
+    transparent 34%,
+    rgba(4, 8, 15, 0.18) 72%,
+    rgba(2, 5, 10, 0.42) 100%
+  );
+}
+
+.optic-lens-window {
+  position: relative;
+  width: 176px;
+  height: 132px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(
+    circle at 50% 50%,
+    rgba(56, 189, 248, 0.055) 0%,
+    rgba(14, 165, 233, 0.02) 68%,
+    transparent 100%
+  );
+}
+
+.optic-scope.optic-reddot .optic-lens-window {
+  width: 152px;
+  height: 142px;
+  border-radius: 50%;
+}
+
+.optic-holo-ring {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1.6px solid rgba(239, 68, 68, 0.92);
+  box-shadow:
+    0 0 8px rgba(239, 68, 68, 0.7),
+    inset 0 0 6px rgba(239, 68, 68, 0.35);
+}
+
+.optic-scope.optic-reddot .optic-holo-ring {
+  display: none;
+}
+
+.optic-holo-tick {
+  position: absolute;
+  background: #ef4444;
+  box-shadow: 0 0 5px rgba(239, 68, 68, 0.85);
+}
+
+.oht-top {
+  width: 2px;
+  height: 7px;
+  left: 50%;
+  top: -5px;
+  transform: translateX(-50%);
+}
+
+.oht-bottom {
+  width: 2px;
+  height: 7px;
+  left: 50%;
+  bottom: -5px;
+  transform: translateX(-50%);
+}
+
+.oht-left {
+  width: 7px;
+  height: 2px;
+  top: 50%;
+  left: -5px;
+  transform: translateY(-50%);
+}
+
+.oht-right {
+  width: 7px;
+  height: 2px;
+  top: 50%;
+  right: -5px;
+  transform: translateY(-50%);
+}
+
+.optic-center-dot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #ff3b30;
+  box-shadow:
+    0 0 8px #ef4444,
+    0 0 14px rgba(239, 68, 68, 0.85),
+    0 0 2px #ffffff;
+  transform: translate(-50%, -50%);
+}
+
+.optic-scope.optic-reddot .optic-center-dot {
+  width: 5px;
+  height: 5px;
+  background: #ff2d20;
+  box-shadow:
+    0 0 10px #ef4444,
+    0 0 18px rgba(239, 68, 68, 0.9),
+    0 0 2px #ffffff;
+}
+
+.optic-telemetry {
+  position: absolute;
+  bottom: -26px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 1.3px;
+  color: rgba(226, 232, 240, 0.82);
+  background: rgba(8, 11, 16, 0.72);
+  border: 1px solid rgba(56, 189, 248, 0.32);
+  padding: 1px 7px;
+}
+
 /* Top HUD Command Bar */
 .hud-top-bar {
   position: absolute;
@@ -1443,11 +1576,16 @@ kbd {
   position: absolute;
   background: #4ade80;
   box-shadow: 0 0 3px rgba(0, 0, 0, 0.95);
-  transition: background-color 0.08s;
+  transition: background-color 0.08s, opacity 0.12s;
 }
 
 .crosshair.aiming .ch-line {
   background: #38bdf8;
+  opacity: 0;
+}
+
+.crosshair.aiming .ch-dot {
+  opacity: 0;
 }
 
 .crosshair.moving .ch-line {

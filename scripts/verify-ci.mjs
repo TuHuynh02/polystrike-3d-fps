@@ -10,7 +10,11 @@ import {
   MELEE_WEAPONS,
   DEFAULT_LOADOUT,
   MAPS,
-  computeDistanceFalloff
+  BASE_HIPFIRE_FOV,
+  ADS_OPTIC_ZOOM_MULT,
+  ADS_OPTIC_ZOOM_FOV,
+  computeDistanceFalloff,
+  getEffectiveFireRateMs
 } from '../shared/constants.js';
 import {
   LAG_COMP_HISTORY_MS,
@@ -392,6 +396,218 @@ const farSource = audioEngine.computeSpatialParams(listener, { x: 0, y: 0, z: -4
 assert.ok(leftSource.pan < -0.5, `Source to left should pan negative, got ${leftSource.pan}`);
 assert.ok(rightSource.pan > 0.5, `Source to right should pan positive, got ${rightSource.pan}`);
 assert.equal(farSource.outOfRange, true, 'Source beyond maxDistance should be marked outOfRange');
+
+console.log('📦 [CI] Verifying Compact / Quantized 30Hz Network Serialization (serializePlayers & serializeGrenades)...');
+player.alive = true;
+player.lastMoveAt = Date.now();
+player.x = 12.3456;
+player.y = 1.239;
+player.z = -8.7654;
+player.vx = 4.567;
+player.vy = -1.234;
+player.vz = 7.891;
+player.yaw = 1.23456;
+player.pitch = -0.56789;
+player.lean = 0.789;
+
+const serializedPlayers = rm.serializePlayers(room);
+assert.equal(serializedPlayers.length, room.players.size, 'serializePlayers must return pre-sized array matching room.players.size');
+const sp1 = serializedPlayers.find((p) => p.id === player.id);
+assert.ok(sp1, 'Serialized players must include player 1');
+assert.equal(sp1.x, 12.35, 'Position x must be rounded to 2 decimal places');
+assert.equal(sp1.y, 1.24, 'Position y must be rounded to 2 decimal places');
+assert.equal(sp1.z, -8.77, 'Position z must be rounded to 2 decimal places');
+assert.equal(sp1.vx, 4.6, 'Velocity vx must be rounded to 1 decimal place');
+assert.equal(sp1.vy, -1.2, 'Velocity vy must be rounded to 1 decimal place');
+assert.equal(sp1.vz, 7.9, 'Velocity vz must be rounded to 1 decimal place');
+assert.equal(sp1.yaw, 1.23, 'Angle yaw must be rounded to 2 decimal places');
+assert.equal(sp1.pitch, -0.57, 'Angle pitch must be rounded to 2 decimal places');
+assert.equal(sp1.lean, 0.79, 'Lean must be rounded to 2 decimal places');
+assert.ok(player._staticMeta && player._staticMeta.id === player.id, 'Static player metadata must be cached on player entity');
+
+room.grenades = [{
+  id: 'nade_quant_test',
+  ownerId: player.id,
+  ownerName: player.name,
+  x: 3.141592653589793,
+  y: 1.618033988749895,
+  z: -9.876543210987654,
+  vx: 11.22334455667788,
+  vy: -4.5566778899,
+  vz: 0.1299999999,
+  createdAt: Date.now(),
+  explodeAt: Date.now() + 2000,
+  fuseRemaining: 1.87654321
+}];
+const serializedGrenades = rm.serializeGrenades(room);
+assert.equal(serializedGrenades.length, 1, 'serializeGrenades must return 1 active grenade');
+assert.deepEqual(
+  Object.keys(serializedGrenades[0]).sort(),
+  ['fuseRemaining', 'id', 'ownerId', 'vx', 'vy', 'vz', 'x', 'y', 'z'],
+  'Serialized grenade snapshot must only include compact quantized fields'
+);
+assert.equal(serializedGrenades[0].x, 3.14, 'Grenade x must be rounded to 2 decimal places');
+assert.equal(serializedGrenades[0].y, 1.62, 'Grenade y must be rounded to 2 decimal places');
+assert.equal(serializedGrenades[0].z, -9.88, 'Grenade z must be rounded to 2 decimal places');
+assert.equal(serializedGrenades[0].vx, 11.22, 'Grenade vx must be rounded to 2 decimal places');
+assert.equal(serializedGrenades[0].vy, -4.56, 'Grenade vy must be rounded to 2 decimal places');
+assert.equal(serializedGrenades[0].vz, 0.13, 'Grenade vz must be rounded to 2 decimal places');
+assert.equal(serializedGrenades[0].fuseRemaining, 1.88, 'Grenade fuseRemaining must be rounded to 2 decimal places');
+room.grenades = [{
+  id: 'nade_nonfinite_test',
+  ownerId: player.id,
+  x: NaN,
+  y: Infinity,
+  z: -0.0001,
+  vx: undefined,
+  vy: -Infinity,
+  vz: null,
+  fuseRemaining: NaN
+}];
+const nonFiniteNade = rm.serializeGrenades(room)[0];
+assert.equal(nonFiniteNade.x, 0, 'Non-finite grenade x (NaN) must sanitize to 0');
+assert.equal(nonFiniteNade.y, 0, 'Non-finite grenade y (Infinity) must sanitize to 0');
+assert.ok(Object.is(nonFiniteNade.z, 0), 'Negative zero grenade z must normalize to +0');
+assert.equal(nonFiniteNade.vx, 0, 'Undefined grenade vx must sanitize to 0');
+assert.equal(nonFiniteNade.vy, 0, 'Non-finite grenade vy (-Infinity) must sanitize to 0');
+assert.equal(nonFiniteNade.fuseRemaining, 0, 'NaN grenade fuseRemaining must sanitize to 0');
+room.grenades = [];
+
+player.x = Infinity;
+player.vx = -Infinity;
+player.yaw = NaN;
+player.reserveAmmo = NaN;
+player.grenades = NaN;
+const nonFinitePlayer = rm.serializePlayers(room).find((p) => p.id === player.id);
+assert.equal(nonFinitePlayer.x, 0, 'Non-finite player x (Infinity) must sanitize to 0');
+assert.equal(nonFinitePlayer.vx, 0, 'Non-finite player vx (-Infinity) must sanitize to 0');
+assert.equal(nonFinitePlayer.yaw, 0, 'Non-finite player yaw (NaN) must sanitize to 0');
+assert.equal(nonFinitePlayer.reserveAmmo, 0, 'NaN player reserveAmmo must sanitize to 0');
+assert.equal(nonFinitePlayer.grenades, 1, 'NaN player grenades must fallback to 1');
+player.x = 12.3456;
+player.vx = 4.567;
+player.yaw = 1.23456;
+player.reserveAmmo = 90;
+player.grenades = 1;
+
+const benchStart = performance.now();
+for (let i = 0; i < 1000; i++) {
+  rm.serializePlayers(room);
+}
+const benchElapsedMs = performance.now() - benchStart;
+assert.ok(benchElapsedMs < 150, `1000x serializePlayers must remain fast (<150ms, took ${benchElapsedMs.toFixed(2)}ms)`);
+
+console.log('🔭 [CI] Verifying Holo & Red-Dot 1.25x (+0.25x) ADS Scope Zoom, 3D Sight Center Alignment & Slower ADS Fire Rate...');
+execFileSync(process.execPath, [path.join(ROOT_DIR, 'scripts/build-pages.mjs')], { stdio: 'inherit' });
+const THREE = await import('../dist/vendor/three/three.module.js');
+const { createWeaponMesh } = await import('../dist/js/weaponModels.js');
+
+assert.equal(BASE_HIPFIRE_FOV, 68, 'Base hipfire FOV must be 68');
+assert.equal(ADS_OPTIC_ZOOM_MULT, 1.25, 'Holo and Red-Dot ADS zoom multiplier must be 1.25x (+0.25x)');
+assert.equal(ADS_OPTIC_ZOOM_FOV, 54.4, 'Holo and Red-Dot ADS zoom FOV must be 54.4 (68 / 1.25)');
+assert.ok(indexHtml.includes('id="optic-scope"'), 'HUD must include #optic-scope overlay for Holo and Red-Dot sights');
+assert.ok(indexHtml.includes('id="optic-telemetry"'), 'HUD must include #optic-telemetry label');
+
+const opticWeapons = ['rifle', 'm4a1', 'scar', 'smg', 'shotgun', 'lmg', 'pistol', 'deagle', 'glock'];
+const sightRaycaster = new THREE.Raycaster(
+  new THREE.Vector3(0, 0, 0),
+  new THREE.Vector3(0, 0, -1),
+  0,
+  2.0
+);
+for (const wId of opticWeapons) {
+  const wCfg = WEAPONS[wId];
+  assert.equal(wCfg.zoomMult, 1.25, `${wId} must have zoomMult === 1.25 (+0.25x ADS zoom)`);
+  assert.equal(wCfg.zoomFov, 54.4, `${wId} must have zoomFov === 54.4 (68 / 1.25)`);
+  assert.ok(
+    wCfg.opticType === 'holo' || wCfg.opticType === 'reddot',
+    `${wId} must specify opticType as 'holo' or 'reddot'`
+  );
+  const hipMs = getEffectiveFireRateMs(wCfg, false);
+  const adsMs = getEffectiveFireRateMs(wCfg, true);
+  assert.equal(hipMs, wCfg.fireRateMs, `${wId} hipfire rate must match fireRateMs`);
+  assert.ok(adsMs > hipMs, `${wId} ADS fire rate (${adsMs}ms) must be slower than hipfire (${hipMs}ms)`);
+  assert.ok(
+    adsMs >= Math.round(hipMs * 1.1) && adsMs <= Math.round(hipMs * 1.2),
+    `${wId} ADS fire rate (${adsMs}ms) must be ~10%-15% slower than hipfire (${hipMs}ms)`
+  );
+
+  const vm = createWeaponMesh(wId, true);
+  assert.ok(vm.userData.opticCenter, `${wId} first-person viewmodel must expose userData.opticCenter`);
+  assert.ok(vm.userData.adsPosition, `${wId} first-person viewmodel must expose userData.adsPosition`);
+  assert.ok(vm.userData.opticLens, `${wId} first-person viewmodel must expose userData.opticLens`);
+  assert.equal(vm.userData.adsPosition.x, 0, `${wId} ADS viewmodel X must align to screen center 0`);
+  assert.ok(
+    Math.abs(vm.userData.adsPosition.y + vm.userData.opticCenter.y * 1.14) < 0.001,
+    `${wId} ADS viewmodel Y (${vm.userData.adsPosition.y}) must center opticCenter.y (${vm.userData.opticCenter.y}) at camera Y=0`
+  );
+
+  // Verify unobstructed 3D sightline from camera (0, 0, 0) along (0, 0, -1) through optic lens
+  if (vm.userData.opticReticle) {
+    vm.userData.opticReticle.visible = false;
+  }
+  if (vm.userData.flashMesh) {
+    vm.userData.flashMesh.scale.set(0.4, 0.4, 0.4);
+  }
+  const rig = new THREE.Group();
+  rig.position.set(
+    vm.userData.adsPosition.x,
+    vm.userData.adsPosition.y,
+    vm.userData.adsPosition.z
+  );
+  rig.add(vm);
+  rig.updateMatrixWorld(true);
+
+  const hits = sightRaycaster.intersectObjects(rig.children, true);
+  const hitLens = hits.some((h) => h.object.userData?.isOpticLens);
+  const opaqueBlockers = hits.filter(
+    (h) =>
+      !h.object.userData?.isOpticLens &&
+      !h.object.userData?.isOpticReticle &&
+      (!h.object.material?.transparent || h.object.material.opacity > 0.5)
+  );
+  assert.ok(hitLens, `${wId} center sightline ray (0,0,0)->(0,0,-1) must pass through the 3D optic lens`);
+  assert.equal(
+    opaqueBlockers.length,
+    0,
+    `${wId} center sightline ray (0,0,0)->(0,0,-1) must have 0 opaque mesh obstructions (found ${opaqueBlockers.length})`
+  );
+}
+
+// Verify server-side ADS fire rate enforcement & state reset in RoomManager
+player.weapon = 'rifle';
+player.ammo = 30;
+player.ammoByWeapon.rifle = 30;
+player.isAiming = false;
+player.lastShotAt = Date.now() - Math.floor(WEAPONS.rifle.fireRateMs * 0.84);
+rm.handleShoot(room, player, {
+  weapon: 'rifle',
+  isAiming: true,
+  origin: { x: 0, y: 1.6, z: 0 },
+  dir: { x: 0, y: 0, z: -1 },
+  hits: []
+});
+assert.equal(
+  player.ammo,
+  30,
+  'Server handleShoot must reject ADS shot fired faster than adsFireRateMs * 0.82 even if it exceeds hipfire interval'
+);
+
+rm.handlePlayerMove(room, player, {
+  seq: 99,
+  x: player.x,
+  y: player.y,
+  z: player.z,
+  yaw: 0,
+  pitch: 0,
+  isAiming: true,
+  weapon: 'rifle'
+});
+assert.equal(player.isAiming, true, 'handlePlayerMove must update player.isAiming = true');
+player.ammo = 15;
+player.ammoByWeapon.rifle = 15;
+rm.handleReload(room, player, 'rifle');
+assert.equal(player.isAiming, false, 'handleReload must reset player.isAiming = false');
 
 rm.removePlayer('socket_p2');
 rm.removePlayer('socket_p1');

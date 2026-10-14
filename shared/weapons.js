@@ -5,6 +5,10 @@
 // 3) Crosshair-only recoil & easy stationary/crouch/prone accuracy (no camera shake)
 // 4) Strong run-and-gun penalty (high moveSpread & airSpread)
 
+export const BASE_HIPFIRE_FOV = 68;
+export const ADS_OPTIC_ZOOM_MULT = 1.25; // +0.25x zoom (1.25x magnification -> 54.4 FOV)
+export const ADS_OPTIC_ZOOM_FOV = 54.4;
+
 export const WEAPONS = {
   // ==================== SLOT 1: PRIMARY WEAPONS ====================
   rifle: {
@@ -13,18 +17,23 @@ export const WEAPONS = {
     category: 'AR',
     categoryLabel: 'ASSAULT RIFLE',
     name: 'VANDAL-AK',
-    role: 'AK-47 Chuẩn Tầm Trung/Xa • 1-Tap Headshot (102 DMG), 3 Viên Ngực (TTK 176ms)',
+    role: 'AK-47 Chuẩn Tầm Trung/Xa • 1-Tap Headshot (102 DMG), 3 Viên Ngực (TTK 180ms)',
+    opticType: 'reddot',
+    opticLabel: 'KOBRA RDS // 1.25X RED-DOT',
+    zoomMult: 1.25,
     damage: 34,
     headshotMult: 3.0, // 102 headshot (1-Tap Headshot up to mid-long range!)
     magSize: 30,
     reserveAmmo: 90,
-    fireRateMs: 88,         // ~682 RPM (3 body shots = 176ms TTK)
+    fireRateMs: 90,         // ~667 RPM hipfire (3 body shots = 180ms TTK)
+    adsFireRateMs: 106,     // ~566 RPM when ADS (+0.25x zoom, shoots ~15% slower for pinpoint control)
+    adsFireRateMult: 1.18,
     reloadMs: 1750,
     tacticalReloadMs: 1350,
     equipMs: 220,
     pellets: 1,
     spread: 0.0026,         // Pinpoint stationary accuracy at range
-    adsSpread: 0.0005,
+    adsSpread: 0.0004,
     firstShotSpreadMult: 0.04,
     bloomPerShot: 0.0020,
     bloomMax: 0.015,
@@ -39,7 +48,7 @@ export const WEAPONS = {
     falloffStart: 35,       // Full 34 DMG up to 35m
     falloffEnd: 85,         // Holds 85% DMG (29 DMG) even at 85m+ (4-shot kill at extreme range)
     minFalloffMult: 0.85,
-    zoomFov: 55,
+    zoomFov: 54.4,          // 1.25x (+0.25x) Red-Dot ADS zoom from base 68 FOV
     recoilPitch: 0.0,       // Crosshair-only recoil (no camera pitch climb)
     recoilYaw: 0.0,
     recoilClimbMult: 0.0,
@@ -50,7 +59,7 @@ export const WEAPONS = {
     crosshairKick: 0.018,
     visualKick: 0.052,
     color: 0xf59e0b,
-    stats: { damage: 86, fireRate: 80, recoilControl: 88, mobility: 76, range: 88 }
+    stats: { damage: 86, fireRate: 78, recoilControl: 88, mobility: 76, range: 88 }
   },
   m4a1: {
     id: 'm4a1',
@@ -58,18 +67,23 @@ export const WEAPONS = {
     category: 'AR',
     categoryLabel: 'ASSAULT RIFLE',
     name: 'PHANTOM-M4',
-    role: 'M4A1-S Giảm Thanh • Tốc bắn 833 RPM, 4 Viên Ngực tầm trung (TTK 216ms)',
+    role: 'M4A1-S Giảm Thanh • Tốc bắn 800 RPM, 4 Viên Ngực tầm trung (TTK 225ms)',
+    opticType: 'holo',
+    opticLabel: 'EOTECH EXPS3 // 1.25X HOLO',
+    zoomMult: 1.25,
     damage: 29,
     headshotMult: 2.7,  // 78 headshot (1 HS + 1 Body Kill!)
     magSize: 30,
     reserveAmmo: 90,
-    fireRateMs: 72,     // ~833 RPM (4 body shots = 216ms TTK)
+    fireRateMs: 75,     // 800 RPM hipfire (4 body shots = 225ms TTK)
+    adsFireRateMs: 89,  // ~674 RPM when ADS (+0.25x Holo zoom, shoots ~15% slower)
+    adsFireRateMult: 1.18,
     reloadMs: 1580,
     tacticalReloadMs: 1180,
     equipMs: 200,
     pellets: 1,
     spread: 0.0022,
-    adsSpread: 0.0004,
+    adsSpread: 0.00035,
     firstShotSpreadMult: 0.04,
     bloomPerShot: 0.0015,
     bloomMax: 0.012,
@@ -84,7 +98,7 @@ export const WEAPONS = {
     falloffStart: 28,   // Full 29 DMG up to 28m
     falloffEnd: 75,     // Smoothly drops to 78% (23 DMG = 5-shot kill at 75m+)
     minFalloffMult: 0.78,
-    zoomFov: 56,
+    zoomFov: 54.4,      // 1.25x (+0.25x) Holo ADS zoom from base 68 FOV
     recoilPitch: 0.0,
     recoilYaw: 0.0,
     recoilClimbMult: 0.0,
@@ -95,7 +109,7 @@ export const WEAPONS = {
     crosshairKick: 0.014,
     visualKick: 0.042,
     color: 0x06b6d4,
-    stats: { damage: 74, fireRate: 90, recoilControl: 95, mobility: 82, range: 82 }
+    stats: { damage: 74, fireRate: 88, recoilControl: 95, mobility: 82, range: 82 }
   },
   scar: {
     id: 'scar',
@@ -104,11 +118,16 @@ export const WEAPONS = {
     categoryLabel: 'ASSAULT RIFLE',
     name: 'SCAR-H 7.62',
     role: 'Battle Rifle 7.62mm • Không sợ bắn xa, 1-Tap HS & 3 Viên Ngực mọi cự ly',
+    opticType: 'holo',
+    opticLabel: 'EOTECH HWS // 1.25X HOLO',
+    zoomMult: 1.25,
     damage: 39,
     headshotMult: 2.65, // 103 headshot (1-Tap Headshot even at long range!)
     magSize: 20,
     reserveAmmo: 60,
-    fireRateMs: 110,    // ~545 RPM (3 body shots = 220ms TTK across the map)
+    fireRateMs: 118,    // ~508 RPM hipfire
+    adsFireRateMs: 138, // ~435 RPM when ADS (+0.25x Holo zoom)
+    adsFireRateMult: 1.17,
     reloadMs: 1820,
     tacticalReloadMs: 1400,
     equipMs: 240,
@@ -129,7 +148,7 @@ export const WEAPONS = {
     falloffStart: 48,   // Full 39 DMG up to 48m
     falloffEnd: 105,    // Retains 90% DMG (35 DMG = still 3-shot body kill at 100m!)
     minFalloffMult: 0.90,
-    zoomFov: 46,
+    zoomFov: 54.4,      // 1.25x (+0.25x) Holo ADS zoom from base 68 FOV
     recoilPitch: 0.0,
     recoilYaw: 0.0,
     recoilClimbMult: 0.0,
@@ -140,7 +159,7 @@ export const WEAPONS = {
     crosshairKick: 0.022,
     visualKick: 0.060,
     color: 0xeab308,
-    stats: { damage: 92, fireRate: 72, recoilControl: 84, mobility: 70, range: 94 }
+    stats: { damage: 92, fireRate: 70, recoilControl: 84, mobility: 70, range: 94 }
   },
   smg: {
     id: 'smg',
@@ -148,18 +167,23 @@ export const WEAPONS = {
     category: 'SMG',
     categoryLabel: 'SMG',
     name: 'VECTOR-KRISS',
-    role: 'Tiểu Liên CQB (<13m) • 1090 RPM mạnh áp sát, rớt sát thương nặng khi bắn xa',
+    role: 'Tiểu Liên CQB (<13m) • 1034 RPM mạnh áp sát, rớt sát thương nặng khi bắn xa',
+    opticType: 'holo',
+    opticLabel: 'UH-1 HOLO // 1.25X HOLO',
+    zoomMult: 1.25,
     damage: 22,
     headshotMult: 1.85, // 41 headshot in CQB (no long-range beam)
     magSize: 32,
     reserveAmmo: 96,
-    fireRateMs: 55,     // ~1090 RPM (5 shots = 220ms CQB TTK; at 35m+ drops to 10 DMG = 10 shots / 495ms+ TTK!)
+    fireRateMs: 58,     // ~1034 RPM hipfire
+    adsFireRateMs: 68,  // ~882 RPM when ADS (+0.25x Holo zoom)
+    adsFireRateMult: 1.17,
     reloadMs: 1380,
     tacticalReloadMs: 1050,
     equipMs: 165,
     pellets: 1,
     spread: 0.0092,     // Wider CQB cone so SMG cannot snipe ARs across the map
-    adsSpread: 0.0045,
+    adsSpread: 0.0040,
     firstShotSpreadMult: 0.35,
     bloomPerShot: 0.0028,
     bloomMax: 0.024,
@@ -174,7 +198,7 @@ export const WEAPONS = {
     falloffStart: 12,   // Full 22 DMG only within 12m CQB!
     falloffEnd: 36,     // Drops sharply to 45% (10 DMG) by 36m (needs 10 hits vs AR's 3-4 hits!)
     minFalloffMult: 0.45,
-    zoomFov: 62,
+    zoomFov: 54.4,      // 1.25x (+0.25x) Holo ADS zoom from base 68 FOV
     recoilPitch: 0.0,
     recoilYaw: 0.0,
     recoilClimbMult: 0.0,
@@ -185,7 +209,7 @@ export const WEAPONS = {
     crosshairKick: 0.015,
     visualKick: 0.036,
     color: 0x10b981,
-    stats: { damage: 56, fireRate: 98, recoilControl: 86, mobility: 95, range: 38 }
+    stats: { damage: 56, fireRate: 96, recoilControl: 86, mobility: 95, range: 38 }
   },
   shotgun: {
     id: 'shotgun',
@@ -194,11 +218,16 @@ export const WEAPONS = {
     categoryLabel: 'SHOTGUN',
     name: 'BUCKSHOT-8',
     role: 'Pump Shotgun Cận Chiến (<9m) • 8 viên đạn chùm 1-Shot áp sát, yếu hẳn khi xa',
+    opticType: 'reddot',
+    opticLabel: 'MICRO T-2 // 1.25X RED-DOT',
+    zoomMult: 1.25,
     damage: 17,
     headshotMult: 1.55, // 26 per pellet headshot in CQB
     magSize: 6,
     reserveAmmo: 24,
-    fireRateMs: 560,
+    fireRateMs: 590,
+    adsFireRateMs: 660,
+    adsFireRateMult: 1.12,
     reloadMs: 2200,
     tacticalReloadMs: 1850,
     shellByShell: true,
@@ -208,7 +237,7 @@ export const WEAPONS = {
     equipMs: 230,
     pellets: 8,
     spread: 0.056,
-    adsSpread: 0.036,
+    adsSpread: 0.034,
     firstShotSpreadMult: 0.85,
     bloomPerShot: 0.010,
     bloomMax: 0.025,
@@ -223,7 +252,7 @@ export const WEAPONS = {
     falloffStart: 8,    // Full 17 DMG/pellet only within 8m
     falloffEnd: 25,     // Drops to 25% (4 DMG/pellet) by 25m
     minFalloffMult: 0.25,
-    zoomFov: 63,
+    zoomFov: 54.4,      // 1.25x (+0.25x) Red-Dot ADS zoom from base 68 FOV
     recoilPitch: 0.0,
     recoilYaw: 0.0,
     recoilClimbMult: 0.0,
@@ -243,11 +272,16 @@ export const WEAPONS = {
     categoryLabel: 'SNIPER',
     name: 'AWP-PHANTOM',
     role: 'AWP Chuẩn CS:GO • 1-Shot Kill vào Ngực/Đầu (108 DMG) mọi cự ly',
+    opticType: 'sniper',
+    opticLabel: 'S&B PM-II // 8.0X MIL-DOT',
+    zoomMult: 3.09,
     damage: 108,
     headshotMult: 2.5, // 270 headshot, 108 torso (1-shot kill!), 84 legshot!
     magSize: 5,
     reserveAmmo: 15,
-    fireRateMs: 880,
+    fireRateMs: 920,
+    adsFireRateMs: 920,
+    adsFireRateMult: 1.0,
     reloadMs: 2250,
     tacticalReloadMs: 1750,
     boltActionMs: 480,
@@ -289,17 +323,22 @@ export const WEAPONS = {
     categoryLabel: 'MACHINEGUN',
     name: 'ODIN-M249',
     role: 'Machinegun Hạng Nặng • Băng đạn 80 viên, nằm bắn chế áp tầm trung',
+    opticType: 'holo',
+    opticLabel: 'M249 HWS // 1.25X HOLO',
+    zoomMult: 1.25,
     damage: 26,
     headshotMult: 2.0, // 52 headshot
     magSize: 80,
     reserveAmmo: 160,
-    fireRateMs: 74,     // ~810 RPM (4 shots = 222ms TTK)
+    fireRateMs: 80,     // 750 RPM hipfire
+    adsFireRateMs: 94,  // ~638 RPM when ADS (+0.25x Holo zoom)
+    adsFireRateMult: 1.18,
     reloadMs: 2750,
     tacticalReloadMs: 2200,
     equipMs: 310,
     pellets: 1,
     spread: 0.0058,
-    adsSpread: 0.0014,
+    adsSpread: 0.0012,
     firstShotSpreadMult: 0.16,
     bloomPerShot: 0.0019,
     bloomMax: 0.018,
@@ -314,7 +353,7 @@ export const WEAPONS = {
     falloffStart: 25,
     falloffEnd: 70,
     minFalloffMult: 0.72,
-    zoomFov: 56,
+    zoomFov: 54.4,      // 1.25x (+0.25x) Holo ADS zoom from base 68 FOV
     recoilPitch: 0.0,
     recoilYaw: 0.0,
     recoilClimbMult: 0.0,
@@ -325,7 +364,7 @@ export const WEAPONS = {
     crosshairKick: 0.017,
     visualKick: 0.050,
     color: 0xf97316,
-    stats: { damage: 76, fireRate: 86, recoilControl: 85, mobility: 54, range: 78 }
+    stats: { damage: 76, fireRate: 84, recoilControl: 85, mobility: 54, range: 78 }
   },
 
   // ==================== SLOT 2: SECONDARY WEAPONS (PISTOLS) ====================
@@ -335,18 +374,23 @@ export const WEAPONS = {
     category: 'PISTOL',
     categoryLabel: 'SECONDARY',
     name: 'PULSE-P9',
-    role: 'USP-S / P250 Chiến Thuật • Bắn tap nhanh, rớt sát thương ở tầm xa',
+    role: 'USP-S / P250 Chiến Thuật • Bắn tap chuẩn xác, rớt sát thương ở tầm xa',
+    opticType: 'reddot',
+    opticLabel: 'RMR MICRO // 1.25X RED-DOT',
+    zoomMult: 1.25,
     damage: 27,
     headshotMult: 2.5, // 68 headshot at close range
     magSize: 12,
     reserveAmmo: 36,
-    fireRateMs: 130,
+    fireRateMs: 140,
+    adsFireRateMs: 162,
+    adsFireRateMult: 1.16,
     reloadMs: 1100,
     tacticalReloadMs: 850,
     equipMs: 135,
     pellets: 1,
     spread: 0.0032,
-    adsSpread: 0.0009,
+    adsSpread: 0.0008,
     firstShotSpreadMult: 0.08,
     bloomPerShot: 0.0020,
     bloomMax: 0.015,
@@ -361,7 +405,7 @@ export const WEAPONS = {
     falloffStart: 16,
     falloffEnd: 48,
     minFalloffMult: 0.60,
-    zoomFov: 64,
+    zoomFov: 54.4,      // 1.25x (+0.25x) Red-Dot ADS zoom from base 68 FOV
     recoilPitch: 0.0,
     recoilYaw: 0.0,
     recoilClimbMult: 0.0,
@@ -372,7 +416,7 @@ export const WEAPONS = {
     crosshairKick: 0.015,
     visualKick: 0.042,
     color: 0xa855f7,
-    stats: { damage: 60, fireRate: 80, recoilControl: 92, mobility: 95, range: 56 }
+    stats: { damage: 60, fireRate: 78, recoilControl: 92, mobility: 95, range: 56 }
   },
   deagle: {
     id: 'deagle',
@@ -381,17 +425,22 @@ export const WEAPONS = {
     categoryLabel: 'SECONDARY',
     name: 'SHERIFF .50',
     role: 'Desert Eagle .50 AE • "Juan Deag" 1-Tap Headshot (<38m)',
+    opticType: 'reddot',
+    opticLabel: 'DELTA-PRO // 1.25X RED-DOT',
+    zoomMult: 1.25,
     damage: 52,
     headshotMult: 2.45, // 127 headshot (1-Tap Headshot up to 38m!)
     magSize: 7,
     reserveAmmo: 28,
-    fireRateMs: 235,
+    fireRateMs: 250,
+    adsFireRateMs: 288,
+    adsFireRateMult: 1.15,
     reloadMs: 1420,
     tacticalReloadMs: 1120,
     equipMs: 165,
     pellets: 1,
     spread: 0.0032,
-    adsSpread: 0.0005,
+    adsSpread: 0.0004,
     firstShotSpreadMult: 0.04,
     bloomPerShot: 0.008,
     bloomMax: 0.024,
@@ -406,7 +455,7 @@ export const WEAPONS = {
     falloffStart: 25,
     falloffEnd: 68,
     minFalloffMult: 0.68,
-    zoomFov: 60,
+    zoomFov: 54.4,      // 1.25x (+0.25x) Red-Dot ADS zoom from base 68 FOV
     recoilPitch: 0.0,
     recoilYaw: 0.0,
     recoilClimbMult: 0.0,
@@ -417,7 +466,7 @@ export const WEAPONS = {
     crosshairKick: 0.028,
     visualKick: 0.075,
     color: 0xf43f5e,
-    stats: { damage: 90, fireRate: 56, recoilControl: 78, mobility: 88, range: 74 }
+    stats: { damage: 90, fireRate: 54, recoilControl: 78, mobility: 88, range: 74 }
   },
   glock: {
     id: 'glock',
@@ -425,18 +474,23 @@ export const WEAPONS = {
     category: 'PISTOL',
     categoryLabel: 'SECONDARY',
     name: 'FRENZY-G18',
-    role: 'Súng Lục Liên Thanh • Xả đạn 920 RPM cứu nguy áp sát (<10m)',
+    role: 'Súng Lục Liên Thanh • Xả đạn 857 RPM cứu nguy áp sát (<10m)',
+    opticType: 'reddot',
+    opticLabel: 'ACRO P-2 // 1.25X RED-DOT',
+    zoomMult: 1.25,
     damage: 17,
     headshotMult: 1.65, // 28 headshot at point-blank
     magSize: 18,
     reserveAmmo: 54,
-    fireRateMs: 65,     // ~923 RPM
+    fireRateMs: 70,     // ~857 RPM hipfire
+    adsFireRateMs: 82,  // ~732 RPM when ADS (+0.25x Red-Dot zoom)
+    adsFireRateMult: 1.17,
     reloadMs: 1280,
     tacticalReloadMs: 960,
     equipMs: 135,
     pellets: 1,
     spread: 0.0088,
-    adsSpread: 0.0038,
+    adsSpread: 0.0034,
     firstShotSpreadMult: 0.28,
     bloomPerShot: 0.0026,
     bloomMax: 0.022,
@@ -450,7 +504,7 @@ export const WEAPONS = {
     falloffStart: 10,   // Full 17 DMG only within 10m
     falloffEnd: 30,     // Drops to 42% (7 DMG) by 30m
     minFalloffMult: 0.42,
-    zoomFov: 65,
+    zoomFov: 54.4,      // 1.25x (+0.25x) Red-Dot ADS zoom from base 68 FOV
     recoilPitch: 0.0,
     recoilYaw: 0.0,
     recoilClimbMult: 0.0,
@@ -461,7 +515,7 @@ export const WEAPONS = {
     crosshairKick: 0.014,
     visualKick: 0.038,
     color: 0x84cc16,
-    stats: { damage: 42, fireRate: 94, recoilControl: 84, mobility: 96, range: 32 }
+    stats: { damage: 42, fireRate: 92, recoilControl: 84, mobility: 96, range: 32 }
   },
 
   // ==================== SLOT 3: MELEE WEAPON (KNIFE) ====================
@@ -472,6 +526,8 @@ export const WEAPONS = {
     categoryLabel: 'MELEE',
     isMelee: true,
     infiniteAmmo: true,
+    opticType: 'none',
+    zoomMult: 1.0,
     name: 'KARAMBIT-X',
     role: 'Dao Cận Chiến • Chém nhanh, chạy cực lẹ (+12% Tốc chạy)',
     damage: 55,
@@ -479,6 +535,8 @@ export const WEAPONS = {
     magSize: 1,
     reserveAmmo: 0,
     fireRateMs: 310,
+    adsFireRateMs: 310,
+    adsFireRateMult: 1.0,
     reloadMs: 0,
     tacticalReloadMs: 0,
     equipMs: 130,
@@ -498,7 +556,7 @@ export const WEAPONS = {
     falloffStart: 3.3,
     falloffEnd: 5.0,
     minFalloffMult: 1.0,
-    zoomFov: 72,
+    zoomFov: 68,
     recoilPitch: 0.0,
     recoilYaw: 0.0,
     recoilClimbMult: 0.0,
@@ -512,6 +570,21 @@ export const WEAPONS = {
     stats: { damage: 85, fireRate: 82, recoilControl: 100, mobility: 100, range: 12 }
   }
 };
+
+/**
+ * Resolves the effective shot cooldown interval (in ms) for a weapon,
+ * applying the slower ADS fire-rate interval when aiming down sights (`isAiming === true`).
+ */
+export function getEffectiveFireRateMs(weaponCfg, isAiming = false) {
+  if (!weaponCfg) return 100;
+  const baseMs = Number(weaponCfg.fireRateMs) || 100;
+  if (!isAiming || weaponCfg.isMelee) return baseMs;
+  if (typeof weaponCfg.adsFireRateMs === 'number' && weaponCfg.adsFireRateMs > 0) {
+    return weaponCfg.adsFireRateMs;
+  }
+  const mult = Number(weaponCfg.adsFireRateMult) || 1.0;
+  return Math.round(baseMs * mult);
+}
 
 /**
  * Computes the distance-based damage falloff multiplier for a weapon at `dist` meters.

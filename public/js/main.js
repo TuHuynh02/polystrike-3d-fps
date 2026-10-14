@@ -54,6 +54,8 @@ const hudHpCard = document.getElementById('hud-hp-card');
 const hudHpAdrenalineTag = document.getElementById('hud-hp-adrenaline-tag');
 const damageDirIndicator = document.getElementById('damage-dir-indicator');
 const sniperScope = document.getElementById('sniper-scope');
+const opticScope = document.getElementById('optic-scope');
+const opticTelemetry = document.getElementById('optic-telemetry');
 const crosshair = document.getElementById('crosshair');
 const hitmarker = document.getElementById('hitmarker');
 const hudFloatingDmg = document.getElementById('hud-floating-dmg');
@@ -146,14 +148,179 @@ const victoryWinnerStats = document.getElementById('victory-winner-stats');
 const victoryLeaderboardBody = document.getElementById('victory-leaderboard-body');
 const nextMatchCountdown = document.getElementById('next-match-countdown');
 
+// User Preferences Persistence & Keyboard Lock Constants
+const USER_PREFS_STORAGE_KEY = 'polystrike_user_prefs_v1';
+const LEGACY_NAME_STORAGE_KEY = 'polystrike_name';
+const VALID_OPERATOR_COLORS = [0xe5a024, 0x4b5320, 0x38bdf8, 0xef4444, 0x94a3b8];
+const DEFAULT_OPERATOR_COLOR = 0xe5a024;
+const KEYBOARD_LOCK_CODES = [
+  'KeyW',
+  'KeyA',
+  'KeyS',
+  'KeyD',
+  'KeyR',
+  'KeyQ',
+  'KeyE',
+  'KeyF',
+  'KeyG',
+  'KeyC',
+  'ControlLeft',
+  'ShiftLeft',
+  'Space',
+  'Tab',
+  'Escape'
+];
+const PROTECTED_GAMEPLAY_KEY_CODES = new Set([
+  'KeyW',
+  'KeyA',
+  'KeyS',
+  'KeyD',
+  'KeyR',
+  'KeyF',
+  'KeyG',
+  'KeyQ',
+  'KeyE',
+  'KeyC',
+  'KeyZ',
+  'KeyX',
+  'KeyB',
+  'KeyL',
+  'KeyT',
+  'KeyN',
+  'KeyP',
+  'KeyO',
+  'KeyU',
+  'KeyH',
+  'KeyJ',
+  'Tab',
+  'Space',
+  'Digit1',
+  'Digit2',
+  'Digit3',
+  'ShiftLeft',
+  'ShiftRight',
+  'ControlLeft',
+  'ControlRight'
+]);
+
+function loadUserPrefs() {
+  let raw = {};
+  try {
+    const storedJson = localStorage.getItem(USER_PREFS_STORAGE_KEY);
+    if (storedJson) {
+      const parsed = JSON.parse(storedJson);
+      if (parsed && typeof parsed === 'object') {
+        raw = parsed;
+      }
+    }
+  } catch {
+    raw = {};
+  }
+
+  let legacyName = '';
+  try {
+    legacyName = localStorage.getItem(LEGACY_NAME_STORAGE_KEY) || '';
+  } catch {
+    legacyName = '';
+  }
+
+  const candidateName = typeof raw.playerName === 'string' && raw.playerName.trim()
+    ? raw.playerName.trim()
+    : legacyName.trim();
+  const cleanName = candidateName.replace(/[<>&"'`]/g, '').trim().slice(0, 16) ||
+    `Striker_${ Math.floor(100 + Math.random() * 899) }`;
+
+  const primaryWeapon = PRIMARY_WEAPONS.includes(raw.primaryWeapon)
+    ? raw.primaryWeapon
+    : (DEFAULT_LOADOUT.primary || 'rifle');
+
+  const secondaryWeapon = SECONDARY_WEAPONS.includes(raw.secondaryWeapon)
+    ? raw.secondaryWeapon
+    : (DEFAULT_LOADOUT.secondary || 'pistol');
+
+  const parsedColor = Number(raw.operatorColor);
+  const operatorColor = VALID_OPERATOR_COLORS.includes(parsedColor)
+    ? parsedColor
+    : DEFAULT_OPERATOR_COLOR;
+
+  const candidateMap = typeof raw.selectedMap === 'string' ? raw.selectedMap : '';
+  const resolvedMapCfg = candidateMap ? getMapConfig(candidateMap) : null;
+  const selectedMap = candidateMap && resolvedMapCfg?.id === candidateMap
+    ? candidateMap
+    : (DEFAULT_MAP_ID || 'cyber_citadel');
+
+  const parsedBots = Number(raw.botCount);
+  const maxBots = MATCH_CONFIG.MAX_BOTS || 8;
+  const botCount = Number.isFinite(parsedBots)
+    ? Math.max(0, Math.min(maxBots, Math.round(parsedBots)))
+    : (MATCH_CONFIG.DEFAULT_BOTS ?? 4);
+
+  const parsedSens = Number(raw.sensitivity);
+  const sensitivity = Number.isFinite(parsedSens)
+    ? Math.max(0.3, Math.min(2.5, Math.round(parsedSens * 10) / 10))
+    : 1.0;
+
+  const soundEnabled = typeof raw.soundEnabled === 'boolean' ? raw.soundEnabled : true;
+
+  return {
+    playerName: cleanName,
+    primaryWeapon,
+    secondaryWeapon,
+    operatorColor,
+    selectedMap,
+    botCount,
+    sensitivity,
+    soundEnabled
+  };
+}
+
+const userPrefs = loadUserPrefs();
+
+function saveUserPrefs(partial = {}) {
+  Object.assign(userPrefs, partial);
+  try {
+    localStorage.setItem(USER_PREFS_STORAGE_KEY, JSON.stringify(userPrefs));
+    if (userPrefs.playerName) {
+      localStorage.setItem(LEGACY_NAME_STORAGE_KEY, userPrefs.playerName);
+    }
+  } catch {
+    // Ignore storage quota or private browsing restrictions
+  }
+}
+
+function lockGameplayKeys() {
+  if (typeof navigator !== 'undefined' && navigator.keyboard && typeof navigator.keyboard.lock === 'function') {
+    try {
+      const lockResult = navigator.keyboard.lock(KEYBOARD_LOCK_CODES);
+      if (lockResult && typeof lockResult.catch === 'function') {
+        lockResult.catch(() => {});
+      }
+    } catch {
+      // Ignore unsupported Keyboard Lock API errors
+    }
+  }
+}
+
+function unlockGameplayKeys() {
+  if (typeof navigator !== 'undefined' && navigator.keyboard && typeof navigator.keyboard.unlock === 'function') {
+    try {
+      navigator.keyboard.unlock();
+    } catch {
+      // Ignore keyboard unlock errors
+    }
+  }
+}
+
 // Client Application State
-let selectedStartingWeapon = 'rifle';
+let isRestoringPrefs = false;
+let selectedStartingWeapon = userPrefs.primaryWeapon;
 let selectedLoadout = {
-  primary: DEFAULT_LOADOUT.primary || 'rifle',
-  secondary: DEFAULT_LOADOUT.secondary || 'pistol',
+  primary: userPrefs.primaryWeapon,
+  secondary: userPrefs.secondaryWeapon,
   melee: DEFAULT_LOADOUT.melee || 'knife'
 };
-let selectedMapId = DEFAULT_MAP_ID || 'cyber_citadel';
+let selectedMapId = userPrefs.selectedMap;
+let selectedOperatorColor = userPrefs.operatorColor;
 let activeRoomCode = '';
 let latestPlayers = [];
 let hitmarkerTimer = null;
@@ -187,17 +354,6 @@ const hudCache = {
   chMoving: null,
   chRecoiling: null
 };
-
-// Restore saved player name if available
-const savedName = localStorage.getItem('polystrike_name');
-if (savedName) {
-  playerNameInput.value = savedName;
-} else {
-  playerNameInput.value = `Striker_${ Math.floor(100 + Math.random() * 899) }`;
-}
-if (showcaseOperatorName) {
-  showcaseOperatorName.textContent = (playerNameInput.value.trim() || 'STRIKER').toUpperCase();
-}
 
 // Initialize 3D Engine
 const game = new Game3D(canvasContainer, {
@@ -275,16 +431,39 @@ const game = new Game3D(canvasContainer, {
     socket.emit('pickupWeapon', { dropId });
   },
   onWeaponSwitchSound: () => {
-    sfx.playWeaponSwitch();
+    if (!isRestoringPrefs) {
+      sfx.playWeaponSwitch();
+    }
   },
   onAimChange: (isAiming, weaponId) => {
+    const wCfg = WEAPONS[weaponId] || WEAPONS.rifle;
     if (isAiming && weaponId === 'sniper') {
       sniperScope.classList.remove('hidden');
+      opticScope?.classList.add('hidden');
+      opticScope?.classList.remove('optic-holo', 'optic-reddot');
       crosshair.classList.add('hidden');
+      hudCache.chAiming = true;
+    } else if (isAiming && !wCfg?.isMelee && wCfg?.opticType !== 'none') {
+      sniperScope.classList.add('hidden');
+      const isHolo = wCfg?.opticType === 'holo';
+      if (opticScope) {
+        opticScope.classList.remove('hidden');
+        opticScope.classList.toggle('optic-holo', isHolo);
+        opticScope.classList.toggle('optic-reddot', !isHolo);
+      }
+      if (opticTelemetry) {
+        opticTelemetry.textContent = wCfg?.opticLabel || (isHolo ? 'EOTECH HOLO // 1.25X' : 'REFLEX RED-DOT // 1.25X');
+      }
+      crosshair.classList.remove('hidden');
+      crosshair.classList.toggle('aiming', true);
+      hudCache.chAiming = true;
     } else {
       sniperScope.classList.add('hidden');
+      opticScope?.classList.add('hidden');
+      opticScope?.classList.remove('optic-holo', 'optic-reddot');
       crosshair.classList.remove('hidden');
-      crosshair.classList.toggle('aiming', Boolean(isAiming));
+      crosshair.classList.toggle('aiming', false);
+      hudCache.chAiming = false;
     }
   },
   onSpreadUpdate: (effectiveSpread, isAiming, isMoving = false, crosshairKick = 0) => {
@@ -348,6 +527,9 @@ const game = new Game3D(canvasContainer, {
     sfx.playLand(intensity);
   },
   onPointerLockChange: (locked) => {
+    if (locked) {
+      lockGameplayKeys();
+    }
     if (!game.inMatch) return;
     const isLoadoutOpen = loadoutModal && !loadoutModal.classList.contains('hidden');
     if (!locked && matchEndModal.classList.contains('hidden') && deathOverlay.classList.contains('hidden') && !isLoadoutOpen) {
@@ -381,6 +563,112 @@ const game = new Game3D(canvasContainer, {
   onFpsUpdate: (fps) => {
     hudFps.textContent = String(fps);
   }
+});
+
+// Keep game.mouseSensitivity and game.sensitivity bidirectionally synchronized
+if (!Object.getOwnPropertyDescriptor(game, 'mouseSensitivity')) {
+  Object.defineProperty(game, 'mouseSensitivity', {
+    get() {
+      return this.sensitivity;
+    },
+    set(val) {
+      const clean = Number(val);
+      if (Number.isFinite(clean)) {
+        this.sensitivity = clean;
+      }
+    },
+    configurable: true,
+    enumerable: true
+  });
+}
+
+// Wrap game.requestPointerLock so Keyboard Lock API is engaged automatically whenever entering pointer lock
+const origRequestPointerLock = game.requestPointerLock.bind(game);
+game.requestPointerLock = () => {
+  origRequestPointerLock();
+  lockGameplayKeys();
+};
+
+// Prevent accidental tab closure (Ctrl+W, Ctrl+R, F5, etc.) during an active match or room session
+window.addEventListener('beforeunload', (e) => {
+  if (game.inMatch || activeRoomCode) {
+    e.preventDefault();
+    e.returnValue = '';
+    return '';
+  }
+});
+
+document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement === game.renderer?.domElement || (game.inMatch && game.isPointerLocked)) {
+    lockGameplayKeys();
+  }
+});
+
+document.addEventListener('fullscreenchange', () => {
+  if (document.fullscreenElement && (game.inMatch || game.isPointerLocked)) {
+    lockGameplayKeys();
+  }
+});
+
+// Capture-phase keydown protection to intercept browser shortcuts (Ctrl+W, Ctrl+R, Ctrl+Q, Ctrl+T, Ctrl+N, Ctrl+S, Ctrl+D, F5, etc.)
+// while keeping movement and crouching keys (W/A/S/D, Ctrl, Shift, Space) responsive in-game
+window.addEventListener('keydown', (e) => {
+  if (!game.inMatch && !game.isPointerLocked) return;
+
+  const activeTag = document.activeElement?.tagName;
+  const isTypingInField =
+    !game.isPointerLocked &&
+    (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT');
+
+  if (e.code === 'F5') {
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+
+  const hasModifier = Boolean(e.ctrlKey || e.metaKey || e.altKey);
+  if (!hasModifier) return;
+
+  if (isTypingInField) {
+    if (
+      e.code === 'KeyW' ||
+      e.code === 'KeyR' ||
+      e.code === 'KeyQ' ||
+      e.code === 'KeyT' ||
+      e.code === 'KeyN'
+    ) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    return;
+  }
+
+  if (PROTECTED_GAMEPLAY_KEY_CODES.has(e.code)) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Ensure movement & crouch keys still register smoothly when stopPropagation() is used
+    if (e.code in game.keys) {
+      game.keys[e.code] = true;
+    } else if (e.code === 'ControlRight') {
+      game.keys.ControlLeft = true;
+    }
+  }
+}, { capture: true });
+
+window.addEventListener('keyup', (e) => {
+  if (e.code in game.keys) {
+    game.keys[e.code] = false;
+  } else if (e.code === 'ControlRight') {
+    game.keys.ControlLeft = false;
+  }
+}, { capture: true });
+
+window.addEventListener('blur', () => {
+  for (const k of Object.keys(game.keys)) {
+    game.keys[k] = false;
+  }
+  game.isMouseDown = false;
 });
 
 // Detect ?room=CODE in URL
@@ -764,9 +1052,37 @@ function toggleLoadoutModal(forceOpen = null) {
   }
 }
 
+function syncLobbyWeaponSelectionUi(weaponId) {
+  if (!WEAPONS[weaponId]) return;
+  if (weaponGrid) {
+    weaponGrid.querySelectorAll('.weapon-option').forEach((el) => {
+      el.classList.toggle('active', el.dataset.weapon === weaponId);
+    });
+  }
+  if (showcaseWeaponName) {
+    showcaseWeaponName.textContent = WEAPONS[weaponId].name;
+  }
+}
+
+function syncLobbyMapSelectionUi(mapId) {
+  if (mapGrid) {
+    mapGrid.querySelectorAll('.map-option').forEach((el) => {
+      el.classList.toggle('active', el.dataset.map === mapId);
+    });
+  }
+  if (pauseMapSelect) {
+    pauseMapSelect.value = mapId;
+  }
+}
+
 function applySelectedLoadoutAndNotify() {
   game.setLoadout(selectedLoadout);
   syncHotbarSlotsHud();
+  syncLobbyWeaponSelectionUi(selectedLoadout.primary);
+  saveUserPrefs({
+    primaryWeapon: selectedLoadout.primary,
+    secondaryWeapon: selectedLoadout.secondary
+  });
   socket.emit('updateLoadout', selectedLoadout);
   renderLoadoutModal();
 }
@@ -779,6 +1095,7 @@ if (loadoutPrimaryGrid) {
     if (WEAPONS[wId]?.slot === 1) {
       selectedLoadout.primary = wId;
       selectedStartingWeapon = wId;
+      game.setLobbyWeapon(wId);
       applySelectedLoadoutAndNotify();
     }
   });
@@ -824,6 +1141,76 @@ function updateMapHud(mapId) {
   if (pauseMapSelect) pauseMapSelect.value = mapCfg.id;
 }
 
+function applyRestoredUserPrefs() {
+  isRestoringPrefs = true;
+  try {
+    // 1. Player Name & Showcase Callsign
+    if (playerNameInput) {
+      playerNameInput.value = userPrefs.playerName;
+    }
+    if (showcaseOperatorName) {
+      showcaseOperatorName.textContent = (userPrefs.playerName.trim() || 'STRIKER').toUpperCase();
+    }
+
+    // 2. Primary & Secondary Weapons (Lobby Grid, 3D Showcase, Hotbar & Loadout Modal)
+    selectedStartingWeapon = userPrefs.primaryWeapon;
+    selectedLoadout.primary = userPrefs.primaryWeapon;
+    selectedLoadout.secondary = userPrefs.secondaryWeapon;
+    syncLobbyWeaponSelectionUi(selectedStartingWeapon);
+    game.setLoadout(selectedLoadout, selectedStartingWeapon);
+    game.setLobbyWeapon(selectedStartingWeapon);
+    syncHotbarSlotsHud();
+    renderLoadoutModal();
+
+    // 3. Operator Camo / Rig Trim Swatch & 3D Showcase Operator Color
+    selectedOperatorColor = userPrefs.operatorColor;
+    game.setLobbyOperatorColor(selectedOperatorColor);
+    if (operatorColorSwatches) {
+      operatorColorSwatches.querySelectorAll('.color-swatch').forEach((el) => {
+        el.classList.toggle('active', Number(el.dataset.color) === selectedOperatorColor);
+      });
+    }
+
+    // 4. Selected Combat Sector Map
+    selectedMapId = userPrefs.selectedMap;
+    syncLobbyMapSelectionUi(selectedMapId);
+    if (selectedMapId !== DEFAULT_MAP_ID) {
+      game.loadMap(selectedMapId);
+    }
+    updateMapHud(selectedMapId);
+
+    // 5. Bot AI Count
+    if (lobbyBotCount) {
+      lobbyBotCount.value = String(userPrefs.botCount);
+    }
+    if (pauseBotSelect) {
+      pauseBotSelect.value = String(userPrefs.botCount);
+    }
+
+    // 6. Mouse Sensitivity
+    if (sensSlider) {
+      sensSlider.value = String(userPrefs.sensitivity);
+    }
+    if (sensValue) {
+      sensValue.textContent = userPrefs.sensitivity.toFixed(1);
+    }
+    game.sensitivity = userPrefs.sensitivity;
+    game.mouseSensitivity = userPrefs.sensitivity;
+
+    // 7. Sound Effects Enabled
+    if (soundCheckbox) {
+      soundCheckbox.checked = Boolean(userPrefs.soundEnabled);
+    }
+    sfx.enabled = Boolean(userPrefs.soundEnabled);
+
+    saveUserPrefs();
+  } finally {
+    isRestoringPrefs = false;
+  }
+}
+
+applyRestoredUserPrefs();
+
 function formatTime(sec) {
   const s = Math.max(0, Math.floor(sec));
   const m = Math.floor(s / 60);
@@ -834,19 +1221,28 @@ function formatTime(sec) {
 // Join Room Action
 function requestJoinRoom({ mode = 'public', roomCode = '' }) {
   lobbyError.classList.add('hidden');
-  const name = playerNameInput.value.trim() || 'Striker';
-  localStorage.setItem('polystrike_name', name);
-
+  const rawName = playerNameInput.value.trim();
+  const name = (rawName.replace(/[<>&"'`]/g, '').trim().slice(0, 16)) || userPrefs.playerName || 'Striker';
   const botCount = Number(lobbyBotCount.value);
-  sfx.ensureContext();
 
   selectedLoadout.primary = selectedStartingWeapon;
+  saveUserPrefs({
+    playerName: name,
+    primaryWeapon: selectedStartingWeapon,
+    secondaryWeapon: selectedLoadout.secondary,
+    operatorColor: selectedOperatorColor,
+    selectedMap: selectedMapId,
+    botCount
+  });
+
+  sfx.ensureContext();
 
   socket.emit('joinRoom', {
     name,
     roomCode,
     mode,
     botCount,
+    color: selectedOperatorColor,
     weapon: selectedStartingWeapon,
     loadout: selectedLoadout,
     mapId: selectedMapId
@@ -854,25 +1250,39 @@ function requestJoinRoom({ mode = 'public', roomCode = '' }) {
 }
 
 // Lobby Event Listeners
-playerNameInput.addEventListener('input', () => {
+const handlePlayerNamePersist = () => {
+  const trimmed = playerNameInput.value.replace(/[<>&"'`]/g, '').trim().slice(0, 16);
   if (showcaseOperatorName) {
-    showcaseOperatorName.textContent = (playerNameInput.value.trim() || 'STRIKER').toUpperCase();
+    showcaseOperatorName.textContent = (trimmed || 'STRIKER').toUpperCase();
   }
-});
+  if (trimmed) {
+    saveUserPrefs({ playerName: trimmed });
+  }
+};
+playerNameInput.addEventListener('input', handlePlayerNamePersist);
+playerNameInput.addEventListener('change', handlePlayerNamePersist);
 
 weaponGrid.addEventListener('click', (e) => {
   const btn = e.target.closest('.weapon-option');
   if (!btn) return;
   selectedStartingWeapon = btn.dataset.weapon;
   selectedLoadout.primary = selectedStartingWeapon;
-  weaponGrid.querySelectorAll('.weapon-option').forEach((el) => {
-    el.classList.toggle('active', el === btn);
-  });
+  syncLobbyWeaponSelectionUi(selectedStartingWeapon);
+  game.setLoadout(selectedLoadout);
   game.setLobbyWeapon(selectedStartingWeapon);
-  if (showcaseWeaponName && WEAPONS[selectedStartingWeapon]) {
-    showcaseWeaponName.textContent = WEAPONS[selectedStartingWeapon].name;
-  }
+  syncHotbarSlotsHud();
+  saveUserPrefs({ primaryWeapon: selectedStartingWeapon });
 });
+
+if (lobbyBotCount) {
+  lobbyBotCount.addEventListener('change', () => {
+    const botCount = Number(lobbyBotCount.value);
+    if (pauseBotSelect) {
+      pauseBotSelect.value = String(botCount);
+    }
+    saveUserPrefs({ botCount });
+  });
+}
 
 // Interactive 3D Humanoid Showcase Turntable & Controls in Lobby
 if (operatorDragZone) {
@@ -907,10 +1317,12 @@ if (operatorColorSwatches) {
     if (!sw) return;
     const hexVal = Number(sw.dataset.color);
     if (!Number.isNaN(hexVal)) {
+      selectedOperatorColor = hexVal;
       game.setLobbyOperatorColor(hexVal);
       operatorColorSwatches.querySelectorAll('.color-swatch').forEach((el) => {
         el.classList.toggle('active', el === sw);
       });
+      saveUserPrefs({ operatorColor: hexVal });
     }
   });
 }
@@ -949,11 +1361,11 @@ if (mapGrid) {
     const btn = e.target.closest('.map-option');
     if (!btn) return;
     selectedMapId = btn.dataset.map;
-    mapGrid.querySelectorAll('.map-option').forEach((el) => {
-      el.classList.toggle('active', el === btn);
-    });
+    syncLobbyMapSelectionUi(selectedMapId);
     // Live 3D map preview in the lobby background
     game.loadMap(selectedMapId);
+    updateMapHud(selectedMapId);
+    saveUserPrefs({ selectedMap: selectedMapId });
   });
 }
 
@@ -996,11 +1408,19 @@ btnResume.addEventListener('click', () => {
 
 btnLeaveRoom.addEventListener('click', () => {
   socket.emit('leaveRoom');
+  activeRoomCode = '';
   game.inMatch = false;
+  game.isAiming = false;
+  unlockGameplayKeys();
   game.exitPointerLock();
   game.clearAllRemotePlayers();
   game.clearDroppedWeapons();
   game.clearGrenades?.();
+  sniperScope.classList.add('hidden');
+  opticScope?.classList.add('hidden');
+  opticScope?.classList.remove('optic-holo', 'optic-reddot');
+  crosshair.classList.remove('hidden', 'aiming');
+  hudCache.chAiming = false;
   pauseModal.classList.add('hidden');
   if (loadoutModal) loadoutModal.classList.add('hidden');
   deathOverlay.classList.add('hidden');
@@ -1012,22 +1432,35 @@ btnLeaveRoom.addEventListener('click', () => {
 
 if (pauseMapSelect) {
   pauseMapSelect.addEventListener('change', () => {
+    selectedMapId = pauseMapSelect.value;
+    syncLobbyMapSelectionUi(selectedMapId);
+    saveUserPrefs({ selectedMap: selectedMapId });
     socket.emit('changeMap', { mapId: pauseMapSelect.value });
   });
 }
 
 pauseBotSelect.addEventListener('change', () => {
-  socket.emit('setBots', { botCount: Number(pauseBotSelect.value) });
+  const botCount = Number(pauseBotSelect.value);
+  if (lobbyBotCount) {
+    lobbyBotCount.value = String(botCount);
+  }
+  saveUserPrefs({ botCount });
+  socket.emit('setBots', { botCount });
 });
 
-sensSlider.addEventListener('input', () => {
-  const val = Number(sensSlider.value);
+const handleSensSliderChange = () => {
+  const val = Math.max(0.3, Math.min(2.5, Math.round(Number(sensSlider.value) * 10) / 10));
   sensValue.textContent = val.toFixed(1);
   game.sensitivity = val;
-});
+  game.mouseSensitivity = val;
+  saveUserPrefs({ sensitivity: val });
+};
+sensSlider.addEventListener('input', handleSensSliderChange);
+sensSlider.addEventListener('change', handleSensSliderChange);
 
 soundCheckbox.addEventListener('change', () => {
   sfx.enabled = soundCheckbox.checked;
+  saveUserPrefs({ soundEnabled: soundCheckbox.checked });
 });
 
 // Active Rooms Browser Fetcher
@@ -1218,7 +1651,12 @@ socket.on('loadoutUpdated', (data) => {
     };
     selectedStartingWeapon = selectedLoadout.primary;
     game.setLoadout(selectedLoadout);
+    syncLobbyWeaponSelectionUi(selectedStartingWeapon);
     syncHotbarSlotsHud();
+    saveUserPrefs({
+      primaryWeapon: selectedLoadout.primary,
+      secondaryWeapon: selectedLoadout.secondary
+    });
   }
 });
 
@@ -1449,6 +1887,7 @@ socket.on('killEvent', (data) => {
 
   if (data.victimId === game.localId) {
     game.alive = false;
+    game.isAiming = false;
     localMultiKillCount = 0;
     lastLocalKillAt = 0;
     lastGrenadeThrowAt = 0;
@@ -1457,7 +1896,10 @@ socket.on('killEvent', (data) => {
     multikillBanner?.classList.add('hidden');
     if (weaponPickupPrompt) weaponPickupPrompt.classList.add('hidden');
     sniperScope.classList.add('hidden');
-    crosshair.classList.remove('hidden');
+    opticScope?.classList.add('hidden');
+    opticScope?.classList.remove('optic-holo', 'optic-reddot');
+    crosshair.classList.remove('hidden', 'aiming');
+    hudCache.chAiming = false;
     deathKillerName.textContent = data.killerName;
     deathWeaponName.textContent = data.weaponName || (data.weapon === 'grenade' ? 'FRAG GRENADE' : data.weapon);
     deathOverlay.classList.remove('hidden');
@@ -1571,6 +2013,7 @@ socket.on('weaponSwapped', (data) => {
 
 socket.on('matchEnded', (data) => {
   if (!game.inMatch) return;
+  game.isAiming = false;
   clearSpawnProtectionHud();
   clearAdrenalineHealHud();
   multikillBanner?.classList.add('hidden');
@@ -1579,6 +2022,10 @@ socket.on('matchEnded', (data) => {
   pauseModal.classList.add('hidden');
   deathOverlay.classList.add('hidden');
   sniperScope.classList.add('hidden');
+  opticScope?.classList.add('hidden');
+  opticScope?.classList.remove('optic-holo', 'optic-reddot');
+  crosshair.classList.remove('hidden', 'aiming');
+  hudCache.chAiming = false;
 
   victoryWinnerName.textContent = data.winner?.name || '---';
   victoryWinnerStats.textContent = `${ data.winner?.kills || 0 } Kills • ${ data.winner?.deaths || 0 } Deaths`;

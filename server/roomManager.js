@@ -5,6 +5,7 @@ import {
   PLAYER_COLORS,
   WEAPONS,
   computeDistanceFalloff,
+  getEffectiveFireRateMs,
   getMapConfig,
   hasLineOfSight,
   isPointClearOfObstacles
@@ -19,6 +20,14 @@ import {
   rewindRoomPlayersForShot
 } from '../shared/lagCompensation.js';
 import { createBotEntity, updateRoomBots } from './botAI.js';
+
+function round1(val) {
+  return Number.isFinite(val) ? (Math.round(val * 10) / 10) + 0 : 0;
+}
+
+function round2(val) {
+  return Number.isFinite(val) ? (Math.round(val * 100) / 100) + 0 : 0;
+}
 
 export function sanitizeName(raw) {
   if (typeof raw !== 'string') return 'Striker';
@@ -315,8 +324,8 @@ export class RoomManager {
     // Apply small safe jitter if clear, or search ring offsets if base point is crowded
     const jitterAngle = Math.random() * Math.PI * 2;
     const jitterRadius = 0.35 + Math.random() * 0.55;
-    const jitterX = Number((baseSp.x + Math.cos(jitterAngle) * jitterRadius).toFixed(2));
-    const jitterZ = Number((baseSp.z + Math.sin(jitterAngle) * jitterRadius).toFixed(2));
+    const jitterX = round2(baseSp.x + Math.cos(jitterAngle) * jitterRadius);
+    const jitterZ = round2(baseSp.z + Math.sin(jitterAngle) * jitterRadius);
 
     if (isPositionSafeAndUnstacked(jitterX, jitterZ, minClearance * 0.75)) {
       finalX = jitterX;
@@ -331,8 +340,8 @@ export class RoomManager {
           const rad = radii[r];
           for (let step = 0; step < 8; step++) {
             const ang = (step * Math.PI) / 4 + (cIdx * 0.35);
-            const tx = Number((cand.x + Math.cos(ang) * rad).toFixed(2));
-            const tz = Number((cand.z + Math.sin(ang) * rad).toFixed(2));
+            const tx = round2(cand.x + Math.cos(ang) * rad);
+            const tz = round2(cand.z + Math.sin(ang) * rad);
             if (isPositionSafeAndUnstacked(tx, tz, 2.5)) {
               finalX = tx;
               finalZ = tz;
@@ -391,6 +400,12 @@ export class RoomManager {
       const idx = bots.length;
       const sp = this.pickSafeSpawnPoint(room);
       const bot = createBotEntity(idx, sp, mapCfg);
+      bot._staticMeta = {
+        id: bot.id,
+        name: bot.name,
+        isBot: true,
+        color: bot.color
+      };
       recordPlayerSnapshot(bot);
       room.players.set(bot.id, bot);
       bots.push(bot);
@@ -464,6 +479,7 @@ export class RoomManager {
       pitch: 0,
       crouching: false,
       prone: false,
+      isAiming: false,
       lean: 0,
       loadout: cleanLoadout,
       savedLoadoutPrimary: cleanLoadout.primary,
@@ -487,7 +503,13 @@ export class RoomManager {
       respawnAt: 0,
       invulnerableUntil: now + protectionMs,
       lastDeathX: null,
-      lastDeathZ: null
+      lastDeathZ: null,
+      _staticMeta: {
+        id: socket.id,
+        name: cleanName,
+        isBot: false,
+        color: PLAYER_COLORS[colorIdx]
+      }
     };
 
     recordPlayerSnapshot(player, now);
@@ -571,7 +593,7 @@ export class RoomManager {
       mapName: mapCfg.name,
       pickups: room.pickups,
       droppedWeapons: room.droppedWeapons,
-      activeGrenades: room.grenades,
+      activeGrenades: this.serializeGrenades(room),
       players: this.serializePlayers(room)
     });
   }
@@ -715,6 +737,9 @@ export class RoomManager {
         player.crouching = false;
       }
     }
+    if (typeof payload.isAiming === 'boolean') {
+      player.isAiming = payload.isAiming;
+    }
     if (typeof payload.lean === 'number' && Number.isFinite(payload.lean)) {
       player.lean = Math.max(-1, Math.min(1, payload.lean));
     }
@@ -748,6 +773,7 @@ export class RoomManager {
     const currentReserve = player.reserveAmmoByWeapon?.[wId] ?? (player.weapon === wId ? player.reserveAmmo : cfg.reserveAmmo) ?? 0;
     if (currentAmmo >= cfg.magSize || currentReserve <= 0) return;
 
+    player.isAiming = false;
     player.reloadStartedAt = now;
     player.reloadWeapon = wId;
 
@@ -781,8 +807,14 @@ export class RoomManager {
       shooter.reserveAmmo = shooter.reserveAmmoByWeapon?.[weaponId] ?? (weaponCfg.reserveAmmo ?? 0);
     }
 
+    if (typeof payload?.isAiming === 'boolean') {
+      shooter.isAiming = payload.isAiming;
+    }
+    const isAiming = Boolean(payload?.isAiming ?? shooter.isAiming);
+    const effectiveFireRateMs = getEffectiveFireRateMs(weaponCfg, isAiming);
+
     // Rate limit check (allow 18% network jitter tolerance)
-    if (now - shooter.lastShotAt < weaponCfg.fireRateMs * 0.82) {
+    if (now - shooter.lastShotAt < effectiveFireRateMs * 0.82) {
       return;
     }
 
@@ -1027,10 +1059,10 @@ export class RoomManager {
       weaponName: wCfg.name,
       ammo: Math.max(0, Math.min(wCfg.magSize, Math.floor(Number(dropData.ammo) ?? wCfg.magSize))),
       reserveAmmo: Math.max(0, Math.floor(Number(dropData.reserveAmmo) ?? (wCfg.reserveAmmo ?? 60))),
-      x: Number((dropData.x || 0).toFixed(2)),
-      y: Number((dropData.y || 0).toFixed(2)),
-      z: Number((dropData.z || 0).toFixed(2)),
-      yaw: Number((dropData.yaw || 0).toFixed(2)),
+      x: round2(dropData.x),
+      y: round2(dropData.y),
+      z: round2(dropData.z),
+      yaw: round2(dropData.yaw),
       droppedBy: dropData.droppedBy || 'Striker',
       createdAt: now,
       expiresAt: now + despawnMs
@@ -1266,12 +1298,12 @@ export class RoomManager {
       id: `gren_${now}_${Math.random().toString(36).slice(2, 7)}`,
       ownerId: player.id,
       ownerName: player.name,
-      x: Number(startX.toFixed(2)),
-      y: Number(startY.toFixed(2)),
-      z: Number(startZ.toFixed(2)),
-      vx: Number(vx.toFixed(2)),
-      vy: Number(vy.toFixed(2)),
-      vz: Number(vz.toFixed(2)),
+      x: round2(startX),
+      y: round2(startY),
+      z: round2(startZ),
+      vx: round2(vx),
+      vy: round2(vy),
+      vz: round2(vz),
       createdAt: now,
       explodeAt: now + fuseMs,
       fuseRemaining: 2.2
@@ -1438,18 +1470,18 @@ export class RoomManager {
         }
       }
 
-      g.x = Number(g.x.toFixed(2));
-      g.y = Number(g.y.toFixed(2));
-      g.z = Number(g.z.toFixed(2));
-      g.vx = Number(g.vx.toFixed(2));
-      g.vy = Number(g.vy.toFixed(2));
-      g.vz = Number(g.vz.toFixed(2));
+      g.x = round2(g.x);
+      g.y = round2(g.y);
+      g.z = round2(g.z);
+      g.vx = round2(g.vx);
+      g.vy = round2(g.vy);
+      g.vz = round2(g.vz);
 
-      const prevFuse = typeof g.fuseRemaining === 'number' ? g.fuseRemaining : 2.2;
+      const prevFuse = typeof g.fuseRemaining === 'number' && Number.isFinite(g.fuseRemaining) ? g.fuseRemaining : 2.2;
       const nextFuseByDt = prevFuse - totalDt;
-      const nextFuseByClock = typeof g.explodeAt === 'number' ? (g.explodeAt - now) / 1000 : nextFuseByDt;
+      const nextFuseByClock = typeof g.explodeAt === 'number' && Number.isFinite(g.explodeAt) ? (g.explodeAt - now) / 1000 : nextFuseByDt;
       const fuseRem = Math.min(nextFuseByDt, nextFuseByClock);
-      g.fuseRemaining = Number(Math.max(0, fuseRem).toFixed(2));
+      g.fuseRemaining = round2(Math.max(0, fuseRem));
 
       if (fuseRem <= 0 || (typeof g.explodeAt === 'number' && now >= g.explodeAt)) {
         toDetonate.push(g);
@@ -1590,6 +1622,7 @@ export class RoomManager {
 
     victim.alive = false;
     victim.hp = 0;
+    victim.isAiming = false;
     victim.deaths += 1;
     victim.streak = 0;
     victim.reloadingUntil = 0;
@@ -1668,6 +1701,7 @@ export class RoomManager {
     player.pitch = 0;
     player.crouching = false;
     player.prone = false;
+    player.isAiming = false;
     player.lean = 0;
     player.hp = MATCH_CONFIG.MAX_HP;
     player.alive = true;
@@ -1816,49 +1850,87 @@ export class RoomManager {
       killLimit: MATCH_CONFIG.KILL_LIMIT,
       pickups: room.pickups,
       droppedWeapons: room.droppedWeapons,
-      activeGrenades: room.grenades,
+      activeGrenades: this.serializeGrenades(room),
       players: this.serializePlayers(room)
     });
   }
 
+  serializeGrenades(room) {
+    const grenades = room?.grenades;
+    if (!Array.isArray(grenades) || grenades.length === 0) return [];
+    const list = new Array(grenades.length);
+    let idx = 0;
+    for (let i = 0; i < grenades.length; i++) {
+      const g = grenades[i];
+      if (!g) continue;
+      list[idx++] = {
+        id: g.id,
+        ownerId: g.ownerId,
+        x: round2(g.x),
+        y: round2(g.y),
+        z: round2(g.z),
+        vx: round2(g.vx),
+        vy: round2(g.vy),
+        vz: round2(g.vz),
+        fuseRemaining: round2(g.fuseRemaining)
+      };
+    }
+    if (idx < list.length) {
+      list.length = idx;
+    }
+    return list;
+  }
+
   serializePlayers(room) {
+    if (!room || !room.players) return [];
     const now = Date.now();
-    const list = [];
+    const list = new Array(room.players.size);
+    let idx = 0;
     for (const p of room.players.values()) {
       if (!p.alive || (!p.isBot && p.lastMoveAt && now - p.lastMoveAt > 120)) {
         p.vx = 0;
         p.vy = 0;
         p.vz = 0;
       }
+      let meta = p._staticMeta;
+      if (!meta || meta.id !== p.id || meta.name !== p.name || meta.color !== p.color) {
+        meta = {
+          id: p.id,
+          name: p.name,
+          isBot: Boolean(p.isBot),
+          color: p.color
+        };
+        p._staticMeta = meta;
+      }
       const invulnerable = Boolean(p.alive && p.invulnerableUntil && now < p.invulnerableUntil);
-      list.push({
-        id: p.id,
-        name: p.name,
-        isBot: p.isBot,
-        color: p.color,
-        x: Math.round(p.x * 100) / 100,
-        y: Math.round(p.y * 100) / 100,
-        z: Math.round(p.z * 100) / 100,
-        vx: Math.round((p.vx || 0) * 100) / 100,
-        vy: Math.round((p.vy || 0) * 100) / 100,
-        vz: Math.round((p.vz || 0) * 100) / 100,
-        yaw: Math.round(p.yaw * 1000) / 1000,
-        pitch: Math.round(p.pitch * 1000) / 1000,
+      list[idx++] = {
+        id: meta.id,
+        name: meta.name,
+        isBot: meta.isBot,
+        color: meta.color,
+        x: round2(p.x),
+        y: round2(p.y),
+        z: round2(p.z),
+        vx: round1(p.vx),
+        vy: round1(p.vy),
+        vz: round1(p.vz),
+        yaw: round2(p.yaw),
+        pitch: round2(p.pitch),
         crouching: Boolean(p.crouching),
         prone: Boolean(p.prone),
-        lean: Math.round((p.lean || 0) * 100) / 100,
+        lean: round2(p.lean),
         weapon: p.weapon,
-        ammo: p.ammo,
-        reserveAmmo: p.reserveAmmo ?? 0,
-        grenades: p.grenades ?? 1,
-        hp: p.hp,
-        alive: p.alive,
+        ammo: Number.isFinite(p.ammo) ? p.ammo : 0,
+        reserveAmmo: Number.isFinite(p.reserveAmmo) ? p.reserveAmmo : 0,
+        grenades: Number.isFinite(p.grenades) ? p.grenades : 1,
+        hp: Number.isFinite(p.hp) ? p.hp : 0,
+        alive: Boolean(p.alive),
         invulnerable,
         invulnerableUntil: invulnerable ? p.invulnerableUntil : 0,
-        kills: p.kills,
-        deaths: p.deaths,
-        streak: p.streak
-      });
+        kills: p.kills || 0,
+        deaths: p.deaths || 0,
+        streak: p.streak || 0
+      };
     }
     return list;
   }
@@ -1927,7 +1999,7 @@ export class RoomManager {
         seq: room.stateSeq,
         timeRemaining,
         droppedWeapons: room.droppedWeapons,
-        activeGrenades: room.grenades,
+        activeGrenades: this.serializeGrenades(room),
         players: this.serializePlayers(room)
       });
     }
