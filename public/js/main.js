@@ -14,6 +14,14 @@ import { createNetworkClient } from './networkAdapter.js';
 const netClient = await createNetworkClient();
 const socket = netClient.socket;
 const sfx = new SoundEffects();
+const hasDedicatedHeadshotDink = typeof SoundEffects.prototype.playHeadshotDink === 'function';
+if (!hasDedicatedHeadshotDink) {
+  sfx.playHeadshotDink = () => sfx.playHitmarker?.(true);
+}
+const hasDedicatedMultiKillTone = typeof SoundEffects.prototype.playMultiKillTone === 'function';
+if (!hasDedicatedMultiKillTone) {
+  sfx.playMultiKillTone = (multiKillCount = 1) => sfx.playKillConfirm?.(multiKillCount);
+}
 
 // DOM Elements
 const canvasContainer = document.getElementById('canvas-container');
@@ -43,10 +51,17 @@ const spawnShieldOverlay = document.getElementById('spawn-shield-overlay');
 const spawnShieldBadge = document.getElementById('spawn-shield-badge');
 const spawnShieldTimerEl = document.getElementById('spawn-shield-timer');
 const hudHpCard = document.getElementById('hud-hp-card');
+const hudHpAdrenalineTag = document.getElementById('hud-hp-adrenaline-tag');
 const damageDirIndicator = document.getElementById('damage-dir-indicator');
 const sniperScope = document.getElementById('sniper-scope');
 const crosshair = document.getElementById('crosshair');
 const hitmarker = document.getElementById('hitmarker');
+const hudFloatingDmg = document.getElementById('hud-floating-dmg');
+const hudAdrenalinePop = document.getElementById('hud-adrenaline-pop');
+const multikillBanner = document.getElementById('multikill-banner');
+const multikillMedal = document.getElementById('multikill-medal');
+const multikillTitle = document.getElementById('multikill-title');
+const multikillSubtitle = document.getElementById('multikill-subtitle');
 const centerBanner = document.getElementById('center-banner');
 const hudRoomCode = document.getElementById('hud-room-code');
 const hudMapName = document.getElementById('hud-map-name');
@@ -81,6 +96,10 @@ const hotbarSlot3 = document.getElementById('hotbar-slot-3');
 const hotbarName1 = document.getElementById('hotbar-name-1');
 const hotbarName2 = document.getElementById('hotbar-name-2');
 const hotbarName3 = document.getElementById('hotbar-name-3');
+const hudGrenadeSlot = document.getElementById('hud-grenade-slot');
+const hudGrenadeStatus = document.getElementById('hud-grenade-status');
+const hudGrenadeCount = document.getElementById('hud-grenade-count');
+const hudGrenadeStateText = document.getElementById('hud-grenade-state-text');
 const btnHudLoadout = document.getElementById('btn-hud-loadout');
 
 // Lobby 3D Operator Showcase Elements
@@ -138,15 +157,24 @@ let selectedMapId = DEFAULT_MAP_ID || 'cyber_citadel';
 let activeRoomCode = '';
 let latestPlayers = [];
 let hitmarkerTimer = null;
+let floatingDmgTimer = null;
+let adrenalineTimer = null;
+let multikillBannerTimer = null;
 let damageDirTimer = null;
 let bannerTimer = null;
 let respawnInterval = null;
 let nextMatchInterval = null;
 let spawnShieldInterval = null;
 let spawnShieldTimeout = null;
+let localMultiKillCount = 0;
+let lastLocalKillAt = 0;
+const MULTI_KILL_WINDOW_MS = 6500;
+let localGrenades = 1;
+let lastGrenadeThrowAt = 0;
 
 const hudCache = {
   hp: -1,
+  grenades: -1,
   timerSec: -1,
   kills: -1,
   deaths: -1,
@@ -332,6 +360,12 @@ const game = new Game3D(canvasContainer, {
   onLoadoutToggle: () => {
     toggleLoadoutModal();
   },
+  onThrowGrenade: (payload) => {
+    handleThrowGrenadeRequest(payload);
+  },
+  onGrenadeChanged: (count) => {
+    updateGrenadeHud(count);
+  },
   onCopyLinkShortcut: () => {
     copyInviteLinkToClipboard();
   },
@@ -375,6 +409,177 @@ function showCenterBanner(text) {
   bannerTimer = setTimeout(() => {
     centerBanner.classList.add('hidden');
   }, 2200);
+}
+
+// Helper: Distinct Body / Headshot / Kill Hitmarker & Floating HUD Damage
+function triggerHitmarkerFeedback({ damage = 0, isHeadshot = false, isKill = false }) {
+  if (hitmarker) {
+    hitmarker.classList.remove('hidden', 'headshot', 'kill');
+    void hitmarker.offsetWidth;
+    if (isHeadshot) {
+      hitmarker.classList.add('headshot');
+    }
+    if (isKill) {
+      hitmarker.classList.add('kill');
+    }
+    if (hitmarkerTimer) clearTimeout(hitmarkerTimer);
+    const holdMs = isKill ? 280 : isHeadshot ? 210 : 140;
+    hitmarkerTimer = setTimeout(() => {
+      hitmarker.classList.add('hidden');
+      hitmarker.classList.remove('headshot', 'kill');
+    }, holdMs);
+  }
+
+  if (damage > 0 && hudFloatingDmg) {
+    const cleanDmg = Math.max(1, Math.round(Number(damage) || 0));
+    hudFloatingDmg.textContent = isHeadshot ? `🎯 -${ cleanDmg } HS!` : `-${ cleanDmg }`;
+    hudFloatingDmg.classList.toggle('headshot', Boolean(isHeadshot));
+    hudFloatingDmg.classList.remove('hidden');
+    if (floatingDmgTimer) clearTimeout(floatingDmgTimer);
+    floatingDmgTimer = setTimeout(() => {
+      hudFloatingDmg.classList.add('hidden');
+    }, 520);
+  }
+}
+
+// Helper: +25 HP Adrenaline Kill Heal Indicator
+function clearAdrenalineHealHud() {
+  if (adrenalineTimer) {
+    clearTimeout(adrenalineTimer);
+    adrenalineTimer = null;
+  }
+  hudAdrenalinePop?.classList.add('hidden');
+  hudHpAdrenalineTag?.classList.add('hidden');
+  hudHpCard?.classList.remove('adrenaline-heal');
+}
+
+function triggerAdrenalineHealFeedback(healAmount = 25, serverHp = null) {
+  if (!game.alive) return;
+  const cleanHeal = Math.max(1, Math.round(Number(healAmount) || 25));
+  const nextHp = typeof serverHp === 'number' && serverHp > 0
+    ? Math.min(100, Math.round(serverHp))
+    : Math.min(100, (hudCache.hp > 0 ? hudCache.hp : 100) + cleanHeal);
+  updateHpHud(nextHp);
+
+  const label = `+${ cleanHeal } HP ADRENALINE`;
+  if (hudAdrenalinePop) {
+    hudAdrenalinePop.textContent = `⚡ ${ label }`;
+    hudAdrenalinePop.classList.remove('hidden');
+  }
+  if (hudHpAdrenalineTag) {
+    hudHpAdrenalineTag.textContent = label;
+    hudHpAdrenalineTag.classList.remove('hidden');
+  }
+  hudHpCard?.classList.add('adrenaline-heal');
+
+  if (adrenalineTimer) clearTimeout(adrenalineTimer);
+  adrenalineTimer = setTimeout(() => {
+    clearAdrenalineHealHud();
+  }, 1650);
+}
+
+// Helper: Multi-Kill Streak Banner & Audio Announcer (FIRST BLOOD -> ACE / RAMPAGE)
+const MULTI_KILL_TIERS = {
+  1: { title: 'FIRST BLOOD', medal: '🩸', tierClass: 'mk-tier-1' },
+  2: { title: 'DOUBLE KILL', medal: '⚡', tierClass: 'mk-tier-2' },
+  3: { title: 'TRIPLE KILL', medal: '🔥', tierClass: 'mk-tier-3' },
+  4: { title: 'QUADRA KILL', medal: '💀', tierClass: 'mk-tier-4' },
+  5: { title: 'ACE / RAMPAGE', medal: '👑', tierClass: 'mk-tier-5' }
+};
+
+function showMultiKillBanner(multiKillCount = 1, victimName = 'Enemy', isHeadshot = false, healAmount = 25) {
+  const clampedTier = Math.max(1, Math.min(5, Math.floor(Number(multiKillCount) || 1)));
+  const tier = MULTI_KILL_TIERS[clampedTier] || MULTI_KILL_TIERS[1];
+  const cleanVictim = (victimName || 'ENEMY').toUpperCase();
+  const hsPrefix = isHeadshot ? '🎯 HEADSHOT • ' : '';
+
+  if (multikillBanner) {
+    multikillBanner.classList.remove('hidden', 'mk-tier-1', 'mk-tier-2', 'mk-tier-3', 'mk-tier-4', 'mk-tier-5');
+    void multikillBanner.offsetWidth;
+    multikillBanner.classList.add(tier.tierClass);
+    if (multikillMedal) multikillMedal.textContent = tier.medal;
+    if (multikillTitle) multikillTitle.textContent = tier.title;
+    if (multikillSubtitle) {
+      multikillSubtitle.textContent = `${ hsPrefix }HẠ GỤC ${ cleanVictim } • +${ healAmount } HP ADRENALINE`;
+    }
+    if (multikillBannerTimer) clearTimeout(multikillBannerTimer);
+    multikillBannerTimer = setTimeout(() => {
+      multikillBanner.classList.add('hidden');
+    }, 2400);
+  }
+
+  showCenterBanner(`${ tier.medal } ${ tier.title } • ${ hsPrefix }HẠ GỤC ${ cleanVictim } (+${ healAmount } HP ADRENALINE)`);
+}
+
+// Helper: [G] Frag Grenade HUD & KeyG Throw Action
+function updateGrenadeHud(count) {
+  const cleanCount = Math.max(0, Math.floor(Number(count ?? 0)));
+  localGrenades = cleanCount;
+  if (game) {
+    game.grenades = cleanCount;
+  }
+  if (hudCache.grenades === cleanCount) return;
+  hudCache.grenades = cleanCount;
+
+  const isReady = cleanCount > 0;
+  if (hudGrenadeCount) {
+    hudGrenadeCount.textContent = String(cleanCount);
+  }
+  if (hudGrenadeStateText) {
+    hudGrenadeStateText.textContent = isReady ? 'READY' : 'EMPTY';
+  }
+  if (hudGrenadeSlot) {
+    hudGrenadeSlot.dataset.grenadeCount = String(cleanCount);
+    hudGrenadeSlot.classList.toggle('ready', isReady);
+    hudGrenadeSlot.classList.toggle('empty', !isReady);
+  }
+}
+
+function handleThrowGrenadeRequest(customPayload = null) {
+  if (!game.inMatch || !game.alive) return;
+  const isModalOpen =
+    !pauseModal.classList.contains('hidden') ||
+    (loadoutModal && !loadoutModal.classList.contains('hidden')) ||
+    !deathOverlay.classList.contains('hidden') ||
+    !matchEndModal.classList.contains('hidden');
+  if (isModalOpen) return;
+
+  const now = performance.now();
+  if (now - lastGrenadeThrowAt < 250) return;
+
+  if (localGrenades <= 0) {
+    lastGrenadeThrowAt = now;
+    sfx.playDryFire?.();
+    showCenterBanner('💣 HẾT LỰU ĐẠN FRAG [0/1] — HỒI LẠI KHI HỒI SINH!');
+    return;
+  }
+
+  lastGrenadeThrowAt = now;
+  updateGrenadeHud(localGrenades - 1);
+
+  const yaw = typeof customPayload?.yaw === 'number' ? customPayload.yaw : Number(game.yaw || 0);
+  const pitch = typeof customPayload?.pitch === 'number' ? customPayload.pitch : Number(game.pitch || 0);
+  const dir = customPayload?.dir || {
+    x: -Math.sin(yaw) * Math.cos(pitch),
+    y: Math.sin(pitch),
+    z: -Math.cos(yaw) * Math.cos(pitch)
+  };
+  const origin = customPayload?.origin || {
+    x: game.camera?.position?.x ?? game.position.x,
+    y: game.camera?.position?.y ?? (game.position.y + 1.5),
+    z: game.camera?.position?.z ?? game.position.z
+  };
+
+  sfx.playGrenadeThrow?.();
+  if (!game.grenadeThrowUntil || game.grenadeThrowUntil <= now) {
+    game.triggerLocalGrenadeThrow?.({ yaw, pitch, origin, dir });
+  }
+  socket.emit('throwGrenade', {
+    yaw,
+    pitch,
+    origin,
+    dir
+  });
 }
 
 // Helper: Copy Shareable Room Link
@@ -795,6 +1000,7 @@ btnLeaveRoom.addEventListener('click', () => {
   game.exitPointerLock();
   game.clearAllRemotePlayers();
   game.clearDroppedWeapons();
+  game.clearGrenades?.();
   pauseModal.classList.add('hidden');
   if (loadoutModal) loadoutModal.classList.add('hidden');
   deathOverlay.classList.add('hidden');
@@ -888,7 +1094,7 @@ function renderScoreboard(players) {
 }
 
 // Add CS:GO-style Top-Right Kill Feed Entry
-function addKillFeedItem({ killerId, killerName, victimId, victimName, weapon, isHeadshot }) {
+function addKillFeedItem({ killerId, killerName, victimId, victimName, weapon, weaponName, isHeadshot }) {
   const item = document.createElement('div');
   const involvesMe = killerId === game.localId || victimId === game.localId;
   item.className = `kill-item${ involvesMe ? ' kill-item-me' : '' }${ isHeadshot ? ' kill-item-hs' : '' }`;
@@ -900,7 +1106,8 @@ function addKillFeedItem({ killerId, killerName, victimId, victimName, weapon, i
 
   const weaponSpan = document.createElement('span');
   weaponSpan.className = 'kill-weapon-tag';
-  weaponSpan.textContent = `[${ weapon }]`;
+  const weaponLabel = weaponName || (weapon === 'grenade' ? '💣 FRAG GRENADE' : weapon);
+  weaponSpan.textContent = `[${ weaponLabel }]`;
 
   item.appendChild(killerSpan);
   item.appendChild(weaponSpan);
@@ -969,7 +1176,12 @@ socket.on('roomJoined', (data) => {
   }
   game.setLoadout(selectedLoadout, selectedLoadout.primary);
   game.spawnLocalPlayer(data.player);
+  localMultiKillCount = 0;
+  lastLocalKillAt = 0;
+  clearAdrenalineHealHud();
+  multikillBanner?.classList.add('hidden');
   updateHpHud(data.player.hp);
+  updateGrenadeHud(data.player.grenades ?? data.player.grenadeCount ?? 1);
   triggerSpawnProtectionHud(data.player.spawnProtectionMs || MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500);
   const wCfg = WEAPONS[game.currentWeapon] || WEAPONS.rifle;
   updateWeaponHud(
@@ -980,6 +1192,7 @@ socket.on('roomJoined', (data) => {
 
   game.syncPickups(data.pickups || []);
   game.syncDroppedWeapons(data.droppedWeapons || []);
+  game.syncGrenades?.(data.activeGrenades || []);
   latestPlayers = data.players || [];
   game.syncPlayersState(latestPlayers);
 
@@ -1021,8 +1234,14 @@ socket.on('mapChanged', (data) => {
   updateMapHud(newMapId);
   game.syncPickups(data.pickups || []);
   game.syncDroppedWeapons(data.droppedWeapons || []);
+  game.syncGrenades?.(data.activeGrenades || []);
   latestPlayers = data.players || [];
   game.syncPlayersState(latestPlayers);
+
+  localMultiKillCount = 0;
+  lastLocalKillAt = 0;
+  clearAdrenalineHealHud();
+  multikillBanner?.classList.add('hidden');
 
   const me = latestPlayers.find((p) => p.id === game.localId);
   if (me) {
@@ -1031,6 +1250,7 @@ socket.on('mapChanged', (data) => {
     damageOverlay.style.opacity = '0';
     game.spawnLocalPlayer(me);
     updateHpHud(me.hp);
+    updateGrenadeHud(me.grenades ?? me.grenadeCount ?? 1);
     triggerSpawnProtectionHud(MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500);
   }
   showToast(`🗺️ Đã chuyển sang bản đồ: ${ data.mapName || getMapConfig(newMapId).name }`);
@@ -1048,6 +1268,9 @@ socket.on('stateUpdate', (snapshot) => {
   game.syncPlayersState(latestPlayers);
   if (Array.isArray(snapshot.droppedWeapons)) {
     game.syncDroppedWeapons(snapshot.droppedWeapons);
+  }
+  if (Array.isArray(snapshot.activeGrenades)) {
+    game.syncGrenades?.(snapshot.activeGrenades);
   }
 
   // Find leader and local stats
@@ -1068,6 +1291,13 @@ socket.on('stateUpdate', (snapshot) => {
       if (hudCache.streak !== p.streak) {
         hudCache.streak = p.streak;
         hudStreak.textContent = String(p.streak);
+      }
+      const snapGrenades = p.grenades ?? p.grenadeCount;
+      if (typeof snapGrenades === 'number') {
+        const isThrowInFlight = snapGrenades > localGrenades && (performance.now() - lastGrenadeThrowAt) < 350;
+        if (!isThrowInFlight) {
+          updateGrenadeHud(snapGrenades);
+        }
       }
       updateHpHud(p.hp);
     }
@@ -1109,17 +1339,31 @@ socket.on('shotFired', (data) => {
 socket.on('damageDealt', (data) => {
   if (!game.inMatch) return;
 
-  // We hit someone -> Show Hitmarker + Floating 3D Damage Popup
-  if (data.attackerId === game.localId) {
-    hitmarker.classList.remove('hidden');
-    hitmarker.classList.toggle('headshot', Boolean(data.isHeadshot));
-    sfx.playHitmarker(Boolean(data.isHeadshot));
-    game.spawnDamagePopup(data.targetId, data.damage, Boolean(data.isHeadshot));
+  // We hit an enemy -> Show Distinct Body/Headshot/Kill Hitmarker + Floating 3D/HUD Damage Popup
+  if (data.attackerId === game.localId && data.targetId !== game.localId) {
+    const isHs = Boolean(data.isHeadshot);
+    const isKillHit = typeof data.hp === 'number' && data.hp <= 0;
 
-    if (hitmarkerTimer) clearTimeout(hitmarkerTimer);
-    hitmarkerTimer = setTimeout(() => {
-      hitmarker.classList.add('hidden');
-    }, 140);
+    hitmarker.classList.remove('hidden');
+    if (isHs) {
+      hitmarker.classList.add('headshot');
+    } else {
+      hitmarker.classList.remove('headshot');
+    }
+
+    triggerHitmarkerFeedback({
+      damage: data.damage,
+      isHeadshot: isHs,
+      isKill: isKillHit
+    });
+
+    if (isHs) {
+      sfx.playHeadshotDink?.();
+    } else {
+      sfx.playHitmarker?.(false);
+    }
+
+    game.spawnDamagePopup(data.targetId, data.damage, isHs);
   }
 
   // Someone hit us -> Flash damage overlay, camera flinch, directional arc & update HP
@@ -1159,22 +1403,63 @@ socket.on('killEvent', (data) => {
   if (!game.inMatch) return;
   addKillFeedItem(data);
 
-  if (data.killerId === game.localId) {
-    sfx.playKillConfirm();
-    const bannerMsg = data.isHeadshot
-      ? `🎯 HEADSHOT! HẠ GỤC ${ data.victimName.toUpperCase() }`
-      : `⚡ ĐÃ HẠ GỤC ${ data.victimName.toUpperCase() } (${ data.killerStreak } STREAK)`;
-    showCenterBanner(bannerMsg);
+  if (data.killerId === game.localId && data.victimId !== game.localId) {
+    const now = performance.now();
+    if (lastLocalKillAt > 0 && now - lastLocalKillAt <= MULTI_KILL_WINDOW_MS) {
+      localMultiKillCount += 1;
+    } else {
+      localMultiKillCount = 1;
+    }
+    lastLocalKillAt = now;
+
+    const serverStreak = Number(data.multiKillCount || data.multiKill || data.killerStreak || 0);
+    const multiKillCount = Math.max(localMultiKillCount, serverStreak, 1);
+    const healAmount = Number(data.healAmount ?? MATCH_CONFIG.KILL_ADRENALINE_HEAL ?? 25) || 25;
+    const killerHp = typeof data.killerHp === 'number'
+      ? data.killerHp
+      : typeof data.newKillerHp === 'number'
+        ? data.newKillerHp
+        : null;
+
+    if (typeof data.killerStreak === 'number' && hudStreak && hudCache.streak !== data.killerStreak) {
+      hudCache.streak = data.killerStreak;
+      hudStreak.textContent = String(data.killerStreak);
+    }
+
+    const fallbackKillDmg = Number(data.damage) > 0
+      ? Number(data.damage)
+      : (hudFloatingDmg?.classList.contains('hidden') ? (data.isHeadshot ? 100 : 25) : 0);
+
+    triggerHitmarkerFeedback({
+      damage: fallbackKillDmg,
+      isHeadshot: Boolean(data.isHeadshot),
+      isKill: true
+    });
+    triggerAdrenalineHealFeedback(healAmount, killerHp);
+
+    sfx.playMultiKillTone?.(multiKillCount);
+
+    showMultiKillBanner(
+      multiKillCount,
+      data.victimName || 'Enemy',
+      Boolean(data.isHeadshot),
+      healAmount
+    );
   }
 
   if (data.victimId === game.localId) {
     game.alive = false;
+    localMultiKillCount = 0;
+    lastLocalKillAt = 0;
+    lastGrenadeThrowAt = 0;
     clearSpawnProtectionHud();
+    clearAdrenalineHealHud();
+    multikillBanner?.classList.add('hidden');
     if (weaponPickupPrompt) weaponPickupPrompt.classList.add('hidden');
     sniperScope.classList.add('hidden');
     crosshair.classList.remove('hidden');
     deathKillerName.textContent = data.killerName;
-    deathWeaponName.textContent = data.weapon;
+    deathWeaponName.textContent = data.weaponName || (data.weapon === 'grenade' ? 'FRAG GRENADE' : data.weapon);
     deathOverlay.classList.remove('hidden');
 
     let rem = 3;
@@ -1193,6 +1478,10 @@ socket.on('playerRespawned', (data) => {
     if (respawnInterval) clearInterval(respawnInterval);
     deathOverlay.classList.add('hidden');
     damageOverlay.style.opacity = '0';
+    localMultiKillCount = 0;
+    lastLocalKillAt = 0;
+    lastGrenadeThrowAt = 0;
+    clearAdrenalineHealHud();
     if (data.loadout) {
       selectedLoadout = {
         primary: data.loadout.primary || selectedLoadout.primary,
@@ -1202,9 +1491,47 @@ socket.on('playerRespawned', (data) => {
     }
     game.spawnLocalPlayer(data);
     updateHpHud(data.hp);
+    updateGrenadeHud(data.grenades ?? data.grenadeCount ?? 1);
     triggerSpawnProtectionHud(data.spawnProtectionMs || MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500);
     showCenterBanner('🛡️ BẤT TỬ HỒI SINH (1.5s)');
   }
+});
+
+socket.on('grenadeThrown', (data) => {
+  if (!game.inMatch || !data) return;
+  const payload = data.grenade || data;
+  const ownerId = data.ownerId || data.throwerId || data.playerId || payload.ownerId;
+  if (ownerId === game.localId && typeof (data.grenades ?? data.grenadesRemaining) === 'number') {
+    updateGrenadeHud(data.grenades ?? data.grenadesRemaining);
+  } else if (ownerId && ownerId !== game.localId) {
+    const gx = Number(payload.x ?? data.x ?? 0);
+    const gy = Number(payload.y ?? data.y ?? 0);
+    const gz = Number(payload.z ?? data.z ?? 0);
+    const dist = Math.hypot(gx - game.position.x, gy - game.position.y, gz - game.position.z);
+    if (dist < 32) {
+      sfx.playGrenadeThrow?.();
+    }
+  }
+  game.spawnGrenadeProjectile?.(data);
+});
+
+socket.on('grenadeExploded', (data) => {
+  if (!game.inMatch || !data) return;
+  const gx = data.x ?? data.position?.x ?? 0;
+  const gy = data.y ?? data.position?.y ?? 0;
+  const gz = data.z ?? data.position?.z ?? 0;
+  const listenerState = game.getAudioListenerState
+    ? game.getAudioListenerState()
+    : { x: game.position.x, y: game.position.y, z: game.position.z, yaw: game.yaw };
+  const sourcePos = { x: gx, y: gy, z: gz };
+  if (typeof sfx.playGrenadeExplosion === 'function') {
+    sfx.playGrenadeExplosion(listenerState, sourcePos);
+  } else {
+    const dist = Math.hypot(gx - game.position.x, gy - game.position.y, gz - game.position.z);
+    const vol = Math.max(0.08, 1 - dist / 75);
+    sfx.playExplosion?.(vol);
+  }
+  game.spawnGrenadeExplosion?.(data);
 });
 
 socket.on('pickupState', (data) => {
@@ -1245,6 +1572,8 @@ socket.on('weaponSwapped', (data) => {
 socket.on('matchEnded', (data) => {
   if (!game.inMatch) return;
   clearSpawnProtectionHud();
+  clearAdrenalineHealHud();
+  multikillBanner?.classList.add('hidden');
   if (weaponPickupPrompt) weaponPickupPrompt.classList.add('hidden');
   game.exitPointerLock();
   pauseModal.classList.add('hidden');
@@ -1286,18 +1615,25 @@ socket.on('matchStarted', (data) => {
   if (nextMatchInterval) clearInterval(nextMatchInterval);
   matchEndModal.classList.add('hidden');
   deathOverlay.classList.add('hidden');
+  localMultiKillCount = 0;
+  lastLocalKillAt = 0;
+  lastGrenadeThrowAt = 0;
+  clearAdrenalineHealHud();
+  multikillBanner?.classList.add('hidden');
   if (data.mapId) {
     game.loadMap(data.mapId);
     updateMapHud(data.mapId);
   }
   game.syncPickups(data.pickups || []);
   game.syncDroppedWeapons(data.droppedWeapons || []);
+  game.syncGrenades?.(data.activeGrenades || []);
   latestPlayers = data.players || [];
   game.syncPlayersState(latestPlayers);
   const me = latestPlayers.find((p) => p.id === game.localId);
   if (me) {
     game.spawnLocalPlayer(me);
     updateHpHud(me.hp);
+    updateGrenadeHud(me.grenades ?? me.grenadeCount ?? 1);
     triggerSpawnProtectionHud(MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500);
   }
   showCenterBanner('🔥 VÁN ĐẤU MỚI BẮT ĐẦU! (🛡️ 1.5s BẤT TỬ)');

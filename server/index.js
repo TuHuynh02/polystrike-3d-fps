@@ -104,13 +104,15 @@ io.on('connection', (socket) => {
           reserveAmmo: player.reserveAmmo,
           ammoByWeapon: player.ammoByWeapon,
           reserveAmmoByWeapon: player.reserveAmmoByWeapon,
+          grenades: player.grenades ?? 1,
           invulnerable: true,
           invulnerableUntil: player.invulnerableUntil,
           spawnProtectionMs: MATCH_CONFIG.SPAWN_PROTECTION_MS
         },
         players: roomManager.serializePlayers(room),
         pickups: room.pickups,
-        droppedWeapons: room.droppedWeapons || []
+        droppedWeapons: room.droppedWeapons || [],
+        activeGrenades: room.grenades || []
       });
 
       socket.to(room.code).emit('playerJoined', {
@@ -140,6 +142,15 @@ io.on('connection', (socket) => {
     const player = room.players.get(socket.id);
     if (!player) return;
     roomManager.handleShoot(room, player, payload);
+  });
+
+  socket.on('throwGrenade', (payload = {}) => {
+    if (!currentRoomCode) return;
+    const room = roomManager.rooms.get(currentRoomCode);
+    if (!room) return;
+    const player = room.players.get(socket.id);
+    if (!player) return;
+    roomManager.handleThrowGrenade(room, player, payload);
   });
 
   socket.on('reload', (payload = {}) => {

@@ -9,6 +9,15 @@ import {
   hasLineOfSight,
   isPointClearOfObstacles
 } from '../shared/constants.js';
+import {
+  KILL_ADRENALINE_HEAL,
+  raycastPlayerHitbox,
+  recordPlayerSnapshot,
+  recordRoomSnapshots,
+  resolveShotRewindMs,
+  restoreRewoundPlayers,
+  rewindRoomPlayersForShot
+} from '../shared/lagCompensation.js';
 import { createBotEntity, updateRoomBots } from './botAI.js';
 
 export function sanitizeName(raw) {
@@ -114,6 +123,7 @@ export class RoomManager {
       players: new Map(),
       pickups: this.createPickupsForMap(cleanMapId),
       droppedWeapons: [],
+      grenades: [],
       recentSpawns: []
     };
 
@@ -381,6 +391,7 @@ export class RoomManager {
       const idx = bots.length;
       const sp = this.pickSafeSpawnPoint(room);
       const bot = createBotEntity(idx, sp, mapCfg);
+      recordPlayerSnapshot(bot);
       room.players.set(bot.id, bot);
       bots.push(bot);
     }
@@ -461,12 +472,14 @@ export class RoomManager {
       reserveAmmoByWeapon: createInitialReserveAmmoMap(),
       ammo: weaponCfg.magSize,
       reserveAmmo: weaponCfg.infiniteAmmo ? 0 : (weaponCfg.reserveAmmo ?? weaponCfg.magSize * 3),
+      grenades: 1,
       hp: MATCH_CONFIG.MAX_HP,
       alive: true,
       kills: 0,
       deaths: 0,
       streak: 0,
       lastShotAt: 0,
+      lastGrenadeAt: 0,
       reloadingUntil: 0,
       reloadStartedAt: 0,
       reloadWeapon: null,
@@ -477,8 +490,10 @@ export class RoomManager {
       lastDeathZ: null
     };
 
+    recordPlayerSnapshot(player, now);
     room.players.set(socket.id, player);
     this.syncRoomBots(room);
+    recordRoomSnapshots(room, now);
 
     return { room, player };
   }
@@ -534,6 +549,7 @@ export class RoomManager {
     room.mapId = nextMapId;
     room.pickups = this.createPickupsForMap(nextMapId);
     room.droppedWeapons = [];
+    room.grenades = [];
     room.recentSpawns = [];
 
     // Mark all players not yet placed so sequential respawn assigns distinct safe points
@@ -555,6 +571,7 @@ export class RoomManager {
       mapName: mapCfg.name,
       pickups: room.pickups,
       droppedWeapons: room.droppedWeapons,
+      activeGrenades: room.grenades,
       players: this.serializePlayers(room)
     });
   }
@@ -710,6 +727,11 @@ export class RoomManager {
       player.ammo = player.ammoByWeapon?.[payload.weapon] ?? WEAPONS[payload.weapon].magSize;
       player.reserveAmmo = player.reserveAmmoByWeapon?.[payload.weapon] ?? (WEAPONS[payload.weapon].reserveAmmo ?? 0);
     }
+
+    const snapTs = typeof payload.timestamp === 'number' && Number.isFinite(payload.timestamp)
+      ? payload.timestamp
+      : now;
+    recordPlayerSnapshot(player, snapTs);
   }
 
   handleReload(room, player, weaponId) {
@@ -818,89 +840,144 @@ export class RoomManager {
       hitPoint: payload?.hitPoint || null
     });
 
-    // Support both single hit (`targetId`) and multi-pellet hits (`hits: [{ targetId, isHeadshot, isLegshot }]`)
-    const hitClaims = Array.isArray(payload?.hits)
-      ? payload.hits.slice(0, weaponCfg.pellets)
-      : payload?.targetId
-        ? [{
-            targetId: payload.targetId,
-            isHeadshot: Boolean(payload.isHeadshot),
-            isLegshot: Boolean(payload.isLegshot)
-          }]
-        : [];
-
-    if (hitClaims.length === 0) return;
-
     const mapCfg = getMapConfig(room.mapId);
     const obstacles = mapCfg.obstacles;
+    const maxRange = weaponCfg.isMelee ? weaponCfg.range * 1.45 : weaponCfg.range * 1.15;
 
-    // Aggregate damage per target across pellets
+    // Rewind enemy hitboxes for lag compensation (clamped to max 250ms) and guarantee restoration
+    const rewindMs = resolveShotRewindMs(shooter, payload, now);
+    const savedStates = rewindRoomPlayersForShot(room, shooter.id, rewindMs, now);
+
     const damageMap = new Map();
     const blockedShieldTargets = new Set();
-    for (const claim of hitClaims) {
-      if (!claim || !claim.targetId || claim.targetId === shooter.id) continue;
-      const target = room.players.get(claim.targetId);
-      if (!target || !target.alive) continue;
 
-      // Block damage if target has active 1.5s spawn protection
-      if (target.invulnerableUntil && now < target.invulnerableUntil) {
-        blockedShieldTargets.add(target.id);
-        continue;
-      }
+    try {
+      // Support single hit (`targetId`), multi-pellet hits (`hits: [...]`), or server-side raycast when no hit claims array is given
+      let hitClaims = Array.isArray(payload?.hits)
+        ? payload.hits.slice(0, weaponCfg.pellets)
+        : payload?.targetId
+          ? [{
+              targetId: payload.targetId,
+              isHeadshot: Boolean(payload.isHeadshot),
+              isLegshot: Boolean(payload.isLegshot)
+            }]
+          : [];
 
-      const dist = Math.hypot(target.x - shooter.x, target.y - shooter.y, target.z - shooter.z);
-      const maxRange = weaponCfg.isMelee ? weaponCfg.range * 1.45 : weaponCfg.range * 1.15;
-      if (dist > maxRange) continue;
-
-      // Verify line of sight against active map obstacles (supports prone/crouch/slide eye height and Q/E lean peek tolerance)
-      const eyeH = shooter.prone ? 0.46 : shooter.crouching ? 1.0 : 1.55;
-      const leanVal = (shooter.lean || 0) * (MATCH_CONFIG.LEAN_OFFSET || 0.42);
-      const rightX = Math.cos(shooter.yaw || 0);
-      const rightZ = -Math.sin(shooter.yaw || 0);
-      const shooterEye = {
-        x: shooter.x + rightX * leanVal,
-        y: shooter.y + eyeH,
-        z: shooter.z + rightZ * leanVal
-      };
-      const targetEyeH = target.prone ? 0.46 : target.crouching ? 1.0 : 1.55;
-      const targetPoint = {
-        x: target.x,
-        y: target.y + (claim.isHeadshot ? targetEyeH : target.prone ? 0.32 : 1.05),
-        z: target.z
-      };
-      let losOk = hasLineOfSight(shooterEye, targetPoint, obstacles);
-      if (!losOk && payload?.origin && typeof payload.origin.x === 'number') {
-        const originOffset = Math.hypot(
-          payload.origin.x - shooter.x,
-          payload.origin.y - (shooter.y + eyeH),
-          payload.origin.z - shooter.z
-        );
-        if (originOffset <= 1.65) {
-          losOk = hasLineOfSight(payload.origin, targetPoint, obstacles);
+      if (
+        hitClaims.length === 0 &&
+        !shooter.isBot &&
+        payload?.dir &&
+        typeof payload.dir.x === 'number' &&
+        (rewindMs > 0 || (!Array.isArray(payload?.hits) && payload?.targetId === undefined))
+      ) {
+        let bestTarget = null;
+        let bestHit = null;
+        for (const candidate of room.players.values()) {
+          if (!candidate || !candidate.alive || candidate.id === shooter.id) continue;
+          const hit = raycastPlayerHitbox(origin, dir, candidate, maxRange, 0.25);
+          if (hit && (!bestHit || hit.distance < bestHit.distance)) {
+            bestTarget = candidate;
+            bestHit = hit;
+          }
+        }
+        if (bestTarget && bestHit) {
+          hitClaims = [{
+            targetId: bestTarget.id,
+            isHeadshot: Boolean(payload?.isHeadshot ?? bestHit.isHeadshot),
+            isLegshot: Boolean(payload?.isLegshot ?? bestHit.isLegshot)
+          }];
         }
       }
-      if (!losOk && dist > 4.0) {
-        continue;
+
+      for (const claim of hitClaims) {
+        if (!claim || !claim.targetId || claim.targetId === shooter.id) continue;
+        const target = room.players.get(claim.targetId);
+        if (!target || !target.alive) continue;
+
+        // Block damage if target has active 1.5s spawn protection
+        if (target.invulnerableUntil && now < target.invulnerableUntil) {
+          blockedShieldTargets.add(target.id);
+          continue;
+        }
+
+        const dist = Math.hypot(target.x - shooter.x, target.y - shooter.y, target.z - shooter.z);
+        if (dist > maxRange) continue;
+
+        // If explicit ray direction is provided, verify target's (rewound) hitbox is within spread/hitbox cone of the ray
+        if (
+          !shooter.isBot &&
+          !weaponCfg.isMelee &&
+          payload?.dir &&
+          typeof payload.dir.x === 'number'
+        ) {
+          const rayPad = Math.max(1.35, dist * (weaponCfg.pellets > 1 ? 0.28 : 0.18));
+          let rayHit = raycastPlayerHitbox(origin, dir, target, maxRange, rayPad);
+          if (!rayHit && (target.crouching || target.crouch || target.prone) && Math.abs(dir.y || 0) < 0.08) {
+            rayHit = raycastPlayerHitbox(
+              origin,
+              dir,
+              { ...target, crouching: false, crouch: false, prone: false },
+              maxRange,
+              rayPad
+            );
+          }
+          if (!rayHit) continue;
+        }
+
+        // Verify line of sight against active map obstacles (supports prone/crouch/slide eye height and Q/E lean peek tolerance)
+        const eyeH = shooter.prone ? 0.46 : shooter.crouching ? 1.0 : 1.55;
+        const leanVal = (shooter.lean || 0) * (MATCH_CONFIG.LEAN_OFFSET || 0.42);
+        const rightX = Math.cos(shooter.yaw || 0);
+        const rightZ = -Math.sin(shooter.yaw || 0);
+        const shooterEye = {
+          x: shooter.x + rightX * leanVal,
+          y: shooter.y + eyeH,
+          z: shooter.z + rightZ * leanVal
+        };
+        const targetEyeH = target.prone ? 0.46 : target.crouching ? 1.0 : 1.55;
+        const targetPoint = {
+          x: target.x,
+          y: target.y + (claim.isHeadshot ? targetEyeH : target.prone ? 0.32 : 1.05),
+          z: target.z
+        };
+        let losOk = hasLineOfSight(shooterEye, targetPoint, obstacles);
+        if (!losOk && payload?.origin && typeof payload.origin.x === 'number') {
+          const originOffset = Math.hypot(
+            payload.origin.x - shooter.x,
+            payload.origin.y - (shooter.y + eyeH),
+            payload.origin.z - shooter.z
+          );
+          if (originOffset <= 1.65) {
+            losOk = hasLineOfSight(payload.origin, targetPoint, obstacles);
+          }
+        }
+        if (!losOk && dist > 4.0) {
+          continue;
+        }
+
+        // Apply per-weapon distance damage falloff (SMGs & Shotguns drop sharply at mid/long range while ARs/Snipers hold power)
+        const falloffMult = computeDistanceFalloff(weaponCfg, dist);
+
+        const hitZoneMult = claim.isHeadshot
+          ? weaponCfg.headshotMult
+          : claim.isLegshot
+            ? 0.78
+            : 1.0;
+
+        const pelletDmg = Math.max(
+          1,
+          Math.round(weaponCfg.damage * falloffMult * hitZoneMult)
+        );
+        const prev = damageMap.get(target.id) || { totalDamage: 0, anyHeadshot: false };
+        prev.totalDamage += pelletDmg;
+        prev.anyHeadshot = prev.anyHeadshot || Boolean(claim.isHeadshot);
+        damageMap.set(target.id, prev);
       }
-
-      // Apply per-weapon distance damage falloff (SMGs & Shotguns drop sharply at mid/long range while ARs/Snipers hold power)
-      const falloffMult = computeDistanceFalloff(weaponCfg, dist);
-
-      const hitZoneMult = claim.isHeadshot
-        ? weaponCfg.headshotMult
-        : claim.isLegshot
-          ? 0.78
-          : 1.0;
-
-      const pelletDmg = Math.max(
-        1,
-        Math.round(weaponCfg.damage * falloffMult * hitZoneMult)
-      );
-      const prev = damageMap.get(target.id) || { totalDamage: 0, anyHeadshot: false };
-      prev.totalDamage += pelletDmg;
-      prev.anyHeadshot = prev.anyHeadshot || Boolean(claim.isHeadshot);
-      damageMap.set(target.id, prev);
+    } finally {
+      restoreRewoundPlayers(savedStates);
     }
+
+    if (damageMap.size === 0 && blockedShieldTargets.size === 0) return;
 
     for (const protectedTargetId of blockedShieldTargets) {
       const protectedTarget = room.players.get(protectedTargetId);
@@ -1072,6 +1149,422 @@ export class RoomManager {
     return swapEvent;
   }
 
+  handleThrowGrenade(room, player, payload = {}) {
+    if (!room || !player || !player.alive || room.state !== 'PLAYING') return null;
+    if ((player.grenades ?? 1) <= 0) return null;
+
+    const now = Date.now();
+    if (player.lastGrenadeAt && now - player.lastGrenadeAt < 250) return null;
+
+    player.grenades = Math.max(0, (player.grenades ?? 1) - 1);
+    player.lastGrenadeAt = now;
+
+    if (!Array.isArray(room.grenades)) {
+      room.grenades = [];
+    }
+
+    const eyeH = player.prone ? 0.46 : player.crouching ? 1.0 : 1.55;
+    const leanVal = (player.lean || 0) * (MATCH_CONFIG.LEAN_OFFSET || 0.42);
+    const yaw = typeof payload?.yaw === 'number' && Number.isFinite(payload.yaw) ? payload.yaw : (player.yaw || 0);
+    const pitch = typeof payload?.pitch === 'number' && Number.isFinite(payload.pitch)
+      ? Math.max(-Math.PI / 2, Math.min(Math.PI / 2, payload.pitch))
+      : (player.pitch || 0);
+
+    const rightX = Math.cos(yaw);
+    const rightZ = -Math.sin(yaw);
+
+    let dirX = -Math.sin(yaw) * Math.cos(pitch);
+    let dirY = Math.sin(pitch);
+    let dirZ = -Math.cos(yaw) * Math.cos(pitch);
+    if (
+      payload?.dir &&
+      typeof payload.dir.x === 'number' &&
+      typeof payload.dir.y === 'number' &&
+      typeof payload.dir.z === 'number'
+    ) {
+      const dLen = Math.hypot(payload.dir.x, payload.dir.y, payload.dir.z);
+      if (dLen > 0.001 && Number.isFinite(dLen)) {
+        dirX = payload.dir.x / dLen;
+        dirY = payload.dir.y / dLen;
+        dirZ = payload.dir.z / dLen;
+      }
+    }
+
+    let eyeX = player.x + rightX * leanVal;
+    let eyeY = Math.max(0.22, (player.y || 0) + eyeH);
+    let eyeZ = player.z + rightZ * leanVal;
+
+    if (
+      payload?.origin &&
+      typeof payload.origin.x === 'number' &&
+      typeof payload.origin.y === 'number' &&
+      typeof payload.origin.z === 'number'
+    ) {
+      const originDist = Math.hypot(
+        payload.origin.x - player.x,
+        payload.origin.y - ((player.y || 0) + eyeH),
+        payload.origin.z - player.z
+      );
+      if (originDist <= 1.8 && Number.isFinite(originDist)) {
+        eyeX = payload.origin.x;
+        eyeY = Math.max(0.22, payload.origin.y);
+        eyeZ = payload.origin.z;
+      }
+    }
+
+    const mapCfg = getMapConfig(room.mapId);
+    const obstacles = mapCfg.obstacles || [];
+    const arenaLimit = (mapCfg.arenaHalfSize || MATCH_CONFIG.ARENA_HALF_SIZE) - 0.3;
+    const radius = 0.18;
+
+    let startX = eyeX + dirX * 0.38;
+    let startY = Math.max(0.22, eyeY + dirY * 0.22);
+    let startZ = eyeZ + dirZ * 0.38;
+
+    // Prevent point-blank throws from spawning inside or through an adjacent obstacle
+    let blockedAtStart = !hasLineOfSight(
+      { x: eyeX, y: eyeY, z: eyeZ },
+      { x: startX, y: startY, z: startZ },
+      obstacles
+    );
+    if (!blockedAtStart) {
+      for (let j = 0; j < obstacles.length; j++) {
+        const box = obstacles[j];
+        const minX = (box.minX !== undefined ? box.minX : box.x - box.w * 0.5) - radius;
+        const maxX = (box.maxX !== undefined ? box.maxX : box.x + box.w * 0.5) + radius;
+        const minY = (box.minY !== undefined ? box.minY : box.y - box.h * 0.5) - radius;
+        const maxY = (box.maxY !== undefined ? box.maxY : box.y + box.h * 0.5) + radius;
+        const minZ = (box.minZ !== undefined ? box.minZ : box.z - box.d * 0.5) - radius;
+        const maxZ = (box.maxZ !== undefined ? box.maxZ : box.z + box.d * 0.5) + radius;
+        if (
+          startX >= minX && startX <= maxX &&
+          startY >= minY && startY <= maxY &&
+          startZ >= minZ && startZ <= maxZ
+        ) {
+          blockedAtStart = true;
+          break;
+        }
+      }
+    }
+    if (blockedAtStart) {
+      startX = eyeX;
+      startY = eyeY;
+      startZ = eyeZ;
+    }
+
+    startX = Math.max(-arenaLimit, Math.min(arenaLimit, startX));
+    startZ = Math.max(-arenaLimit, Math.min(arenaLimit, startZ));
+
+    const throwSpeed = 19.5;
+    const upwardArc = 4.2;
+    const vx = dirX * throwSpeed + (player.vx || 0) * 0.25;
+    const vy = dirY * throwSpeed + upwardArc;
+    const vz = dirZ * throwSpeed + (player.vz || 0) * 0.25;
+    const fuseMs = 2200;
+
+    const grenade = {
+      id: `gren_${now}_${Math.random().toString(36).slice(2, 7)}`,
+      ownerId: player.id,
+      ownerName: player.name,
+      x: Number(startX.toFixed(2)),
+      y: Number(startY.toFixed(2)),
+      z: Number(startZ.toFixed(2)),
+      vx: Number(vx.toFixed(2)),
+      vy: Number(vy.toFixed(2)),
+      vz: Number(vz.toFixed(2)),
+      createdAt: now,
+      explodeAt: now + fuseMs,
+      fuseRemaining: 2.2
+    };
+
+    room.grenades.push(grenade);
+
+    this.io.to(room.code).emit('grenadeThrown', {
+      ...grenade,
+      grenade,
+      playerId: player.id,
+      grenades: player.grenades
+    });
+
+    return grenade;
+  }
+
+  updateGrenades(room, dt, now = Date.now()) {
+    if (!room || !Array.isArray(room.grenades) || room.grenades.length === 0) return;
+
+    const mapCfg = getMapConfig(room.mapId);
+    const obstacles = mapCfg.obstacles || [];
+    const arenaLimit = (mapCfg.arenaHalfSize || MATCH_CONFIG.ARENA_HALF_SIZE) - 0.25;
+    const gravity = MATCH_CONFIG.GRAVITY || 22.0;
+    const restitution = 0.45;
+    const floorY = 0.18;
+    const radius = 0.18;
+
+    const totalDt = Math.min(3.0, Math.max(0, Number(dt) || 0));
+    const steps = Math.max(1, Math.min(60, Math.ceil(totalDt / 0.02)));
+    const stepDt = totalDt / steps;
+
+    const remaining = [];
+    const toDetonate = [];
+
+    for (let i = 0; i < room.grenades.length; i++) {
+      const g = room.grenades[i];
+      if (!g) continue;
+
+      for (let s = 0; s < steps; s++) {
+        const prevX = g.x;
+        const prevY = g.y;
+        const prevZ = g.z;
+        g.vy -= gravity * stepDt;
+        g.x += g.vx * stepDt;
+        g.y += g.vy * stepDt;
+        g.z += g.vz * stepDt;
+
+        // Arena outer wall bounce
+        if (g.x > arenaLimit) {
+          g.x = arenaLimit;
+          g.vx = -Math.abs(g.vx) * restitution;
+          g.vz *= 0.85;
+        } else if (g.x < -arenaLimit) {
+          g.x = -arenaLimit;
+          g.vx = Math.abs(g.vx) * restitution;
+          g.vz *= 0.85;
+        }
+
+        if (g.z > arenaLimit) {
+          g.z = arenaLimit;
+          g.vz = -Math.abs(g.vz) * restitution;
+          g.vx *= 0.85;
+        } else if (g.z < -arenaLimit) {
+          g.z = -arenaLimit;
+          g.vz = Math.abs(g.vz) * restitution;
+          g.vx *= 0.85;
+        }
+
+        // Obstacle AABB bounce with damping (restitution ~0.45)
+        for (let j = 0; j < obstacles.length; j++) {
+          const box = obstacles[j];
+          const minX = (box.minX !== undefined ? box.minX : box.x - box.w * 0.5) - radius;
+          const maxX = (box.maxX !== undefined ? box.maxX : box.x + box.w * 0.5) + radius;
+          if (g.x < minX || g.x > maxX) continue;
+
+          const minZ = (box.minZ !== undefined ? box.minZ : box.z - box.d * 0.5) - radius;
+          const maxZ = (box.maxZ !== undefined ? box.maxZ : box.z + box.d * 0.5) + radius;
+          if (g.z < minZ || g.z > maxZ) continue;
+
+          const minY = (box.minY !== undefined ? box.minY : box.y - box.h * 0.5) - radius;
+          const maxY = (box.maxY !== undefined ? box.maxY : box.y + box.h * 0.5) + radius;
+          if (g.y < minY || g.y > maxY) continue;
+
+          const wasHorizInside =
+            prevX > minX + 0.02 && prevX < maxX - 0.02 &&
+            prevZ > minZ + 0.02 && prevZ < maxZ - 0.02;
+
+          if (wasHorizInside && prevY >= maxY - 0.06 && g.vy <= 0) {
+            g.y = maxY;
+            if (g.vy < -1.1) {
+              g.vy = -g.vy * restitution;
+              g.vx *= 0.78;
+              g.vz *= 0.78;
+            } else {
+              g.vy = 0;
+              const topFriction = Math.max(0, 1 - 5.5 * stepDt);
+              g.vx *= topFriction;
+              g.vz *= topFriction;
+            }
+          } else if (wasHorizInside && prevY <= minY + 0.06 && g.vy > 0) {
+            g.y = minY;
+            g.vy = -Math.abs(g.vy) * restitution;
+          } else if (prevX <= minX + 0.03 && g.vx > 0) {
+            g.x = minX;
+            g.vx = -Math.abs(g.vx) * restitution;
+            g.vz *= 0.82;
+          } else if (prevX >= maxX - 0.03 && g.vx < 0) {
+            g.x = maxX;
+            g.vx = Math.abs(g.vx) * restitution;
+            g.vz *= 0.82;
+          } else if (prevZ <= minZ + 0.03 && g.vz > 0) {
+            g.z = minZ;
+            g.vz = -Math.abs(g.vz) * restitution;
+            g.vx *= 0.82;
+          } else if (prevZ >= maxZ - 0.03 && g.vz < 0) {
+            g.z = maxZ;
+            g.vz = Math.abs(g.vz) * restitution;
+            g.vx *= 0.82;
+          } else {
+            const penLeft = Math.abs(g.x - minX);
+            const penRight = Math.abs(maxX - g.x);
+            const penFront = Math.abs(g.z - minZ);
+            const penBack = Math.abs(maxZ - g.z);
+            const minPen = Math.min(penLeft, penRight, penFront, penBack);
+
+            if (minPen === penLeft) {
+              g.x = minX;
+              g.vx = -Math.abs(g.vx) * restitution;
+              g.vz *= 0.82;
+            } else if (minPen === penRight) {
+              g.x = maxX;
+              g.vx = Math.abs(g.vx) * restitution;
+              g.vz *= 0.82;
+            } else if (minPen === penFront) {
+              g.z = minZ;
+              g.vz = -Math.abs(g.vz) * restitution;
+              g.vx *= 0.82;
+            } else {
+              g.z = maxZ;
+              g.vz = Math.abs(g.vz) * restitution;
+              g.vx *= 0.82;
+            }
+          }
+        }
+
+        // Floor bounce (y = 0.18) & rolling friction
+        if (g.y <= floorY) {
+          g.y = floorY;
+          if (g.vy < -1.1) {
+            g.vy = -g.vy * restitution;
+            g.vx *= 0.78;
+            g.vz *= 0.78;
+          } else {
+            g.vy = 0;
+            const groundFriction = Math.max(0, 1 - 6.5 * stepDt);
+            g.vx *= groundFriction;
+            g.vz *= groundFriction;
+            if (Math.hypot(g.vx, g.vz) < 0.08) {
+              g.vx = 0;
+              g.vz = 0;
+            }
+          }
+        }
+      }
+
+      g.x = Number(g.x.toFixed(2));
+      g.y = Number(g.y.toFixed(2));
+      g.z = Number(g.z.toFixed(2));
+      g.vx = Number(g.vx.toFixed(2));
+      g.vy = Number(g.vy.toFixed(2));
+      g.vz = Number(g.vz.toFixed(2));
+
+      const prevFuse = typeof g.fuseRemaining === 'number' ? g.fuseRemaining : 2.2;
+      const nextFuseByDt = prevFuse - totalDt;
+      const nextFuseByClock = typeof g.explodeAt === 'number' ? (g.explodeAt - now) / 1000 : nextFuseByDt;
+      const fuseRem = Math.min(nextFuseByDt, nextFuseByClock);
+      g.fuseRemaining = Number(Math.max(0, fuseRem).toFixed(2));
+
+      if (fuseRem <= 0 || (typeof g.explodeAt === 'number' && now >= g.explodeAt)) {
+        toDetonate.push(g);
+      } else {
+        remaining.push(g);
+      }
+    }
+
+    room.grenades = remaining;
+
+    for (let i = 0; i < toDetonate.length; i++) {
+      this.detonateGrenade(room, toDetonate[i], now);
+    }
+  }
+
+  detonateGrenade(room, grenade, now = Date.now()) {
+    if (!room || !grenade) return;
+
+    if (Array.isArray(room.grenades) && room.grenades.length > 0) {
+      room.grenades = room.grenades.filter((g) => g && g !== grenade && g.id !== grenade.id);
+    }
+
+    this.io.to(room.code).emit('grenadeExploded', {
+      id: grenade.id,
+      x: grenade.x,
+      y: grenade.y,
+      z: grenade.z,
+      ownerId: grenade.ownerId
+    });
+
+    if (room.state !== 'PLAYING') return;
+
+    const maxDamage = 95;
+    const innerRadius = 2.2;
+    const outerRadius = 7.5;
+    const mapCfg = getMapConfig(room.mapId);
+    const obstacles = mapCfg.obstacles || [];
+    const attacker = room.players.get(grenade.ownerId) || null;
+    const blastOrigin = {
+      x: grenade.x,
+      y: Math.max(0.35, grenade.y + 0.25),
+      z: grenade.z
+    };
+
+    // Evaluate enemy targets first, then owner if standing inside blast radius
+    const candidates = [];
+    for (const p of room.players.values()) {
+      if (!p || !p.alive) continue;
+      if (p.id !== grenade.ownerId) {
+        candidates.push(p);
+      }
+    }
+    if (attacker && attacker.alive) {
+      candidates.push(attacker);
+    }
+
+    for (let i = 0; i < candidates.length; i++) {
+      if (room.state !== 'PLAYING') break;
+      const target = candidates[i];
+      if (!target || !target.alive) continue;
+
+      const clampedTargetY = Math.max(target.y || 0, Math.min((target.y || 0) + 1.5, grenade.y));
+      const dist = Math.hypot(target.x - grenade.x, clampedTargetY - grenade.y, target.z - grenade.z);
+      if (dist > outerRadius) continue;
+
+      const targetTorso = {
+        x: target.x,
+        y: (target.y || 0) + (target.prone ? 0.35 : target.crouching ? 0.8 : 1.1),
+        z: target.z
+      };
+      const targetHead = {
+        x: target.x,
+        y: (target.y || 0) + (target.prone ? 0.48 : target.crouching ? 1.0 : 1.55),
+        z: target.z
+      };
+
+      const losOk =
+        hasLineOfSight(blastOrigin, targetTorso, obstacles) ||
+        hasLineOfSight(blastOrigin, targetHead, obstacles);
+      if (!losOk) continue;
+
+      if (target.invulnerableUntil && now < target.invulnerableUntil) {
+        this.io.to(room.code).emit('spawnProtectedHit', {
+          targetId: target.id,
+          attackerId: grenade.ownerId,
+          remainingMs: Math.max(0, target.invulnerableUntil - now)
+        });
+        continue;
+      }
+
+      let damage = maxDamage;
+      if (dist > innerRadius) {
+        const t = (dist - innerRadius) / (outerRadius - innerRadius);
+        damage = Math.max(1, Math.round(maxDamage * (1 - t)));
+      }
+
+      target.hp = Math.max(0, target.hp - damage);
+
+      this.io.to(room.code).emit('damageDealt', {
+        targetId: target.id,
+        attackerId: grenade.ownerId,
+        attackerPos: { x: grenade.x, y: grenade.y, z: grenade.z },
+        damage,
+        hp: target.hp,
+        isHeadshot: false,
+        weapon: 'grenade',
+        weaponName: 'FRAG GRENADE'
+      });
+
+      if (target.hp <= 0) {
+        this.handlePlayerKilled(room, attacker, target, 'grenade', false);
+      }
+    }
+  }
+
   handlePlayerKilled(room, killer, victim, weaponId, isHeadshot) {
     // Drop victim's primary weapon with its remaining ammo + reserveAmmo at their death location for 5s
     const victimPrimary = (victim.loadout?.primary && WEAPONS[victim.loadout.primary]?.slot === 1)
@@ -1107,10 +1600,23 @@ export class RoomManager {
     victim.lastDeathZ = victim.z;
     victim.respawnAt = Date.now() + MATCH_CONFIG.RESPAWN_DELAY_MS;
 
+    let adrenalineHeal = 0;
     if (killer && killer.id !== victim.id) {
       killer.kills += 1;
       killer.streak += 1;
+      if (killer.alive) {
+        const prevHp = Number(killer.hp) || 0;
+        const maxHp = MATCH_CONFIG.MAX_HP || 100;
+        const healAmount = MATCH_CONFIG.KILL_ADRENALINE_HEAL || KILL_ADRENALINE_HEAL || 25;
+        killer.hp = Math.min(maxHp, prevHp + healAmount);
+        adrenalineHeal = killer.hp - prevHp;
+      }
     }
+
+    const isGrenadeKill = weaponId === 'grenade';
+    const resolvedWeaponName = isGrenadeKill
+      ? 'FRAG GRENADE'
+      : (WEAPONS[weaponId]?.name || String(weaponId || 'rifle').toUpperCase());
 
     this.io.to(room.code).emit('killEvent', {
       killerId: killer ? killer.id : null,
@@ -1119,10 +1625,16 @@ export class RoomManager {
       victimId: victim.id,
       victimName: victim.name,
       victimColor: victim.color,
-      weapon: WEAPONS[weaponId]?.name || weaponId.toUpperCase(),
+      weapon: isGrenadeKill ? 'grenade' : resolvedWeaponName,
+      weaponName: resolvedWeaponName,
       weaponId,
       isHeadshot: Boolean(isHeadshot),
       killerStreak: killer ? killer.streak : 0,
+      killerHp: killer ? killer.hp : 0,
+      newKillerHp: killer ? killer.hp : 0,
+      adrenalineHeal,
+      healedHp: adrenalineHeal,
+      healAmount: adrenalineHeal > 0 ? adrenalineHeal : (KILL_ADRENALINE_HEAL || 25),
       droppedWeapon
     });
 
@@ -1168,6 +1680,9 @@ export class RoomManager {
     player.reserveAmmoByWeapon = createInitialReserveAmmoMap();
     player.ammo = wCfg.magSize;
     player.reserveAmmo = wCfg.infiniteAmmo ? 0 : (wCfg.reserveAmmo ?? wCfg.magSize * 3);
+    player.grenades = 1;
+    player.positionHistory = [];
+    recordPlayerSnapshot(player, now);
 
     this.io.to(room.code).emit('playerRespawned', {
       playerId: player.id,
@@ -1182,6 +1697,7 @@ export class RoomManager {
       reserveAmmo: player.reserveAmmo,
       ammoByWeapon: player.ammoByWeapon,
       reserveAmmoByWeapon: player.reserveAmmoByWeapon,
+      grenades: player.grenades,
       invulnerable: true,
       invulnerableUntil: player.invulnerableUntil,
       spawnProtectionMs: protectionMs
@@ -1270,6 +1786,7 @@ export class RoomManager {
     room.matchEndsAt = now + MATCH_CONFIG.MATCH_DURATION_SEC * 1000;
     room.nextMatchAt = 0;
     room.droppedWeapons = [];
+    room.grenades = [];
     room.recentSpawns = [];
 
     // Reset all pickups
@@ -1299,6 +1816,7 @@ export class RoomManager {
       killLimit: MATCH_CONFIG.KILL_LIMIT,
       pickups: room.pickups,
       droppedWeapons: room.droppedWeapons,
+      activeGrenades: room.grenades,
       players: this.serializePlayers(room)
     });
   }
@@ -1332,6 +1850,7 @@ export class RoomManager {
         weapon: p.weapon,
         ammo: p.ammo,
         reserveAmmo: p.reserveAmmo ?? 0,
+        grenades: p.grenades ?? 1,
         hp: p.hp,
         alive: p.alive,
         invulnerable,
@@ -1344,9 +1863,11 @@ export class RoomManager {
     return list;
   }
 
-  tick() {
+  tick(customDt = null) {
     const now = Date.now();
-    const dt = Math.min(0.1, (now - this.lastTickAt) / 1000);
+    const dt = typeof customDt === 'number' && Number.isFinite(customDt) && customDt > 0
+      ? customDt
+      : Math.min(0.1, (now - this.lastTickAt) / 1000);
     this.lastTickAt = now;
 
     for (const room of this.rooms.values()) {
@@ -1388,6 +1909,12 @@ export class RoomManager {
       // Update Bot AI movement & shooting
       updateRoomBots(room, dt, now, room._botCallbacks);
 
+      // Record lag compensation position snapshots for all alive players/bots
+      recordRoomSnapshots(room, now);
+
+      // Update active Frag Grenades physics & 2.2s fuse detonation
+      this.updateGrenades(room, dt, now);
+
       // Update Health Pack pickups & 5s Dropped Weapons expiration
       this.updateHealthPacks(room, now);
       this.updateDroppedWeapons(room, now);
@@ -1400,6 +1927,7 @@ export class RoomManager {
         seq: room.stateSeq,
         timeRemaining,
         droppedWeapons: room.droppedWeapons,
+        activeGrenades: room.grenades,
         players: this.serializePlayers(room)
       });
     }

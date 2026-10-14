@@ -114,15 +114,19 @@ class PeerRoomSocketAdapter {
     const isEphemeralState = event === 'stateUpdate';
 
     if (isEphemeralState) {
-      // Compact stateUpdate payload: omit droppedWeapons array when empty & unchanged
+      // Compact stateUpdate payload: omit droppedWeapons/activeGrenades arrays when empty & unchanged
       const hasDrops = Array.isArray(data?.droppedWeapons) && data.droppedWeapons.length > 0;
       const shouldIncludeDrops = hasDrops || this._hadDroppedWeaponsLastTick;
       this._hadDroppedWeaponsLastTick = hasDrops;
 
+      const hasGrenades = Array.isArray(data?.activeGrenades) && data.activeGrenades.length > 0;
+      const shouldIncludeGrenades = hasGrenades || this._hadGrenadesLastTick;
+      this._hadGrenadesLastTick = hasGrenades;
+
       const statePacket = {
         type: 'event',
         event: 'stateUpdate',
-        data: shouldIncludeDrops
+        data: (shouldIncludeDrops || shouldIncludeGrenades)
           ? data
           : {
               seq: data.seq,
@@ -313,13 +317,15 @@ class PeerRoomSocketAdapter {
         reserveAmmo: player.reserveAmmo,
         ammoByWeapon: player.ammoByWeapon,
         reserveAmmoByWeapon: player.reserveAmmoByWeapon,
+        grenades: player.grenades ?? 1,
         invulnerable: true,
         invulnerableUntil: player.invulnerableUntil,
         spawnProtectionMs: MATCH_CONFIG.SPAWN_PROTECTION_MS
       },
       players: this.roomManager.serializePlayers(room),
       pickups: room.pickups,
-      droppedWeapons: room.droppedWeapons || []
+      droppedWeapons: room.droppedWeapons || [],
+      activeGrenades: room.grenades || []
     });
   }
 
@@ -407,13 +413,15 @@ class PeerRoomSocketAdapter {
             reserveAmmo: player.reserveAmmo,
             ammoByWeapon: player.ammoByWeapon,
             reserveAmmoByWeapon: player.reserveAmmoByWeapon,
+            grenades: player.grenades ?? 1,
             invulnerable: true,
             invulnerableUntil: player.invulnerableUntil,
             spawnProtectionMs: MATCH_CONFIG.SPAWN_PROTECTION_MS
           },
           players: this.roomManager.serializePlayers(room),
           pickups: room.pickups,
-          droppedWeapons: room.droppedWeapons || []
+          droppedWeapons: room.droppedWeapons || [],
+          activeGrenades: room.grenades || []
         }
       });
 
@@ -432,6 +440,8 @@ class PeerRoomSocketAdapter {
       this._applyMoveWithVelocity(room, player, payload);
     } else if (event === 'shoot') {
       this.roomManager.handleShoot(room, player, payload);
+    } else if (event === 'throwGrenade') {
+      this.roomManager.handleThrowGrenade(room, player, payload);
     } else if (event === 'reload') {
       this.roomManager.handleReload(room, player, payload?.weapon);
     } else if (event === 'pickupWeapon') {
@@ -921,6 +931,8 @@ class PeerRoomSocketAdapter {
       this._applyMoveWithVelocity(room, player, payload);
     } else if (event === 'shoot' && player) {
       this.roomManager.handleShoot(room, player, payload);
+    } else if (event === 'throwGrenade' && player) {
+      this.roomManager.handleThrowGrenade(room, player, payload);
     } else if (event === 'reload' && player) {
       this.roomManager.handleReload(room, player, payload?.weapon);
     } else if (event === 'pickupWeapon' && player) {
