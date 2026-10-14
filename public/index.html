@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>POLYSTRIKE 3D — Web FPS Deathmatch</title>
+  <link rel="stylesheet" href="./css/style.css" />
+</head>
+<body>
+  <!-- 3D WebGL Canvas Container -->
+  <div id="canvas-container"></div>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="toast hidden">Đã sao chép link phòng vào Clipboard!</div>
+
+  <!-- ======================== LOBBY OVERLAY ======================== -->
+  <div id="lobby-screen" class="overlay-screen">
+    <div class="lobby-container">
+      <div class="lobby-header">
+        <div class="brand-badge">WEBGL 3D MULTIPLAYER FPS</div>
+        <h1 class="brand-title">POLY<span>STRIKE</span> 3D</h1>
+        <p class="brand-subtitle">Đấu trường FPS góc nhìn thứ nhất — Tạo phòng & Gửi link chiến ngay cùng bạn bè</p>
+      </div>
+
+      <!-- Invite Link Banner (Shown automatically when URL has ?room=CODE) -->
+      <div id="invite-banner" class="invite-banner hidden">
+        <div class="invite-banner-left">
+          <span class="invite-icon">🔗</span>
+          <div>
+            <div class="invite-label">LỜI MỜI VÀO PHÒNG TRỰC TIẾP</div>
+            <div class="invite-code">Mã phòng: <strong id="invite-room-code">#------</strong></div>
+          </div>
+        </div>
+        <button id="btn-join-invited" class="btn btn-accent">VÀO PHÒNG NGAY →</button>
+      </div>
+
+      <div class="lobby-grid">
+        <!-- Left Panel: Loadout, Map & Settings -->
+        <div class="lobby-card">
+          <h2 class="card-title">1. THIẾT LẬP CHIẾN BINH & BẢN ĐỒ</h2>
+
+          <label class="field-label" for="player-name">Tên nhân vật (Nickname)</label>
+          <input
+            type="text"
+            id="player-name"
+            class="text-input"
+            maxlength="16"
+            placeholder="Nhập tên của bạn (VD: AceSniper)..."
+          />
+
+          <label class="field-label">Vũ khí chính khởi đầu (Slot [1] • Trong trận bấm [B] để đổi Loadout 3 Slot)</label>
+          <div class="weapon-select-grid" id="lobby-weapon-grid">
+            <button type="button" class="weapon-option active" data-weapon="rifle">
+              <span class="weapon-key">[AR]</span>
+              <span class="weapon-name">VANDAL-AK</span>
+              <span class="weapon-desc">AR Hạng Nặng • Sát thương cao</span>
+            </button>
+            <button type="button" class="weapon-option" data-weapon="m4a1">
+              <span class="weapon-key">[AR]</span>
+              <span class="weapon-name">PHANTOM-M4</span>
+              <span class="weapon-desc">AR Giảm Thanh • Tốc bắn nhanh, êm</span>
+            </button>
+            <button type="button" class="weapon-option" data-weapon="scar">
+              <span class="weapon-key">[AR]</span>
+              <span class="weapon-name">SCAR-H 7.62</span>
+              <span class="weapon-desc">Battle Rifle • 2-Tap Headshot</span>
+            </button>
+            <button type="button" class="weapon-option" data-weapon="smg">
+              <span class="weapon-key">[SMG]</span>
+              <span class="weapon-name">VECTOR-KRISS</span>
+              <span class="weapon-desc">Tiểu liên 880 RPM • Cơ động cao</span>
+            </button>
+            <button type="button" class="weapon-option" data-weapon="shotgun">
+              <span class="weapon-key">[SG]</span>
+              <span class="weapon-name">BUCKSHOT-8</span>
+              <span class="weapon-desc">Pump Shotgun • Nạp từng viên</span>
+            </button>
+            <button type="button" class="weapon-option" data-weapon="sniper">
+              <span class="weapon-key">[SNP]</span>
+              <span class="weapon-name">AWP-PHANTOM</span>
+              <span class="weapon-desc">Sniper Scope 3.5x • 1-Shot Kill</span>
+            </button>
+            <button type="button" class="weapon-option" data-weapon="lmg">
+              <span class="weapon-key">[LMG]</span>
+              <span class="weapon-name">ODIN-M249</span>
+              <span class="weapon-desc">Machinegun • Băng đạn 80 viên</span>
+            </button>
+          </div>
+
+          <label class="field-label">Chọn Bản Đồ Chiến Đấu (Rộng 120m+ • Nhiều Vật Cản Nấp)</label>
+          <div class="map-select-grid" id="lobby-map-grid">
+            <button type="button" class="map-option active" data-map="cyber_citadel">
+              <span class="map-badge">120x120m • Cân bằng</span>
+              <span class="map-name">CYBER CITADEL</span>
+              <span class="map-desc">Thành cổ công nghệ, 4 đài bắn tỉa & boong-ke</span>
+            </button>
+            <button type="button" class="map-option" data-map="cargo_dock">
+              <span class="map-badge">128x128m • Nhiều vật cản</span>
+              <span class="map-name">CARGO DOCKYARD</span>
+              <span class="map-desc">Bến cảng container mê cung & cầu vượt trung tâm</span>
+            </button>
+            <button type="button" class="map-option" data-map="desert_outpost">
+              <span class="map-badge">124x124m • Chiến thuật</span>
+              <span class="map-name">SOLAR OUTPOST</span>
+              <span class="map-desc">Pháo đài sa mạc, giao thông hào & 4 tháp canh</span>
+            </button>
+            <button type="button" class="map-option" data-map="neon_lab">
+              <span class="map-badge">120x120m • Cận chiến & Tầm trung</span>
+              <span class="map-name">QUANTUM LAB</span>
+              <span class="map-desc">Phòng thí nghiệm lượng tử & hành lang máy chủ</span>
+            </button>
+          </div>
+
+          <div class="bot-setting-row">
+            <div>
+              <div class="field-label" style="margin-bottom:2px;">Số lượng Bot AI trong phòng</div>
+              <div class="field-hint">Giúp trận đấu luôn sôi động ngay cả khi chỉ có 1 người test link</div>
+            </div>
+            <select id="lobby-bot-count" class="select-input">
+              <option value="0">0 Bot (Chỉ người thật)</option>
+              <option value="2">2 Bot AI</option>
+              <option value="4" selected>4 Bot AI (Khuyên dùng)</option>
+              <option value="6">6 Bot AI</option>
+              <option value="8">8 Bot AI (Hỗn chiến)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Right Panel: Matchmaking & Room Link -->
+        <div class="lobby-card">
+          <h2 class="card-title">2. CHỌN CHẾ ĐỘ VÀO TRẬN</h2>
+
+          <div id="lobby-error" class="error-box hidden"></div>
+
+          <button id="btn-quick-play" class="btn btn-primary btn-large">
+            <span>⚡ VÀO NHANH PHÒNG CHUNG (QUICK PLAY)</span>
+            <small>Ghép ngay vào phòng Deathmatch theo bản đồ đã chọn</small>
+          </button>
+
+          <button id="btn-create-private" class="btn btn-secondary btn-large">
+            <span>🔒 TẠO PHÒNG RIÊNG & LẤY LINK MỜI</span>
+            <small>Tạo mã phòng riêng để copy link gửi bạn bè</small>
+          </button>
+
+          <div class="divider"><span>HOẶC VÀO BẰNG MÃ PHÒNG</span></div>
+
+          <div class="join-code-row">
+            <input
+              type="text"
+              id="room-code-input"
+              class="text-input code-input"
+              maxlength="6"
+              placeholder="NHẬP MÃ 6 KÝ TỰ (VD: A9F2K1)"
+            />
+            <button id="btn-join-code" class="btn btn-outline">VÀO PHÒNG</button>
+          </div>
+
+          <div class="rooms-browser">
+            <div class="rooms-browser-header">
+              <span>DANH SÁCH PHÒNG ĐANG HOẠT ĐỘNG</span>
+              <button id="btn-refresh-rooms" class="btn-link">Làm mới ↻</button>
+            </div>
+            <div id="active-rooms-list" class="rooms-list">
+              <div class="rooms-empty">Đang tải danh sách phòng...</div>
+            </div>
+          </div>
+
+          <div class="controls-guide">
+            <div><kbd>WASD</kbd> Di chuyển</div>
+            <div><kbd>SHIFT</kbd> Chạy nhanh (Sprint)</div>
+            <div><kbd>C / CTRL</kbd> Ngồi / Trượt (Slide)</div>
+            <div><kbd>SPACE</kbd> Nhảy / Bunnyhop</div>
+            <div><kbd>CHUỘT TRÁI</kbd> Bắn / Chém dao</div>
+            <div><kbd>CHUỘT PHẢI</kbd> Ngắm ADS / Scope</div>
+            <div><kbd>1 / 2 / 3</kbd> Chính / Phụ / Dao</div>
+            <div><kbd>B</kbd> Đổi Loadout Súng</div>
+            <div><kbd>R</kbd> Nạp đạn (Tactical / Dry)</div>
+            <div><kbd>L</kbd> Copy Link Mời</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================== IN-GAME HUD ======================== -->
+  <div id="hud-screen" class="hidden">
+    <!-- Red Low-HP / Damage Vignette -->
+    <div id="damage-overlay" class="damage-overlay"></div>
+
+    <!-- Cyan/Gold 1.5s Spawn Protection Shield Vignette -->
+    <div id="spawn-shield-overlay" class="spawn-shield-overlay hidden"></div>
+
+    <!-- Directional Damage Arc Indicator -->
+    <div id="damage-dir-indicator" class="damage-dir-indicator hidden">
+      <div class="damage-dir-arc"></div>
+    </div>
+
+    <!-- Sniper Scope Reticle Overlay -->
+    <div id="sniper-scope" class="sniper-scope hidden">
+      <div class="scope-circle">
+        <div class="scope-line-h"></div>
+        <div class="scope-line-v"></div>
+        <div class="scope-dot"></div>
+      </div>
+    </div>
+
+    <!-- Top Match Bar -->
+    <div class="hud-top-bar">
+      <!-- Room & Share Invite Link -->
+      <div class="hud-room-box">
+        <div class="room-tag">
+          <span class="room-label">PHÒNG</span>
+          <strong id="hud-room-code">#------</strong>
+        </div>
+        <div class="map-pill-hud" id="hud-map-name">🗺️ CYBER CITADEL</div>
+        <button id="btn-copy-link-hud" class="hud-copy-btn" title="Phím tắt [L] để Copy Link Mời">
+          🔗 Copy Link Mời <kbd>L</kbd>
+        </button>
+      </div>
+
+      <!-- Match Timer & Goal -->
+      <div class="hud-match-center">
+        <div class="hud-timer" id="hud-timer">05:00</div>
+        <div class="hud-goal">DEATHMATCH • ĐẠT <span id="hud-kill-limit">20</span> KILLS ĐỂ THẮNG</div>
+        <div class="hud-leader" id="hud-leader">Dẫn đầu: --- (0 Kills)</div>
+      </div>
+
+      <!-- Telemetry & Quick Actions -->
+      <div class="hud-telemetry">
+        <div class="stat-pill"><span id="hud-fps">60</span> FPS</div>
+        <div class="stat-pill"><span id="hud-ping">12</span> ms</div>
+        <div class="stat-pill">Loadout <kbd>B</kbd></div>
+        <div class="stat-pill">Menu <kbd>ESC</kbd></div>
+      </div>
+    </div>
+
+    <!-- Kill Feed (Top Right) -->
+    <div id="kill-feed" class="kill-feed"></div>
+
+    <!-- Center Dynamic Crosshair & Hitmarker -->
+    <div id="crosshair" class="crosshair">
+      <span class="ch-line ch-top"></span>
+      <span class="ch-line ch-bottom"></span>
+      <span class="ch-line ch-left"></span>
+      <span class="ch-line ch-right"></span>
+      <span class="ch-dot"></span>
+    </div>
+
+    <div id="hitmarker" class="hitmarker hidden">
+      <span class="hm-line hm-1"></span>
+      <span class="hm-line hm-2"></span>
+      <span class="hm-line hm-3"></span>
+      <span class="hm-line hm-4"></span>
+    </div>
+
+    <div id="center-banner" class="center-banner hidden"></div>
+
+    <!-- Bottom Left: Health, Movement Stance & K/D Status -->
+    <div class="hud-bottom-left">
+      <div id="spawn-shield-badge" class="spawn-shield-badge hidden">
+        <span>🛡️ BẤT TỬ HỒI SINH</span>
+        <strong id="spawn-shield-timer">1.5s</strong>
+      </div>
+      <div class="player-stats-row">
+        <div class="mini-stat">KILLS: <strong id="hud-kills">0</strong></div>
+        <div class="mini-stat">DEATHS: <strong id="hud-deaths">0</strong></div>
+        <div class="mini-stat">STREAK: <strong id="hud-streak">0</strong>🔥</div>
+      </div>
+      <div class="movement-telemetry-row">
+        <span id="hud-stance" class="stance-badge">🏃 WALK</span>
+        <span class="speed-badge"><strong id="hud-speed">0.0</strong> m/s</span>
+      </div>
+      <div class="hp-card" id="hud-hp-card">
+        <div class="hp-header">
+          <span class="hp-label">MÁU (HP)</span>
+          <span class="hp-value" id="hud-hp-value">100</span>
+        </div>
+        <div class="hp-bar-track">
+          <div class="hp-bar-fill" id="hud-hp-bar" style="width: 100%;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Right: Ammo & 3-Slot Weapon Hotbar -->
+    <div class="hud-bottom-right">
+      <div id="reload-indicator" class="reload-indicator hidden">
+        <span id="reload-text">ĐANG NẠP ĐẠN (RELOADING)...</span>
+        <div class="reload-bar-track"><div id="reload-bar-fill" class="reload-bar-fill"></div></div>
+      </div>
+      <div class="ammo-card">
+        <div class="weapon-info">
+          <div class="weapon-title" id="hud-weapon-name">VANDAL-AK</div>
+          <div class="weapon-role" id="hud-weapon-role">Assault Rifle</div>
+        </div>
+        <div class="ammo-counter">
+          <span id="hud-ammo-current" class="ammo-current">30</span>
+          <span class="ammo-sep">/</span>
+          <span id="hud-ammo-mag" class="ammo-mag">30</span>
+        </div>
+      </div>
+
+      <div class="weapon-hotbar" id="hud-weapon-hotbar">
+        <div class="hotbar-slot active" id="hotbar-slot-1" data-slot-num="1" data-slot="rifle">
+          <span class="slot-num">[1] CHÍNH</span>
+          <span class="slot-name" id="hotbar-name-1">VANDAL-AK</span>
+        </div>
+        <div class="hotbar-slot" id="hotbar-slot-2" data-slot-num="2" data-slot="pistol">
+          <span class="slot-num">[2] PHỤ</span>
+          <span class="slot-name" id="hotbar-name-2">PULSE-P9</span>
+        </div>
+        <div class="hotbar-slot" id="hotbar-slot-3" data-slot-num="3" data-slot="knife">
+          <span class="slot-num">[3] CẬN CHIẾN</span>
+          <span class="slot-name" id="hotbar-name-3">KARAMBIT-X</span>
+        </div>
+        <button type="button" class="hotbar-slot hotbar-loadout-btn" id="btn-hud-loadout" title="Bấm [B] để đổi Loadout Vũ Khí">
+          <span class="slot-num">[B] KHO SÚNG</span>
+          <span class="slot-name">LOADOUT</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================== DEATH / RESPAWN OVERLAY ======================== -->
+  <div id="death-overlay" class="modal-backdrop hidden">
+    <div class="death-box">
+      <div class="death-skull">💀 BẠN ĐÃ BỊ HẠ GỤC</div>
+      <div class="death-killer">
+        Bởi <strong id="death-killer-name">Enemy</strong> với <span id="death-weapon-name">VANDAL-AK</span>
+      </div>
+      <div class="respawn-text">Hồi sinh trở lại trận đấu sau <strong id="respawn-timer">3</strong>s... (Có 1.5s Bất Tử)</div>
+      <div style="margin-top: 14px;">
+        <button id="btn-open-loadout-death" type="button" class="btn btn-accent">
+          🎒 BẤM [B] ĐỔI LOADOUT VŨ KHÍ (AR / SMG / SHOTGUN / SNIPER / LMG)
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================== [B] LOADOUT SELECTION MODAL ======================== -->
+  <div id="loadout-modal" class="modal-backdrop hidden">
+    <div class="pause-card loadout-card" style="max-width: 780px; width: 94%;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <h2 class="pause-title" style="margin:0;">🎒 KHO VŨ KHÍ 3 SLOT (LOADOUT)</h2>
+        <span class="stat-pill">Phím tắt <kbd>B</kbd></span>
+      </div>
+      <p class="pause-subtitle" style="margin-bottom:12px;">
+        Chọn <strong>[1] Vũ khí chính</strong> (AR / SMG / Shotgun / Sniper / Machinegun) và <strong>[2] Vũ khí phụ</strong>. Slot <strong>[3] Dao Karambit-X</strong> luôn trang bị sẵn (+12% tốc chạy).
+      </p>
+
+      <div class="field-label">SLOT [1] — VŨ KHÍ CHÍNH (PRIMARY: AR / SMG / SHOTGUN / SNIPER / MACHINEGUN)</div>
+      <div id="loadout-primary-grid" class="weapon-select-grid" style="grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); margin-bottom: 14px;"></div>
+
+      <div class="field-label">SLOT [2] — VŨ KHÍ PHỤ (SECONDARY SIDEARM) & SLOT [3] — DAO CẬN CHIẾN</div>
+      <div id="loadout-secondary-grid" class="weapon-select-grid" style="grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); margin-bottom: 16px;"></div>
+
+      <div class="pause-actions">
+        <button id="btn-save-loadout" type="button" class="btn btn-primary btn-large">
+          ✅ XÁC NHẬN LOADOUT & TIẾP TỤC CHIẾN ĐẤU [B]
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================== PAUSE / INVITE MODAL (ESC) ======================== -->
+  <div id="pause-modal" class="modal-backdrop hidden">
+    <div class="pause-card">
+      <h2 class="pause-title">TẠM DỪNG / CÀI ĐẶT PHÒNG</h2>
+      <p class="pause-subtitle">Gửi đường link bên dưới cho bạn bè để họ vào bắn chung ngay lập tức:</p>
+
+      <div class="invite-share-box">
+        <input type="text" id="pause-invite-url" class="text-input invite-url-input" readonly />
+        <button id="btn-copy-link-pause" class="btn btn-accent">SAO CHÉP LINK</button>
+      </div>
+
+      <div class="pause-settings">
+        <div class="setting-item">
+          <label for="pause-map-select">Đổi Bản Đồ Phòng Chơi</label>
+          <select id="pause-map-select" class="select-input">
+            <option value="cyber_citadel">Cyber Citadel (120x120m)</option>
+            <option value="cargo_dock">Cargo Dockyard (128x128m)</option>
+            <option value="desert_outpost">Solar Outpost (124x124m)</option>
+            <option value="neon_lab">Quantum Lab (120x120m)</option>
+          </select>
+        </div>
+
+        <div class="setting-item">
+          <label for="pause-bot-select">Số lượng Bot AI trong phòng</label>
+          <select id="pause-bot-select" class="select-input">
+            <option value="0">0 Bot (Tắt Bot)</option>
+            <option value="2">2 Bot AI</option>
+            <option value="4">4 Bot AI</option>
+            <option value="6">6 Bot AI</option>
+            <option value="8">8 Bot AI</option>
+          </select>
+        </div>
+
+        <div class="setting-item">
+          <label for="sens-slider">Độ nhạy chuột (Sensitivity): <span id="sens-value">1.0</span></label>
+          <input type="range" id="sens-slider" min="0.3" max="2.5" step="0.1" value="1.0" />
+        </div>
+
+        <div class="setting-item">
+          <label for="sound-checkbox">Âm thanh súng & hiệu ứng 3D</label>
+          <input type="checkbox" id="sound-checkbox" checked />
+        </div>
+      </div>
+
+      <div class="pause-actions">
+        <button id="btn-resume" class="btn btn-primary btn-large">▶ TIẾP TỤC CHIẾN ĐẤU (CLICK KHÓA CHUỘT)</button>
+        <button id="btn-leave-room" class="btn btn-danger">🚪 RỜI PHÒNG VỀ SẢNH CHÍNH</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================== LIVE SCOREBOARD (TAB) ======================== -->
+  <div id="scoreboard-modal" class="scoreboard-backdrop hidden">
+    <div class="scoreboard-card">
+      <div class="scoreboard-header">
+        <div>
+          <h3>BẢNG XẾP HẠNG TRẬN ĐẤU</h3>
+          <p>Phòng <strong id="sb-room-code">#------</strong> • Bản đồ: <strong id="sb-map-name">CYBER CITADEL</strong> • Mục tiêu: 20 Kills</p>
+        </div>
+        <div class="sb-hint">Giữ <kbd>TAB</kbd> để xem</div>
+      </div>
+      <table class="sb-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Chiến binh</th>
+            <th>Loại</th>
+            <th>Kills</th>
+            <th>Deaths</th>
+            <th>K/D</th>
+            <th>Chuỗi (Streak)</th>
+          </tr>
+        </thead>
+        <tbody id="scoreboard-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ======================== MATCH END / VICTORY PODIUM ======================== -->
+  <div id="match-end-modal" class="modal-backdrop hidden">
+    <div class="victory-card">
+      <div class="victory-badge">KẾT THÚC VÒNG ĐẤU DEATHMATCH</div>
+      <h2 class="victory-winner">🏆 CHIẾN THẮNG: <span id="victory-winner-name">---</span></h2>
+      <p class="victory-stats" id="victory-winner-stats">20 Kills • 4 Deaths</p>
+
+      <table class="sb-table victory-table">
+        <thead>
+          <tr>
+            <th>Hạng</th>
+            <th>Chiến binh</th>
+            <th>Kills</th>
+            <th>Deaths</th>
+            <th>Tỉ lệ K/D</th>
+          </tr>
+        </thead>
+        <tbody id="victory-leaderboard-body"></tbody>
+      </table>
+
+      <div class="next-match-banner">
+        Ván đấu mới sẽ tự động bắt đầu sau <strong id="next-match-countdown">10</strong> giây...
+      </div>
+    </div>
+  </div>
+
+  <!-- Socket.IO Client Library (Optional on static GitHub Pages; fallback handled by networkAdapter.js) -->
+  <script src="./socket.io/socket.io.js" onerror="window.__STATIC_HOST_MODE__=true"></script>
+  <!-- Main Application Entry (ES Module) -->
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>

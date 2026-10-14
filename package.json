@@ -1,0 +1,18 @@
+{
+  "name": "polystrike-3d-fps",
+  "version": "1.0.0",
+  "description": "3D Web First-Person Shooter Deathmatch with Shareable Room Links & Bot AI",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "build:pages": "node scripts/build-pages.mjs",
+    "test:ci": "node scripts/verify-ci.mjs"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1",
+    "three": "^0.170.0"
+  }
+}
