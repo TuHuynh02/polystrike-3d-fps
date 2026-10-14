@@ -4,6 +4,7 @@ import {
   MATCH_CONFIG,
   PLAYER_COLORS,
   WEAPONS,
+  computeDistanceFalloff,
   getMapConfig,
   hasLineOfSight,
   isPointClearOfObstacles
@@ -882,11 +883,8 @@ export class RoomManager {
         continue;
       }
 
-      // Apply distance falloff for shotgun beyond 16m so close-range combat is punchy and balanced
-      let falloffMult = 1.0;
-      if (weaponId === 'shotgun' && dist > 16) {
-        falloffMult = Math.max(0.42, 1 - (dist - 16) / 50);
-      }
+      // Apply per-weapon distance damage falloff (SMGs & Shotguns drop sharply at mid/long range while ARs/Snipers hold power)
+      const falloffMult = computeDistanceFalloff(weaponCfg, dist);
 
       const hitZoneMult = claim.isHeadshot
         ? weaponCfg.headshotMult

@@ -1,8 +1,9 @@
 // Shared weapon definitions & 3-slot loadout constants
 // Tuned for:
-// 1) Snappy, fast fire rates (reduced fireRateMs across all weapons)
-// 2) Crosshair-only recoil & easy stationary/crouch/prone accuracy (no camera shake / complex pull-down spray)
-// 3) Strong run-and-gun penalty (high moveSpread & airSpread so running while shooting blooms crosshair wide & deviates shots)
+// 1) Distinct tactical roles & balanced Time-To-Kill (TTK) by engagement distance
+// 2) Distance Damage Falloff (SMGs & Shotguns drop damage sharply beyond CQB so ARs dominate mid/long range)
+// 3) Crosshair-only recoil & easy stationary/crouch/prone accuracy (no camera shake)
+// 4) Strong run-and-gun penalty (high moveSpread & airSpread)
 
 export const WEAPONS = {
   // ==================== SLOT 1: PRIMARY WEAPONS ====================
@@ -12,21 +13,21 @@ export const WEAPONS = {
     category: 'AR',
     categoryLabel: 'ASSAULT RIFLE',
     name: 'VANDAL-AK',
-    role: 'AK-47 Tốc Bắn Nhanh • 1-Tap Headshot (102 DMG), Đứng bắn siêu chuẩn',
+    role: 'AK-47 Chuẩn Tầm Trung/Xa • 1-Tap Headshot (102 DMG), 3 Viên Ngực (TTK 176ms)',
     damage: 34,
-    headshotMult: 3.0, // 102 headshot (1-Tap Headshot!)
+    headshotMult: 3.0, // 102 headshot (1-Tap Headshot up to mid-long range!)
     magSize: 30,
     reserveAmmo: 90,
-    fireRateMs: 82,         // Faster fire rate (~732 RPM, down from 108ms)
-    reloadMs: 1750,         // Empty / dry reload (with bolt rack)
-    tacticalReloadMs: 1350, // Tactical reload (rounds left in chamber)
+    fireRateMs: 88,         // ~682 RPM (3 body shots = 176ms TTK)
+    reloadMs: 1750,
+    tacticalReloadMs: 1350,
     equipMs: 220,
     pellets: 1,
-    spread: 0.0032,         // Very tight when stationary
-    adsSpread: 0.0006,
-    firstShotSpreadMult: 0.05,
-    bloomPerShot: 0.0022,   // Easy, forgiving bloom when standing still
-    bloomMax: 0.016,
+    spread: 0.0026,         // Pinpoint stationary accuracy at range
+    adsSpread: 0.0005,
+    firstShotSpreadMult: 0.04,
+    bloomPerShot: 0.0020,
+    bloomMax: 0.015,
     bloomDecay: 0.22,
     moveSpread: 0.095,      // Heavy run-and-gun spread penalty!
     airSpread: 0.135,
@@ -34,19 +35,22 @@ export const WEAPONS = {
     proneSpreadMult: 0.32,
     moveSpeedMult: 0.96,
     automatic: true,
-    range: 175,
+    range: 185,
+    falloffStart: 35,       // Full 34 DMG up to 35m
+    falloffEnd: 85,         // Holds 85% DMG (29 DMG) even at 85m+ (4-shot kill at extreme range)
+    minFalloffMult: 0.85,
     zoomFov: 55,
     recoilPitch: 0.0,       // Crosshair-only recoil (no camera pitch climb)
     recoilYaw: 0.0,
     recoilClimbMult: 0.0,
     recoilMaxPitch: 0.0,
     recoilRecovery: 14.0,
-    recoilRecoveryDelayMs: 90,
+    recoilRecoveryDelayMs: 95,
     recoilPattern: [0.0],
-    crosshairKick: 0.018,   // Snappy crosshair recoil pulse per shot
-    visualKick: 0.052,      // Gentle viewmodel kick without camera shake
+    crosshairKick: 0.018,
+    visualKick: 0.052,
     color: 0xf59e0b,
-    stats: { damage: 85, fireRate: 84, recoilControl: 88, mobility: 76, range: 84 }
+    stats: { damage: 86, fireRate: 80, recoilControl: 88, mobility: 76, range: 88 }
   },
   m4a1: {
     id: 'm4a1',
@@ -54,29 +58,32 @@ export const WEAPONS = {
     category: 'AR',
     categoryLabel: 'ASSAULT RIFLE',
     name: 'PHANTOM-M4',
-    role: 'M4A1-S Giảm Thanh • Xả đạn siêu tốc 880 RPM, đứng bắn cực êm',
-    damage: 28,
-    headshotMult: 2.65, // 74 headshot (1 Headshot Dink + 1 Bodyshot Kill!)
+    role: 'M4A1-S Giảm Thanh • Tốc bắn 833 RPM, 4 Viên Ngực tầm trung (TTK 216ms)',
+    damage: 29,
+    headshotMult: 2.7,  // 78 headshot (1 HS + 1 Body Kill!)
     magSize: 30,
     reserveAmmo: 90,
-    fireRateMs: 68,     // Faster fire rate (~882 RPM, down from 88ms)
+    fireRateMs: 72,     // ~833 RPM (4 body shots = 216ms TTK)
     reloadMs: 1580,
     tacticalReloadMs: 1180,
     equipMs: 200,
     pellets: 1,
-    spread: 0.0024,
+    spread: 0.0022,
     adsSpread: 0.0004,
     firstShotSpreadMult: 0.04,
-    bloomPerShot: 0.0016,
+    bloomPerShot: 0.0015,
     bloomMax: 0.012,
     bloomDecay: 0.25,
-    moveSpread: 0.082,  // Heavy run-and-gun spread penalty!
+    moveSpread: 0.082,
     airSpread: 0.120,
     crouchSpreadMult: 0.50,
     proneSpreadMult: 0.30,
     moveSpeedMult: 0.99,
     automatic: true,
-    range: 170,
+    range: 175,
+    falloffStart: 28,   // Full 29 DMG up to 28m
+    falloffEnd: 75,     // Smoothly drops to 78% (23 DMG = 5-shot kill at 75m+)
+    minFalloffMult: 0.78,
     zoomFov: 56,
     recoilPitch: 0.0,
     recoilYaw: 0.0,
@@ -88,7 +95,7 @@ export const WEAPONS = {
     crosshairKick: 0.014,
     visualKick: 0.042,
     color: 0x06b6d4,
-    stats: { damage: 72, fireRate: 92, recoilControl: 95, mobility: 82, range: 80 }
+    stats: { damage: 74, fireRate: 90, recoilControl: 95, mobility: 82, range: 82 }
   },
   scar: {
     id: 'scar',
@@ -96,41 +103,44 @@ export const WEAPONS = {
     category: 'AR',
     categoryLabel: 'ASSAULT RIFLE',
     name: 'SCAR-H 7.62',
-    role: 'Battle Rifle 7.62mm • 1-Tap Headshot tầm xa, 3 viên vào ngực',
-    damage: 38,
-    headshotMult: 2.7, // 103 headshot (1-Tap Headshot!)
+    role: 'Battle Rifle 7.62mm • Không sợ bắn xa, 1-Tap HS & 3 Viên Ngực mọi cự ly',
+    damage: 39,
+    headshotMult: 2.65, // 103 headshot (1-Tap Headshot even at long range!)
     magSize: 20,
     reserveAmmo: 60,
-    fireRateMs: 105,    // Faster fire rate (down from 142ms)
+    fireRateMs: 110,    // ~545 RPM (3 body shots = 220ms TTK across the map)
     reloadMs: 1820,
     tacticalReloadMs: 1400,
     equipMs: 240,
     pellets: 1,
-    spread: 0.0028,
-    adsSpread: 0.0004,
+    spread: 0.0024,
+    adsSpread: 0.0003,
     firstShotSpreadMult: 0.04,
-    bloomPerShot: 0.0025,
-    bloomMax: 0.018,
+    bloomPerShot: 0.0024,
+    bloomMax: 0.017,
     bloomDecay: 0.21,
-    moveSpread: 0.105,  // Heavy run-and-gun spread penalty!
+    moveSpread: 0.105,
     airSpread: 0.145,
     crouchSpreadMult: 0.48,
     proneSpreadMult: 0.28,
     moveSpeedMult: 0.93,
     automatic: true,
-    range: 200,
+    range: 210,
+    falloffStart: 48,   // Full 39 DMG up to 48m
+    falloffEnd: 105,    // Retains 90% DMG (35 DMG = still 3-shot body kill at 100m!)
+    minFalloffMult: 0.90,
     zoomFov: 46,
     recoilPitch: 0.0,
     recoilYaw: 0.0,
     recoilClimbMult: 0.0,
     recoilMaxPitch: 0.0,
     recoilRecovery: 13.5,
-    recoilRecoveryDelayMs: 100,
+    recoilRecoveryDelayMs: 105,
     recoilPattern: [0.0],
     crosshairKick: 0.022,
     visualKick: 0.060,
     color: 0xeab308,
-    stats: { damage: 90, fireRate: 74, recoilControl: 84, mobility: 70, range: 90 }
+    stats: { damage: 92, fireRate: 72, recoilControl: 84, mobility: 70, range: 94 }
   },
   smg: {
     id: 'smg',
@@ -138,29 +148,32 @@ export const WEAPONS = {
     category: 'SMG',
     categoryLabel: 'SMG',
     name: 'VECTOR-KRISS',
-    role: 'Tiểu Liên CQB • Xả đạn 1150 RPM cực nhanh tầm gần',
-    damage: 20,
-    headshotMult: 2.2, // 44 headshot
+    role: 'Tiểu Liên CQB (<13m) • 1090 RPM mạnh áp sát, rớt sát thương nặng khi bắn xa',
+    damage: 22,
+    headshotMult: 1.85, // 41 headshot in CQB (no long-range beam)
     magSize: 32,
     reserveAmmo: 96,
-    fireRateMs: 52,     // Faster fire rate (~1150 RPM, down from 68ms)
+    fireRateMs: 55,     // ~1090 RPM (5 shots = 220ms CQB TTK; at 35m+ drops to 10 DMG = 10 shots / 495ms+ TTK!)
     reloadMs: 1380,
     tacticalReloadMs: 1050,
     equipMs: 165,
     pellets: 1,
-    spread: 0.0048,
-    adsSpread: 0.0014,
-    firstShotSpreadMult: 0.12,
-    bloomPerShot: 0.0018,
-    bloomMax: 0.016,
+    spread: 0.0092,     // Wider CQB cone so SMG cannot snipe ARs across the map
+    adsSpread: 0.0045,
+    firstShotSpreadMult: 0.35,
+    bloomPerShot: 0.0028,
+    bloomMax: 0.024,
     bloomDecay: 0.24,
-    moveSpread: 0.056,  // Noticeable run-and-gun spread & crosshair expansion
-    airSpread: 0.092,
-    crouchSpreadMult: 0.58,
-    proneSpreadMult: 0.40,
+    moveSpread: 0.058,
+    airSpread: 0.095,
+    crouchSpreadMult: 0.65,
+    proneSpreadMult: 0.48,
     moveSpeedMult: 1.05,
     automatic: true,
-    range: 115,
+    range: 85,
+    falloffStart: 12,   // Full 22 DMG only within 12m CQB!
+    falloffEnd: 36,     // Drops sharply to 45% (10 DMG) by 36m (needs 10 hits vs AR's 3-4 hits!)
+    minFalloffMult: 0.45,
     zoomFov: 62,
     recoilPitch: 0.0,
     recoilYaw: 0.0,
@@ -169,10 +182,10 @@ export const WEAPONS = {
     recoilRecovery: 15.5,
     recoilRecoveryDelayMs: 75,
     recoilPattern: [0.0],
-    crosshairKick: 0.013,
+    crosshairKick: 0.015,
     visualKick: 0.036,
     color: 0x10b981,
-    stats: { damage: 55, fireRate: 99, recoilControl: 92, mobility: 95, range: 54 }
+    stats: { damage: 56, fireRate: 98, recoilControl: 86, mobility: 95, range: 38 }
   },
   shotgun: {
     id: 'shotgun',
@@ -180,12 +193,12 @@ export const WEAPONS = {
     category: 'SHOTGUN',
     categoryLabel: 'SHOTGUN',
     name: 'BUCKSHOT-8',
-    role: 'Pump Shotgun • 8 viên đạn chùm cận chiến 1-Shot, nhịp bơm nhanh',
-    damage: 16,
-    headshotMult: 1.65, // 26 per pellet headshot (up to 208 max!)
+    role: 'Pump Shotgun Cận Chiến (<9m) • 8 viên đạn chùm 1-Shot áp sát, yếu hẳn khi xa',
+    damage: 17,
+    headshotMult: 1.55, // 26 per pellet headshot in CQB
     magSize: 6,
     reserveAmmo: 24,
-    fireRateMs: 560,    // Faster pump-action fire rate (down from 740ms)
+    fireRateMs: 560,
     reloadMs: 2200,
     tacticalReloadMs: 1850,
     shellByShell: true,
@@ -194,19 +207,22 @@ export const WEAPONS = {
     pumpActionMs: 340,
     equipMs: 230,
     pellets: 8,
-    spread: 0.052,
-    adsSpread: 0.032,
-    firstShotSpreadMult: 0.80,
+    spread: 0.056,
+    adsSpread: 0.036,
+    firstShotSpreadMult: 0.85,
     bloomPerShot: 0.010,
     bloomMax: 0.025,
     bloomDecay: 0.16,
-    moveSpread: 0.068,  // Wide pellet spread when running
+    moveSpread: 0.068,
     airSpread: 0.100,
     crouchSpreadMult: 0.72,
     proneSpreadMult: 0.56,
     moveSpeedMult: 0.97,
     automatic: false,
-    range: 65,
+    range: 48,
+    falloffStart: 8,    // Full 17 DMG/pellet only within 8m
+    falloffEnd: 25,     // Drops to 25% (4 DMG/pellet) by 25m
+    minFalloffMult: 0.25,
     zoomFov: 63,
     recoilPitch: 0.0,
     recoilYaw: 0.0,
@@ -218,7 +234,7 @@ export const WEAPONS = {
     crosshairKick: 0.032,
     visualKick: 0.085,
     color: 0xef4444,
-    stats: { damage: 96, fireRate: 45, recoilControl: 76, mobility: 78, range: 32 }
+    stats: { damage: 96, fireRate: 45, recoilControl: 76, mobility: 78, range: 24 }
   },
   sniper: {
     id: 'sniper',
@@ -226,30 +242,33 @@ export const WEAPONS = {
     category: 'SNIPER',
     categoryLabel: 'SNIPER',
     name: 'AWP-PHANTOM',
-    role: 'AWP Chuẩn CS:GO • 1-Shot Kill vào Ngực/Đầu (105 DMG), Lên đạn nhanh',
-    damage: 105,
-    headshotMult: 2.5, // 263 headshot, 105 torso (1-shot kill!), 82 legshot!
+    role: 'AWP Chuẩn CS:GO • 1-Shot Kill vào Ngực/Đầu (108 DMG) mọi cự ly',
+    damage: 108,
+    headshotMult: 2.5, // 270 headshot, 108 torso (1-shot kill!), 84 legshot!
     magSize: 5,
     reserveAmmo: 15,
-    fireRateMs: 860,    // Faster bolt cycle (down from 1120ms)
+    fireRateMs: 880,
     reloadMs: 2250,
     tacticalReloadMs: 1750,
     boltActionMs: 480,
     equipMs: 280,
     pellets: 1,
     spread: 0.028,
-    adsSpread: 0.0001, // Pinpoint when scoped & stationary
+    adsSpread: 0.0001,
     firstShotSpreadMult: 0.04,
     bloomPerShot: 0.024,
     bloomMax: 0.036,
     bloomDecay: 0.16,
-    moveSpread: 0.145,  // Punishes running sniper shots heavily!
+    moveSpread: 0.145,
     airSpread: 0.190,
     crouchSpreadMult: 0.48,
     proneSpreadMult: 0.22,
     moveSpeedMult: 0.88,
     automatic: false,
     range: 260,
+    falloffStart: 140,
+    falloffEnd: 260,
+    minFalloffMult: 0.95,
     zoomFov: 22,
     recoilPitch: 0.0,
     recoilYaw: 0.0,
@@ -269,29 +288,32 @@ export const WEAPONS = {
     category: 'LMG',
     categoryLabel: 'MACHINEGUN',
     name: 'ODIN-M249',
-    role: 'Machinegun Hạng Nặng • Băng đạn 80 viên, đứng/nằm xả đạn siêu êm',
+    role: 'Machinegun Hạng Nặng • Băng đạn 80 viên, nằm bắn chế áp tầm trung',
     damage: 26,
-    headshotMult: 2.1, // 55 headshot
+    headshotMult: 2.0, // 52 headshot
     magSize: 80,
     reserveAmmo: 160,
-    fireRateMs: 70,     // Faster fire rate (~857 RPM, down from 92ms)
+    fireRateMs: 74,     // ~810 RPM (4 shots = 222ms TTK)
     reloadMs: 2750,
     tacticalReloadMs: 2200,
     equipMs: 310,
     pellets: 1,
-    spread: 0.0055,
-    adsSpread: 0.0012,
+    spread: 0.0058,
+    adsSpread: 0.0014,
     firstShotSpreadMult: 0.16,
-    bloomPerShot: 0.0018,
+    bloomPerShot: 0.0019,
     bloomMax: 0.018,
     bloomDecay: 0.20,
-    moveSpread: 0.112,  // Heavy run-and-gun penalty on LMG!
+    moveSpread: 0.112,
     airSpread: 0.155,
     crouchSpreadMult: 0.45,
-    proneSpreadMult: 0.22, // Bipod laser when Prone!
+    proneSpreadMult: 0.22,
     moveSpeedMult: 0.85,
     automatic: true,
-    range: 185,
+    range: 175,
+    falloffStart: 25,
+    falloffEnd: 70,
+    minFalloffMult: 0.72,
     zoomFov: 56,
     recoilPitch: 0.0,
     recoilYaw: 0.0,
@@ -303,7 +325,7 @@ export const WEAPONS = {
     crosshairKick: 0.017,
     visualKick: 0.050,
     color: 0xf97316,
-    stats: { damage: 76, fireRate: 88, recoilControl: 85, mobility: 54, range: 84 }
+    stats: { damage: 76, fireRate: 86, recoilControl: 85, mobility: 54, range: 78 }
   },
 
   // ==================== SLOT 2: SECONDARY WEAPONS (PISTOLS) ====================
@@ -313,29 +335,32 @@ export const WEAPONS = {
     category: 'PISTOL',
     categoryLabel: 'SECONDARY',
     name: 'PULSE-P9',
-    role: 'USP-S / P250 Chiến Thuật • Bắn tap siêu tốc, chính xác cao',
-    damage: 28,
-    headshotMult: 2.5, // 70 headshot
+    role: 'USP-S / P250 Chiến Thuật • Bắn tap nhanh, rớt sát thương ở tầm xa',
+    damage: 27,
+    headshotMult: 2.5, // 68 headshot at close range
     magSize: 12,
     reserveAmmo: 36,
-    fireRateMs: 125,    // Faster tap fire rate (down from 175ms)
+    fireRateMs: 130,
     reloadMs: 1100,
     tacticalReloadMs: 850,
     equipMs: 135,
     pellets: 1,
-    spread: 0.0028,
-    adsSpread: 0.0007,
+    spread: 0.0032,
+    adsSpread: 0.0009,
     firstShotSpreadMult: 0.08,
-    bloomPerShot: 0.0018,
-    bloomMax: 0.014,
+    bloomPerShot: 0.0020,
+    bloomMax: 0.015,
     bloomDecay: 0.24,
-    moveSpread: 0.058,  // Run-and-gun spread penalty
+    moveSpread: 0.058,
     airSpread: 0.095,
     crouchSpreadMult: 0.56,
     proneSpreadMult: 0.36,
     moveSpeedMult: 1.05,
     automatic: false,
-    range: 125,
+    range: 110,
+    falloffStart: 16,
+    falloffEnd: 48,
+    minFalloffMult: 0.60,
     zoomFov: 64,
     recoilPitch: 0.0,
     recoilYaw: 0.0,
@@ -347,7 +372,7 @@ export const WEAPONS = {
     crosshairKick: 0.015,
     visualKick: 0.042,
     color: 0xa855f7,
-    stats: { damage: 60, fireRate: 80, recoilControl: 92, mobility: 95, range: 62 }
+    stats: { damage: 60, fireRate: 80, recoilControl: 92, mobility: 95, range: 56 }
   },
   deagle: {
     id: 'deagle',
@@ -355,29 +380,32 @@ export const WEAPONS = {
     category: 'PISTOL',
     categoryLabel: 'SECONDARY',
     name: 'SHERIFF .50',
-    role: 'Desert Eagle .50 AE • "Juan Deag" 1-Tap Headshot (125 DMG)',
+    role: 'Desert Eagle .50 AE • "Juan Deag" 1-Tap Headshot (<38m)',
     damage: 52,
-    headshotMult: 2.4, // 125 headshot (Instant 1-Tap Headshot!)
+    headshotMult: 2.45, // 127 headshot (1-Tap Headshot up to 38m!)
     magSize: 7,
     reserveAmmo: 28,
-    fireRateMs: 220,    // Faster follow-up shots (down from 295ms)
+    fireRateMs: 235,
     reloadMs: 1420,
     tacticalReloadMs: 1120,
     equipMs: 165,
     pellets: 1,
     spread: 0.0032,
     adsSpread: 0.0005,
-    firstShotSpreadMult: 0.04, // Dead-accurate stationary first shot!
+    firstShotSpreadMult: 0.04,
     bloomPerShot: 0.008,
     bloomMax: 0.024,
     bloomDecay: 0.19,
-    moveSpread: 0.098,  // Heavy run-and-gun spread penalty!
+    moveSpread: 0.098,
     airSpread: 0.140,
     crouchSpreadMult: 0.50,
     proneSpreadMult: 0.32,
     moveSpeedMult: 1.01,
     automatic: false,
-    range: 150,
+    range: 140,
+    falloffStart: 25,
+    falloffEnd: 68,
+    minFalloffMult: 0.68,
     zoomFov: 60,
     recoilPitch: 0.0,
     recoilYaw: 0.0,
@@ -389,7 +417,7 @@ export const WEAPONS = {
     crosshairKick: 0.028,
     visualKick: 0.075,
     color: 0xf43f5e,
-    stats: { damage: 90, fireRate: 56, recoilControl: 78, mobility: 88, range: 78 }
+    stats: { damage: 90, fireRate: 56, recoilControl: 78, mobility: 88, range: 74 }
   },
   glock: {
     id: 'glock',
@@ -397,28 +425,31 @@ export const WEAPONS = {
     category: 'PISTOL',
     categoryLabel: 'SECONDARY',
     name: 'FRENZY-G18',
-    role: 'Súng Lục Liên Thanh • Xả đạn 1000 RPM tốc độ cao tầm gần',
-    damage: 16,
-    headshotMult: 1.55, // 25 headshot
+    role: 'Súng Lục Liên Thanh • Xả đạn 920 RPM cứu nguy áp sát (<10m)',
+    damage: 17,
+    headshotMult: 1.65, // 28 headshot at point-blank
     magSize: 18,
     reserveAmmo: 54,
-    fireRateMs: 60,     // Faster fire rate (~1000 RPM, down from 82ms)
+    fireRateMs: 65,     // ~923 RPM
     reloadMs: 1280,
     tacticalReloadMs: 960,
     equipMs: 135,
     pellets: 1,
-    spread: 0.0058,
-    adsSpread: 0.0018,
-    firstShotSpreadMult: 0.18,
-    bloomPerShot: 0.0020,
-    bloomMax: 0.018,
+    spread: 0.0088,
+    adsSpread: 0.0038,
+    firstShotSpreadMult: 0.28,
+    bloomPerShot: 0.0026,
+    bloomMax: 0.022,
     bloomDecay: 0.22,
     moveSpread: 0.056,
     airSpread: 0.092,
-    crouchSpreadMult: 0.60,
+    crouchSpreadMult: 0.64,
     moveSpeedMult: 1.06,
     automatic: true,
-    range: 95,
+    range: 75,
+    falloffStart: 10,   // Full 17 DMG only within 10m
+    falloffEnd: 30,     // Drops to 42% (7 DMG) by 30m
+    minFalloffMult: 0.42,
     zoomFov: 65,
     recoilPitch: 0.0,
     recoilYaw: 0.0,
@@ -430,7 +461,7 @@ export const WEAPONS = {
     crosshairKick: 0.014,
     visualKick: 0.038,
     color: 0x84cc16,
-    stats: { damage: 42, fireRate: 96, recoilControl: 86, mobility: 96, range: 45 }
+    stats: { damage: 42, fireRate: 94, recoilControl: 84, mobility: 96, range: 32 }
   },
 
   // ==================== SLOT 3: MELEE WEAPON (KNIFE) ====================
@@ -447,7 +478,7 @@ export const WEAPONS = {
     headshotMult: 1.65, // 91 upper-strike / backstab
     magSize: 1,
     reserveAmmo: 0,
-    fireRateMs: 310,    // Faster slash speed (down from 420ms)
+    fireRateMs: 310,
     reloadMs: 0,
     tacticalReloadMs: 0,
     equipMs: 130,
@@ -464,6 +495,9 @@ export const WEAPONS = {
     moveSpeedMult: 1.12,
     automatic: true,
     range: 3.3,
+    falloffStart: 3.3,
+    falloffEnd: 5.0,
+    minFalloffMult: 1.0,
     zoomFov: 72,
     recoilPitch: 0.0,
     recoilYaw: 0.0,
@@ -478,6 +512,22 @@ export const WEAPONS = {
     stats: { damage: 85, fireRate: 82, recoilControl: 100, mobility: 100, range: 12 }
   }
 };
+
+/**
+ * Computes the distance-based damage falloff multiplier for a weapon at `dist` meters.
+ * Guarantees SMGs and Shotguns lose damage rapidly outside CQB while ARs & Snipers hold power at range.
+ */
+export function computeDistanceFalloff(weaponCfg, dist) {
+  if (!weaponCfg || weaponCfg.isMelee) return 1.0;
+  const start = weaponCfg.falloffStart ?? 25;
+  const end = weaponCfg.falloffEnd ?? 70;
+  const minMult = weaponCfg.minFalloffMult ?? 0.7;
+
+  if (dist <= start) return 1.0;
+  if (dist >= end || end <= start) return minMult;
+  const t = (dist - start) / (end - start);
+  return 1.0 - t * (1.0 - minMult);
+}
 
 export const PRIMARY_WEAPONS = ['rifle', 'm4a1', 'scar', 'smg', 'shotgun', 'sniper', 'lmg'];
 export const SECONDARY_WEAPONS = ['pistol', 'deagle', 'glock'];
@@ -501,3 +551,4 @@ export const WEAPON_ORDER = [
   'glock',
   'knife'
 ];
+

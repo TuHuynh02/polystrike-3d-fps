@@ -9,7 +9,8 @@ import {
   SECONDARY_WEAPONS,
   MELEE_WEAPONS,
   DEFAULT_LOADOUT,
-  MAPS
+  MAPS,
+  computeDistanceFalloff
 } from '../shared/constants.js';
 import { RoomManager } from '../server/roomManager.js';
 
@@ -44,7 +45,7 @@ for (const rel of filesToCheck) {
   execFileSync(process.execPath, ['--check', path.join(ROOT_DIR, rel)], { stdio: 'inherit' });
 }
 
-console.log('🔫 [CI] Verifying 3-Slot Weapon Arsenal, Faster Fire Rates, Zero Camera Shake & Run-and-Gun Penalty...');
+console.log('🔫 [CI] Verifying 3-Slot Weapon Arsenal, Faster Fire Rates, Zero Camera Shake, TTK & Falloff...');
 assert.equal(PRIMARY_WEAPONS.length, 7, 'Should have 7 primary weapons (3 ARs, SMG, Shotgun, Sniper, LMG)');
 assert.equal(SECONDARY_WEAPONS.length, 3, 'Should have 3 secondary weapons');
 assert.equal(MELEE_WEAPONS.length, 1, 'Should have 1 melee knife weapon');
@@ -57,6 +58,20 @@ assert.ok(WEAPONS.rifle.fireRateMs <= 90, 'Rifle fire rate should be fast (<= 90
 assert.ok(WEAPONS.m4a1.fireRateMs <= 75, 'M4A1 fire rate should be fast (<= 75ms)');
 assert.ok(WEAPONS.smg.fireRateMs <= 58, 'SMG fire rate should be fast (<= 58ms)');
 assert.ok(WEAPONS.pistol.fireRateMs <= 140, 'Pistol fire rate should be fast (<= 140ms)');
+
+// Verify Distance Damage Falloff: SMG must lose heavily to ARs at medium/long range (e.g. 36m)
+const smgDmg36m = Math.round(WEAPONS.smg.damage * computeDistanceFalloff(WEAPONS.smg, 36));
+const akDmg36m = Math.round(WEAPONS.rifle.damage * computeDistanceFalloff(WEAPONS.rifle, 36));
+const m4Dmg36m = Math.round(WEAPONS.m4a1.damage * computeDistanceFalloff(WEAPONS.m4a1, 36));
+const smgShots36m = Math.ceil(100 / smgDmg36m);
+const akShots36m = Math.ceil(100 / akDmg36m);
+const m4Shots36m = Math.ceil(100 / m4Dmg36m);
+const smgTtk36m = (smgShots36m - 1) * WEAPONS.smg.fireRateMs;
+const akTtk36m = (akShots36m - 1) * WEAPONS.rifle.fireRateMs;
+const m4Ttk36m = (m4Shots36m - 1) * WEAPONS.m4a1.fireRateMs;
+assert.ok(smgDmg36m <= 11, `SMG damage at 36m (${smgDmg36m}) must drop to <= 11 DMG`);
+assert.ok(akTtk36m < smgTtk36m * 0.5, `AK TTK at 36m (${akTtk36m}ms) must be more than 2x faster than SMG (${smgTtk36m}ms)`);
+assert.ok(m4Ttk36m < smgTtk36m * 0.65, `M4 TTK at 36m (${m4Ttk36m}ms) must be much faster than SMG (${smgTtk36m}ms)`);
 
 // Zero camera recoil shake & heavy run-and-gun penalty checks
 for (const [wId, wCfg] of Object.entries(WEAPONS)) {
