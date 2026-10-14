@@ -213,47 +213,7 @@ export class TacticalMinimap {
       }
     }
 
-    // 4. Render Enemies / Bots (Red Tactical Blips + Firing Pulse Ring)
-    if (remotePlayers && typeof remotePlayers.values === 'function') {
-      for (const rp of remotePlayers.values()) {
-        if (!rp || !rp.alive) continue;
-        const pos = rp.group ? rp.group.position : rp.targetPos;
-        if (!pos) continue;
-        const ex = this.clampBlipCoord(this.worldToCanvasX(pos.x), 4);
-        const ey = this.clampBlipCoord(this.worldToCanvasY(pos.z), 4);
-
-        const recentlyFired = now - (rp.lastShotFlashAt || 0) < 480;
-        if (recentlyFired) {
-          ctx.strokeStyle = 'rgba(251, 191, 36, 0.9)';
-          ctx.lineWidth = 1.5;
-          ctx.beginPath();
-          ctx.arc(ex, ey, 6.2, 0, Math.PI * 2);
-          ctx.stroke();
-        }
-
-        // Enemy facing tick
-        const eYaw = rp.group ? rp.group.rotation.y : (rp.targetYaw || 0);
-        const eDirX = -Math.sin(eYaw);
-        const eDirZ = -Math.cos(eYaw);
-        ctx.strokeStyle = 'rgba(248, 113, 113, 0.85)';
-        ctx.lineWidth = 1.4;
-        ctx.beginPath();
-        ctx.moveTo(ex, ey);
-        ctx.lineTo(ex + eDirX * 5.8, ey + eDirZ * 5.8);
-        ctx.stroke();
-
-        // Enemy core dot
-        ctx.fillStyle = recentlyFired ? '#fbbf24' : '#ef4444';
-        ctx.beginPath();
-        ctx.arc(ex, ey, 3.2, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = '#090d16';
-        ctx.lineWidth = 1;
-        ctx.stroke();
-      }
-    }
-
-    // 5. Render Local Player Position & Viewing Direction Cone
+    // 4. Render Local Player Position & Viewing Direction Cone (Enemies are hidden from radar)
     if (localPos) {
       const px = this.clampBlipCoord(this.worldToCanvasX(localPos.x), 5);
       const py = this.clampBlipCoord(this.worldToCanvasY(localPos.z), 5);

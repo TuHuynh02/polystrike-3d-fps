@@ -984,7 +984,7 @@ export class Game3D {
 
       if (rp.hp !== p.hp) {
         rp.hp = p.hp;
-        rp.labelInfo.updateLabel(p.hp);
+        rp.labelInfo?.updateLabel(p.hp);
       }
     }
 

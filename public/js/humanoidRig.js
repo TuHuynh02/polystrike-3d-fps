@@ -478,13 +478,9 @@ export function createRemotePlayerMesh(playerData, options = {}) {
 
   group.add(leftLeg, rightLeg);
 
-  let labelInfo = null;
-  if (!isShowcase) {
-    labelInfo = createPlayerNameSprite(playerData.name || 'STRIKER');
-    group.add(labelInfo.sprite);
-    if (options.scene) {
-      options.scene.add(group);
-    }
+  const labelInfo = null;
+  if (!isShowcase && options.scene) {
+    options.scene.add(group);
   }
 
   const setOperatorColor = (newHex) => {
