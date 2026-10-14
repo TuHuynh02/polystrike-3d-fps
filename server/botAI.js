@@ -96,6 +96,9 @@ export function createBotEntity(index, spawnPoint, mapCfg = null) {
     x: spawnPoint.x,
     y: spawnPoint.y || 0,
     z: spawnPoint.z,
+    vx: 0,
+    vy: 0,
+    vz: 0,
     yaw: spawnPoint.yaw || 0,
     pitch: 0,
     crouching: false,
@@ -153,6 +156,9 @@ export function updateRoomBots(room, dt, now, callbacks) {
     if (!bot.isBot) continue;
 
     if (!bot.alive) {
+      bot.vx = 0;
+      bot.vy = 0;
+      bot.vz = 0;
       if (now >= bot.respawnAt) {
         callbacks.onRespawnPlayer(bot);
       }
@@ -257,6 +263,11 @@ export function updateRoomBots(room, dt, now, callbacks) {
       bot.z += (dirZ * forwardFactor + perpZ * 0.72) * moveSpeed * dt;
       resolveEntityPhysics(bot, 0.45, mapCfg);
 
+      if (dt > 0.001) {
+        bot.vx = (bot.x - prevX) / dt;
+        bot.vz = (bot.z - prevZ) / dt;
+      }
+
       if (Math.hypot(bot.x - prevX, bot.z - prevZ) < 0.012) {
         bot.strafeDir *= -1;
       }
@@ -319,6 +330,8 @@ export function updateRoomBots(room, dt, now, callbacks) {
       const dist = Math.hypot(dx, dz);
 
       if (dist < 2.2) {
+        bot.vx = 0;
+        bot.vz = 0;
         bot.waypointIdx = (bot.waypointIdx + 1 + Math.floor(Math.random() * 3)) % waypoints.length;
       } else {
         const dirX = dx / dist;
@@ -331,6 +344,11 @@ export function updateRoomBots(room, dt, now, callbacks) {
         bot.x += dirX * moveSpeed * dt;
         bot.z += dirZ * moveSpeed * dt;
         resolveEntityPhysics(bot, 0.45, mapCfg);
+
+        if (dt > 0.001) {
+          bot.vx = (bot.x - prevX) / dt;
+          bot.vz = (bot.z - prevZ) / dt;
+        }
 
         // Pick another waypoint if blocked by wall
         if (Math.hypot(bot.x - prevX, bot.z - prevZ) < 0.015) {

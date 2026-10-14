@@ -896,7 +896,12 @@ export class Game3D {
   }
 
   syncPlayersState(playersArray = []) {
-    const seenIds = new Set();
+    const now = performance.now();
+    if (!this._seenPlayerIds) {
+      this._seenPlayerIds = new Set();
+    }
+    const seenIds = this._seenPlayerIds;
+    seenIds.clear();
     let hitboxesDirty = false;
 
     for (const p of playersArray) {
@@ -911,21 +916,52 @@ export class Game3D {
         rp = this.createRemotePlayerMesh(p);
         rp.group.position.set(p.x, p.y, p.z);
         rp.group.rotation.y = p.yaw || 0;
+        rp.serverPos = new THREE.Vector3(p.x, p.y, p.z);
+        rp.velocity = new THREE.Vector3(0, 0, 0);
+        rp.lastSyncAt = now;
+        rp.smoothedSpeed = 0;
         this.remotePlayers.set(p.id, rp);
         hitboxesDirty = true;
       }
 
+      if (!rp.serverPos) rp.serverPos = new THREE.Vector3(p.x, p.y, p.z);
+      if (!rp.velocity) rp.velocity = new THREE.Vector3(0, 0, 0);
+
       const nowAlive = Boolean(p.alive);
+      const snapDist = Math.hypot(p.x - rp.group.position.x, p.z - rp.group.position.z);
       if (rp.alive !== nowAlive) {
         hitboxesDirty = true;
         if (nowAlive) {
           rp.group.position.set(p.x, p.y, p.z);
           rp.group.rotation.y = p.yaw || 0;
+          rp.serverPos.set(p.x, p.y, p.z);
+          rp.velocity.set(0, 0, 0);
+          rp.smoothedSpeed = 0;
         }
-      } else if (Math.hypot(p.x - rp.group.position.x, p.z - rp.group.position.z) > 15) {
+      } else if (snapDist > 12) {
         rp.group.position.set(p.x, p.y, p.z);
+        rp.serverPos.set(p.x, p.y, p.z);
+        rp.velocity.set(0, 0, 0);
+      } else {
+        const dtSync = rp.lastSyncAt ? (now - rp.lastSyncAt) / 1000 : 0;
+        if (typeof p.vx === 'number' && typeof p.vz === 'number') {
+          rp.velocity.set(p.vx, p.vy || 0, p.vz);
+        } else if (dtSync > 0.012 && dtSync < 0.35) {
+          const maxV = (MATCH_CONFIG.SLIDE_INITIAL_SPEED || 11.2) * 1.25;
+          const instVx = Math.max(-maxV, Math.min(maxV, (p.x - rp.serverPos.x) / dtSync));
+          const instVy = Math.max(-25, Math.min(20, (p.y - rp.serverPos.y) / dtSync));
+          const instVz = Math.max(-maxV, Math.min(maxV, (p.z - rp.serverPos.z) / dtSync));
+          rp.velocity.x = rp.velocity.x * 0.35 + instVx * 0.65;
+          rp.velocity.y = rp.velocity.y * 0.35 + instVy * 0.65;
+          rp.velocity.z = rp.velocity.z * 0.35 + instVz * 0.65;
+          if (Math.hypot(p.x - rp.serverPos.x, p.z - rp.serverPos.z) < 0.008) {
+            rp.velocity.set(0, 0, 0);
+          }
+        }
+        rp.serverPos.set(p.x, p.y, p.z);
       }
 
+      rp.lastSyncAt = now;
       rp.targetPos.set(p.x, p.y, p.z);
       rp.targetYaw = p.yaw || 0;
       rp.targetPitch = p.pitch || 0;
@@ -1671,6 +1707,7 @@ export class Game3D {
     this.velocity.y -= (MATCH_CONFIG.GRAVITY || 22.0) * dt;
 
     const preFallVy = this.velocity.y;
+    const prevFootY = this.position.y;
     this.wasOnGround = this.onGround;
 
     // Integrate horizontal & vertical with AABB collision against active map obstacles
@@ -1740,6 +1777,9 @@ export class Game3D {
     }
 
     if (this.position.y <= highestFloor + 0.025 && this.velocity.y <= 0) {
+      if (this.wasOnGround && highestFloor > prevFootY + 0.03 && highestFloor - prevFootY <= 0.56) {
+        this.stepOffsetY = Math.max(-0.48, (this.stepOffsetY || 0) + (prevFootY - highestFloor));
+      }
       this.position.y = highestFloor;
       this.velocity.y = 0;
       this.onGround = true;
@@ -1753,6 +1793,9 @@ export class Game3D {
     } else {
       this.onGround = false;
     }
+
+    this.stepOffsetY = (this.stepOffsetY || 0) * Math.exp(-18 * dt);
+    if (Math.abs(this.stepOffsetY) < 0.002) this.stepOffsetY = 0;
 
     const limit = (this.arenaHalfSize || MATCH_CONFIG.ARENA_HALF_SIZE) - 0.6;
     this.position.x = Math.max(-limit, Math.min(limit, this.position.x));
@@ -1795,7 +1838,7 @@ export class Game3D {
     // Update camera transform (no shooting recoil shake!)
     this.camera.position.set(
       this.position.x + rightX * leanOffset,
-      this.position.y + this.currentEyeHeight + this.landingDip + leanDropY,
+      this.position.y + this.currentEyeHeight + this.landingDip + leanDropY + (this.stepOffsetY || 0),
       this.position.z + rightZ * leanOffset
     );
     this.tmpEuler.set(
@@ -1822,8 +1865,9 @@ export class Game3D {
     // Update First-Person Weapon Viewmodel Animation
     this.recoilOffset = Math.max(0, this.recoilOffset - dt * 0.85);
     this.boltKickOffset = Math.max(0, this.boltKickOffset - dt * 8.5);
-    this.swayX *= 0.85;
-    this.swayY *= 0.85;
+    const swayDecay = Math.exp(-10 * dt);
+    this.swayX *= swayDecay;
+    this.swayY *= swayDecay;
 
     const isReloading = this.reloadingUntil > now;
     const isEquipping = this.equipUntil > now;
@@ -1841,9 +1885,11 @@ export class Game3D {
     const bobX = Math.cos(this.weaponBobTime * 0.5) * 0.012 * bobAmp;
     const bobY = Math.abs(Math.sin(this.weaponBobTime)) * 0.014 * bobAmp;
 
-    this.viewmodelRig.position.x += (targetVmX + bobX + this.swayX - this.viewmodelRig.position.x) * 0.28;
-    this.viewmodelRig.position.y += (targetVmY - bobY + this.swayY - this.viewmodelRig.position.y) * 0.28;
-    this.viewmodelRig.position.z = targetVmZ + this.recoilOffset;
+    const vmPosBlend = 1 - Math.exp(-18 * dt);
+    const vmRotBlend = 1 - Math.exp(-16 * dt);
+    this.viewmodelRig.position.x += (targetVmX + bobX + this.swayX - this.viewmodelRig.position.x) * vmPosBlend;
+    this.viewmodelRig.position.y += (targetVmY - bobY + this.swayY - this.viewmodelRig.position.y) * vmPosBlend;
+    this.viewmodelRig.position.z += (targetVmZ + this.recoilOffset - this.viewmodelRig.position.z) * Math.min(1, dt * 28);
 
     let targetRotX = this.recoilOffset * 1.15;
     let targetRotY = 0;
@@ -1931,9 +1977,9 @@ export class Game3D {
       this.viewmodelRig.position.z -= slashArc * 0.16;
     }
 
-    this.viewmodelRig.rotation.x += (targetRotX - this.viewmodelRig.rotation.x) * 0.25;
-    this.viewmodelRig.rotation.y += (targetRotY - this.viewmodelRig.rotation.y) * 0.25;
-    this.viewmodelRig.rotation.z += (targetRotZ - this.viewmodelRig.rotation.z) * 0.25;
+    this.viewmodelRig.rotation.x += (targetRotX - this.viewmodelRig.rotation.x) * vmRotBlend;
+    this.viewmodelRig.rotation.y += (targetRotY - this.viewmodelRig.rotation.y) * vmRotBlend;
+    this.viewmodelRig.rotation.z += (targetRotZ - this.viewmodelRig.rotation.z) * vmRotBlend;
 
     if (now - this.lastShotAt > 50) {
       if (activeVm?.userData?.flashMesh) {
@@ -1961,20 +2007,53 @@ export class Game3D {
       this.callbacks.onMovementHudUpdate?.(stance, horizSpeed);
     }
 
-    // Send position update to server at ~25Hz
-    if (now - this.lastMoveSentAt >= 38) {
-      this.lastMoveSentAt = now;
-      this.callbacks.onMoveUpdate?.({
-        x: this.position.x,
-        y: this.position.y,
-        z: this.position.z,
-        yaw: this.yaw,
-        pitch: this.pitch,
-        crouching: this.crouching,
-        prone: this.prone,
-        lean: this.currentLean,
-        weapon: this.currentWeapon
-      });
+    // Send quantized, delta-filtered position & velocity update at ~30Hz (33ms)
+    if (now - this.lastMoveSentAt >= 33) {
+      const qx = Math.round(this.position.x * 100) / 100;
+      const qy = Math.round(this.position.y * 100) / 100;
+      const qz = Math.round(this.position.z * 100) / 100;
+      const qvx = Math.round(this.velocity.x * 100) / 100;
+      const qvy = Math.round(this.velocity.y * 100) / 100;
+      const qvz = Math.round(this.velocity.z * 100) / 100;
+      const qyaw = Math.round(this.yaw * 1000) / 1000;
+      const qpitch = Math.round(this.pitch * 1000) / 1000;
+      const qlean = Math.round(this.currentLean * 100) / 100;
+
+      const prev = this._lastSentMove;
+      const hasChanged = !prev ||
+        Math.abs(qx - prev.x) >= 0.01 ||
+        Math.abs(qy - prev.y) >= 0.01 ||
+        Math.abs(qz - prev.z) >= 0.01 ||
+        Math.abs(qvx - prev.vx) >= 0.05 ||
+        Math.abs(qvz - prev.vz) >= 0.05 ||
+        Math.abs(qyaw - prev.yaw) >= 0.003 ||
+        Math.abs(qpitch - prev.pitch) >= 0.003 ||
+        this.crouching !== prev.crouching ||
+        this.prone !== prev.prone ||
+        Math.abs(qlean - prev.lean) >= 0.02 ||
+        this.currentWeapon !== prev.weapon;
+
+      if (hasChanged || now - this.lastMoveSentAt >= 420) {
+        this.lastMoveSentAt = now;
+        this.moveSeq = (this.moveSeq || 0) + 1;
+        const movePayload = {
+          seq: this.moveSeq,
+          x: qx,
+          y: qy,
+          z: qz,
+          vx: qvx,
+          vy: qvy,
+          vz: qvz,
+          yaw: qyaw,
+          pitch: qpitch,
+          crouching: this.crouching,
+          prone: this.prone,
+          lean: qlean,
+          weapon: this.currentWeapon
+        };
+        this._lastSentMove = movePayload;
+        this.callbacks.onMoveUpdate?.(movePayload);
+      }
     }
   }
 
@@ -1995,12 +2074,16 @@ export class Game3D {
       this.lastFpsUpdate = now;
       this.callbacks.onFpsUpdate?.(this.currentFps);
 
-      if (this.inMatch && this.currentFps < 46 && this.currentPixelRatio > 0.9) {
-        this.currentPixelRatio = Math.max(0.85, Number((this.currentPixelRatio - 0.2).toFixed(2)));
-        this.renderer.setPixelRatio(this.currentPixelRatio);
-      } else if (this.inMatch && this.currentFps >= 58 && this.currentPixelRatio < this.maxPixelRatio) {
-        this.currentPixelRatio = Math.min(this.maxPixelRatio, Number((this.currentPixelRatio + 0.1).toFixed(2)));
-        this.renderer.setPixelRatio(this.currentPixelRatio);
+      // Avoid up/down WebGL backbuffer reallocation oscillation during gameplay (which stalls the GPU for 100-300ms)
+      if (this.inMatch && this.currentFps < 38 && this.currentPixelRatio > 0.85) {
+        this.lowFpsStreak = (this.lowFpsStreak || 0) + 1;
+        if (this.lowFpsStreak >= 3) {
+          this.lowFpsStreak = 0;
+          this.currentPixelRatio = Math.max(0.85, Number((this.currentPixelRatio - 0.15).toFixed(2)));
+          this.renderer.setPixelRatio(this.currentPixelRatio);
+        }
+      } else {
+        this.lowFpsStreak = 0;
       }
     }
 
@@ -2046,22 +2129,41 @@ export class Game3D {
       this.ambientParticles.rotation.y = now * 0.00008;
     }
 
-    const lerpFactor = Math.min(1, dt * 18);
+    const posLerp = 1 - Math.exp(-20 * dt);
+    const rotLerp = 1 - Math.exp(-22 * dt);
+    const speedBlend = 1 - Math.exp(-15 * dt);
+    const arenaLim = (this.arenaHalfSize || MATCH_CONFIG.ARENA_HALF_SIZE) - 0.6;
+
     for (const rp of this.remotePlayers.values()) {
       if (!rp.alive) continue;
 
-      const dx = rp.targetPos.x - rp.group.position.x;
-      const dz = rp.targetPos.z - rp.group.position.z;
-      const moveSpeed = Math.hypot(dx, dz);
+      const sinceSync = rp.lastSyncAt ? Math.min(0.095, Math.max(0, (now - rp.lastSyncAt) / 1000)) : 0;
+      if (rp.serverPos && rp.velocity) {
+        rp.targetPos.x = Math.max(-arenaLim, Math.min(arenaLim, rp.serverPos.x + rp.velocity.x * sinceSync));
+        rp.targetPos.y = Math.max(0, rp.serverPos.y);
+        rp.targetPos.z = Math.max(-arenaLim, Math.min(arenaLim, rp.serverPos.z + rp.velocity.z * sinceSync));
+      }
 
-      rp.group.position.lerp(rp.targetPos, lerpFactor);
+      const prevX = rp.group.position.x;
+      const prevZ = rp.group.position.z;
+      rp.group.position.lerp(rp.targetPos, posLerp);
 
       let yawDiff = rp.targetYaw - rp.group.rotation.y;
       while (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
       while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
-      rp.group.rotation.y += yawDiff * lerpFactor;
+      rp.group.rotation.y += yawDiff * rotLerp;
 
-      this.animateHumanoidRig(rp, dt, now, moveSpeed > 0.025, moveSpeed);
+      const velSpeed = rp.velocity ? Math.hypot(rp.velocity.x, rp.velocity.z) : 0;
+      const frameSpeed = dt > 0.001 ? Math.hypot(rp.group.position.x - prevX, rp.group.position.z - prevZ) / dt : 0;
+      const rawSpeed = (!rp.lastSyncAt || now - rp.lastSyncAt < 180)
+        ? Math.max(velSpeed, frameSpeed * 0.85)
+        : 0;
+      rp.smoothedSpeed = (rp.smoothedSpeed || 0) + (rawSpeed - (rp.smoothedSpeed || 0)) * speedBlend;
+      if (rp.smoothedSpeed < 0.05) rp.smoothedSpeed = 0;
+
+      const isMoving = rp.smoothedSpeed > 0.35;
+      const rigMoveSpeed = rp.smoothedSpeed * 0.032;
+      this.animateHumanoidRig(rp, dt, now, isMoving, rigMoveSpeed);
     }
 
     // Update top-left Tactical Mini Map / Radar when in match
@@ -2115,10 +2217,15 @@ export class Game3D {
     }
 
     if (closestDrop) {
-      this.nearbyDrop = closestDrop;
-      this.callbacks.onNearbyWeaponChange?.(closestDrop, closestRemSec);
+      const remTenths = Math.round(closestRemSec * 10);
+      if (this.nearbyDrop?.id !== closestDrop.id || this._lastNearbyTenths !== remTenths) {
+        this.nearbyDrop = closestDrop;
+        this._lastNearbyTenths = remTenths;
+        this.callbacks.onNearbyWeaponChange?.(closestDrop, closestRemSec);
+      }
     } else if (this.nearbyDrop) {
       this.nearbyDrop = null;
+      this._lastNearbyTenths = -1;
       this.callbacks.onNearbyWeaponChange?.(null, 0);
     }
 
@@ -2199,7 +2306,7 @@ export class Game3D {
       this.camera.aspect = window.innerWidth / window.innerHeight;
       this.camera.updateProjectionMatrix();
       this.renderer.setSize(window.innerWidth, window.innerHeight);
-    });
+    }, { passive: true });
 
     document.addEventListener('pointerlockchange', () => {
       this.isPointerLocked = document.pointerLockElement === this.renderer.domElement;
@@ -2222,7 +2329,7 @@ export class Game3D {
 
       this.swayX = Math.max(-0.045, Math.min(0.045, -e.movementX * 0.00055));
       this.swayY = Math.max(-0.045, Math.min(0.045, e.movementY * 0.00055));
-    });
+    }, { passive: true });
 
     window.addEventListener('mousedown', (e) => {
       if (!this.inMatch) return;
@@ -2244,7 +2351,7 @@ export class Game3D {
           this.callbacks.onAimChange?.(this.isAiming, this.currentWeapon);
         }
       }
-    });
+    }, { passive: true });
 
     window.addEventListener('mouseup', (e) => {
       if (e.button === 0) {
@@ -2253,7 +2360,7 @@ export class Game3D {
         this.isAiming = false;
         this.callbacks.onAimChange?.(false, this.currentWeapon);
       }
-    });
+    }, { passive: true });
 
     window.addEventListener('contextmenu', (e) => {
       if (this.inMatch) e.preventDefault();
@@ -2266,7 +2373,7 @@ export class Game3D {
       const nextIdx = (idx + (e.deltaY > 0 ? 1 : -1) + slotWeapons.length) % slotWeapons.length;
       this.switchWeapon(slotWeapons[nextIdx]);
       this.callbacks.onAimChange?.(false, this.currentWeapon);
-    });
+    }, { passive: true });
 
     window.addEventListener('keydown', (e) => {
       if (e.code in this.keys) {
@@ -2275,14 +2382,18 @@ export class Game3D {
 
       if (!this.inMatch) return;
 
+      if (e.code === 'Tab' || e.code === 'KeyB' || e.code === 'KeyF') {
+        e.preventDefault();
+      }
+      if (e.repeat) return;
+
       if (e.code === 'Digit1') this.switchSlot(1);
       else if (e.code === 'Digit2') this.switchSlot(2);
       else if (e.code === 'Digit3') this.switchSlot(3);
       else if (e.code === 'KeyB') {
-        e.preventDefault();
         this.callbacks.onLoadoutToggle?.();
       }
-      else if (e.code === 'KeyZ' && !e.repeat && this.alive && this.onGround) {
+      else if (e.code === 'KeyZ' && this.alive && this.onGround) {
         this.prone = !this.prone;
         if (this.prone) {
           this.isSprinting = false;
@@ -2290,14 +2401,12 @@ export class Game3D {
           this.crouching = false;
         }
       }
-      else if (e.code === 'KeyF' && !e.repeat && this.alive && this.nearbyDrop) {
-        e.preventDefault();
+      else if (e.code === 'KeyF' && this.alive && this.nearbyDrop) {
         this.callbacks.onPickupWeapon?.(this.nearbyDrop.id);
       }
       else if (e.code === 'KeyR') this.startReload();
       else if (e.code === 'KeyL') this.callbacks.onCopyLinkShortcut?.();
       else if (e.code === 'Tab') {
-        e.preventDefault();
         this.callbacks.onScoreboardToggle?.(true);
       }
     });
