@@ -8,6 +8,7 @@ import {
   getMapConfig,
   stepGrenade
 } from '../shared/constants.js';
+import { INTERP_DELAY_MAX_MS } from '../shared/config.js';
 import { FIXED_DT, createMovementState } from '../shared/movement.js';
 import { BTN, commandTimeMs, isFireIntervalOk, isValidMoveAck, stepCommand } from '../shared/netcode.js';
 import { computeSpreadAmount, createShotState, planShot, resetShotState } from '../shared/spread.js';
@@ -16,7 +17,6 @@ import { SnapshotInterpolator } from './snapshotBuffer.js';
 import { buildSkyAndAtmosphere, buildArena } from './arenaBuilder.js';
 import { createWeaponMesh, setWeaponAdsCulling } from './weaponModels.js';
 import {
-  createPlayerNameSprite,
   createRemotePlayerMesh,
   animateHumanoidRig,
   disposeObject3D
@@ -43,6 +43,9 @@ function shadowTypeFor(kind) {
   if (kind === 'pcf') return THREE.PCFShadowMap;
   return THREE.BasicShadowMap;
 }
+
+/** A killed remote player's body stays drawn at most this long (ms) while the interpolated timeline catches up. */
+const DEATH_BODY_MAX_MS = 1500;
 
 export class Game3D {
   constructor(container, callbacks) {
@@ -166,8 +169,9 @@ export class Game3D {
     this.hitboxMeshes = [];
     this.rayTargets = [];
     this.remotePlayers = new Map(); // id -> RemotePlayerObject
-    // Server-timestamped snapshot buffers of the remote players; they are drawn at (server time - INTERP_DELAY_MS)
+    // Server-timestamped snapshot buffers of the remote players; they are drawn at (server time - adaptive interpolation delay)
     this.snapshots = new SnapshotInterpolator();
+    this.netStats = { starvedMs: 0, starveEvents: 0, starving: false, rttMs: 0 };
     this._remoteSample = {};
     this._remoteScratch = [];
     this.pickupMeshes = new Map();  // pickupId -> { group, crossGroup, ringMesh, padMat }
@@ -1491,49 +1495,12 @@ export class Game3D {
     );
   }
 
-  createPlayerNameSprite(name) {
-    return createPlayerNameSprite(name);
-  }
-
   createRemotePlayerMesh(playerData = {}, options = {}) {
     const rp = createRemotePlayerMesh(playerData, {
       scene: this.scene,
       defaultColor: this.lobbyOperatorColor || 0x38bdf8,
       ...options
     });
-    if (!options.isShowcase && !rp.labelInfo) {
-      if (typeof document !== 'undefined') {
-        const labelInfo = createPlayerNameSprite(playerData.name || 'OPERATOR');
-        if (labelInfo?.sprite) {
-          labelInfo.material.transparent = true;
-          labelInfo.material.depthTest = false;
-          labelInfo.material.depthWrite = false;
-          if (typeof playerData.hp === 'number') {
-            labelInfo.updateLabel(playerData.hp);
-          }
-          rp.labelInfo = labelInfo;
-          rp.group.add(labelInfo.sprite);
-        }
-      } else {
-        const material = new THREE.SpriteMaterial({
-          transparent: true,
-          depthTest: false,
-          depthWrite: false
-        });
-        const sprite = new THREE.Sprite(material);
-        sprite.scale.set(2.3, 0.65, 1);
-        sprite.position.set(0, 2.36, 0);
-        sprite.renderOrder = 10;
-        rp.labelInfo = {
-          sprite,
-          canvas: null,
-          texture: { dispose() {} },
-          material,
-          updateLabel() {}
-        };
-        rp.group.add(sprite);
-      }
-    }
     if (rp?.group) {
       rp.group.traverse((obj) => {
         if (obj.isMesh || obj.isSprite) {
@@ -1567,10 +1534,6 @@ export class Game3D {
 
   disposeRemotePlayer(rp) {
     this.scene.remove(rp.group);
-    if (rp.labelInfo) {
-      rp.labelInfo.texture.dispose();
-      rp.labelInfo.material.dispose();
-    }
     disposeObject3D(rp.group);
   }
 
@@ -1585,7 +1548,35 @@ export class Game3D {
 
   /** Feeds the client-measured round-trip time (ms) to the render clock (adds the one-way latency back, see snapshotBuffer.js). */
   setNetworkRtt(rttMs) {
+    this.netStats.rttMs = rttMs;
     this.snapshots.setRttMs(rttMs);
+  }
+
+  /** Two lines for the ?perf=1 overlay: RTT, jitter estimate, applied/target buffer delay, snapshot spacing, starvation. */
+  getNetOverlayText() {
+    const ns = this.netStats;
+    const j = this.snapshots.jitter;
+    return `net rtt ${Math.round(ns.rttMs)}ms  jitter(p95) ${Math.round(j.jitterMs)}ms  buffer ${this.getInterpDelayMs()}ms (target ${Math.round(j.targetMs)})
+` +
+      `snapshots every ${Math.round(j.intervalMs)}ms  starved ${ns.starveEvents}x / ${Math.round(ns.starvedMs)}ms`;
+  }
+
+  /** The delay (ms) remote players are drawn behind the true server time; reported to the server for lag compensation. */
+  getInterpDelayMs() {
+    return Math.max(0, Math.min(INTERP_DELAY_MAX_MS, Math.round(this.snapshots.delayMs)));
+  }
+
+  /**
+   * A remote player was killed (killEvent): it stops being shootable at once (as on the server) but its body stays drawn
+   * until the interpolated timeline reaches the snapshot of its death (see updateRemotePlayers).
+   */
+  markRemoteDead(id, now = performance.now()) {
+    const rp = this.remotePlayers.get(id);
+    if (!rp) return false;
+    if (rp.alive) rp.deadSince = now;
+    rp.alive = false;
+    this.rebuildHitboxList();
+    return true;
   }
 
   /** Respawn of a remote player: drop its snapshot history and show it at the spawn point (no streak from the death spot). */
@@ -1595,6 +1586,7 @@ export class Game3D {
     if (rp?.group) {
       rp.group.position.set(x, y, z);
       rp.group.rotation.y = yaw;
+      if (rp.alive) rp.group.visible = true;
     }
     if (rp) {
       rp.smoothedSpeed = 0;
@@ -1611,6 +1603,8 @@ export class Game3D {
   syncPlayersState(playersArray = [], serverTimeMs = undefined, localNowMs = undefined) {
     const now = typeof localNowMs === 'number' ? localNowMs : performance.now();
     const stamped = typeof serverTimeMs === 'number' && Number.isFinite(serverTimeMs);
+    // A duplicate / reordered older envelope must not touch anything (alive, hp, weapon would flap back to old values)
+    if (stamped && !this.snapshots.acceptsEnvelope(serverTimeMs)) return;
     if (!this._seenPlayerIds) {
       this._seenPlayerIds = new Set();
     }
@@ -1639,6 +1633,7 @@ export class Game3D {
         rp.group.rotation.y = p.yaw || 0;
         rp.velocity = new THREE.Vector3(0, 0, 0); // interpolated motion (animation only)
         rp.smoothedSpeed = 0;
+        rp.group.visible = Boolean(p.alive);
         this.remotePlayers.set(p.id, rp);
         hitboxesDirty = true;
       }
@@ -1673,23 +1668,24 @@ export class Game3D {
         rp.prone = Boolean(p.prone);
         rp.lean = Number(p.lean || 0);
       }
+      if (rp.alive && !nowAlive) rp.deadSince = now;
       rp.alive = nowAlive;
-      rp.group.visible = nowAlive;
-      if (rp.labelInfo?.sprite) {
-        rp.labelInfo.sprite.visible = nowAlive;
-      }
+      // Revival shows the body at once; a death does NOT hide it here: updateRemotePlayers keeps the body drawn until the
+      // interpolated timeline (render time = server time - delay) reaches the snapshot where the player died
+      if (nowAlive) rp.group.visible = true;
 
       if (p.weapon && WEAPONS[p.weapon] && p.weapon !== rp.currentWeapon) {
         rp.currentWeapon = p.weapon;
         rp.gunHolder.remove(rp.gunMesh);
         disposeObject3D(rp.gunMesh);
         rp.gunMesh = this.createWeaponMesh(p.weapon, false);
+        // like the rest of the rig (createRemotePlayerMesh): a swapped-in gun must never be frustum-culled away
+        rp.gunMesh.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
         rp.gunHolder.add(rp.gunMesh);
       }
 
       if (rp.hp !== p.hp) {
         rp.hp = p.hp;
-        rp.labelInfo?.updateLabel(p.hp);
       }
     }
 
@@ -3200,21 +3196,28 @@ export class Game3D {
 
   /**
    * Draws every remote player from its snapshot buffer at renderTime = estimated server time -
-   * INTERP_DELAY_MS: linear interpolation between the two bracketing server snapshots, snap on teleport / respawn /
-   * alive flip, <= 100 ms velocity extrapolation when starved. Animation speed (walk cycle, footsteps) is derived from
+   * the adaptive interpolation delay: linear interpolation between the two bracketing server snapshots, snap on teleport /
+   * respawn / alive flip, damped extrapolation (<= 250 ms) + smooth catch-up when starved. Animation speed (walk cycle, footsteps) is derived from
    * the interpolated motion. `now` is the frame time (performance.now() timebase).
    */
   updateRemotePlayers(dt, now) {
     const speedBlend = 1 - Math.exp(-15 * dt);
     const renderT = this.snapshots.renderTime(now);
     const out = this._remoteSample;
+    let starving = false;
 
     for (const [id, rp] of this.remotePlayers.entries()) {
-      if (!rp.alive) continue;
+      // A killed player stays drawn until the interpolated timeline reaches its death snapshot (no vanishing 100+ ms
+      // before the body arrives at the place it died); hitboxes are gone from the kill on (server rules).
+      if (!rp.alive && !rp.group.visible) continue;
       if (!rp.velocity) rp.velocity = new THREE.Vector3(0, 0, 0);
 
       let rawSpeed = 0;
       const s = this.snapshots.sample(id, renderT, out);
+      if (!rp.alive && (!s || !s.alive || now - (rp.deadSince ?? now) > DEATH_BODY_MAX_MS)) {
+        rp.group.visible = false;
+        continue;
+      }
       if (s) {
         rp.group.position.set(s.x, s.y, s.z);
         rp.group.rotation.y = s.yaw;
@@ -3226,6 +3229,8 @@ export class Game3D {
         rp.prone = s.prone;
         rp.velocity.set(s.vx, s.vy, s.vz);
         rawSpeed = Math.hypot(s.vx, s.vz);
+        rp.extrapolated = Boolean(s.extrapolated);
+        if (s.extrapolated) starving = true;
       } else {
         rp.velocity.set(0, 0, 0);
       }
@@ -3254,6 +3259,14 @@ export class Game3D {
         }
       }
     }
+
+    // Network health counters for the ?perf=1 overlay: time spent with the render ahead of the newest snapshot
+    const ns = this.netStats;
+    if (starving) {
+      ns.starvedMs += dt * 1000;
+      if (!ns.starving) ns.starveEvents++;
+    }
+    ns.starving = starving;
   }
 
   animate(now) {
@@ -3574,7 +3587,7 @@ export class Game3D {
     }
 
     this.renderer.render(this.scene, this.camera);
-    this.perfOverlay?.update(now, this.renderer, { tier: this.tier, pixelRatio: this.currentPixelRatio });
+    this.perfOverlay?.update(now, this.renderer, { tier: this.tier, pixelRatio: this.currentPixelRatio, net: this.getNetOverlayText() });
   }
 
   get mouseSensitivity() {

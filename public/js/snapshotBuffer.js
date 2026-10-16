@@ -25,12 +25,23 @@
 //   (server restart / clock step) and applied at once (the only case where the clock may move backwards in value).
 // ---------------------------------------------------------------------------------------------------------------------
 
-import { INTERP_DELAY_MS } from '../shared/config.js';
+import { INTERP_DELAY_MS, INTERP_DELAY_MIN_MS, INTERP_DELAY_MAX_MS, MAX_LAG_COMP_REWIND_MS } from '../shared/config.js';
 
 /** Snapshot history kept per entity (ms of server time). */
 export const SNAPSHOT_HISTORY_MS = 1000;
-/** Starved sampling (render time beyond the newest snapshot) extrapolates by velocity for at most this long, then holds. */
-export const MAX_EXTRAPOLATION_MS = 100;
+/**
+ * Starved sampling (render time beyond the newest snapshot) extrapolates with a DAMPED velocity for at most this long, then
+ * holds: displacement = v * TAU * (1 - exp(-e / TAU)), so the entity decelerates instead of running on at full speed in a
+ * direction it may already have left (and never overshoots by more than v * TAU).
+ */
+export const MAX_EXTRAPOLATION_MS = 250;
+export const EXTRAPOLATION_TAU_MS = 120;
+/** Rate (1/s) of the critically damped spring that blends a rendered pose back onto the real path after starvation. */
+export const CATCHUP_OMEGA = 10;
+/** A jump of the raw path smaller than this (m) is not worth a correction offset. */
+export const CATCHUP_MIN_JUMP = 0.02;
+/** Largest EXTRA speed (m/s) the catch-up may add on top of the real motion: big offsets are paid back more slowly. */
+export const CATCHUP_MAX_EXTRA_SPEED = 9;
 /** Consecutive snapshots further apart than this (metres, 3D) are a teleport: no interpolation across them. */
 export const TELEPORT_SNAP_DISTANCE = 12;
 /** A snapshot/envelope older than the newest one by more than this is an epoch change (e.g. new server), not reordering. */
@@ -227,6 +238,7 @@ export class SnapshotBuffer {
     this.historyMs = isNum(opts.historyMs) ? opts.historyMs : SNAPSHOT_HISTORY_MS;
     this.teleportDistance = isNum(opts.teleportDistance) ? opts.teleportDistance : TELEPORT_SNAP_DISTANCE;
     this.maxExtrapolationMs = isNum(opts.maxExtrapolationMs) ? opts.maxExtrapolationMs : MAX_EXTRAPOLATION_MS;
+    this.extrapolationTauMs = isNum(opts.extrapolationTauMs) ? opts.extrapolationTauMs : EXTRAPOLATION_TAU_MS;
     this.epochResetMs = isNum(opts.epochResetMs) ? opts.epochResetMs : SNAPSHOT_EPOCH_RESET_MS;
     this.snaps = [];
   }
@@ -279,7 +291,7 @@ export class SnapshotBuffer {
    *  - between two snapshots: linear interpolation (shortest-arc for yaw); a discontinuity (teleport > 12 m, alive flip,
    *    first snapshot) is NOT interpolated: the earlier snapshot is held until the later one is reached, then it is taken
    *    (a snap, never a streak). Discrete flags (crouching, prone, alive, weapon) come from the earlier snapshot.
-   *  - beyond the newest snapshot (starved): velocity extrapolation for at most maxExtrapolationMs, then hold.
+   *  - beyond the newest snapshot (starved): damped velocity extrapolation for at most maxExtrapolationMs, then hold.
    * `out.vx/vy/vz` is the interpolated motion (segment slope) used for animation speed; `out.extrapolated` marks starvation.
    */
   sample(renderT, out = {}) {
@@ -299,15 +311,23 @@ export class SnapshotBuffer {
       const over = renderT - last.t;
       fillOut(out, last, last.vx, last.vy, last.vz);
       if (over > 0 && last.alive) {
-        const e = Math.min(over, this.maxExtrapolationMs) / 1000;
-        out.x = last.x + last.vx * e;
-        out.z = last.z + last.vz * e;
-        if (last.vy > 0) out.y = last.y + last.vy * e; // never sink through the floor while falling
+        const e = Math.min(over, this.maxExtrapolationMs);
+        const tau = this.extrapolationTauMs;
+        // damped dead reckoning: integral of v * exp(-t / tau)
+        const k = tau > 0 ? tau * (1 - Math.exp(-e / tau)) / 1000 : e / 1000;
+        out.x = last.x + last.vx * k;
+        out.z = last.z + last.vz * k;
+        if (last.vy > 0) out.y = last.y + last.vy * k; // never sink through the floor while falling
         out.extrapolated = true;
         if (over > this.maxExtrapolationMs) {
           out.vx = 0;
           out.vy = 0;
           out.vz = 0;
+        } else if (tau > 0) {
+          const d = Math.exp(-e / tau);
+          out.vx = last.vx * d;
+          out.vy = last.vy * d;
+          out.vz = last.vz * d;
         }
       }
       return out;
@@ -343,12 +363,170 @@ export class SnapshotBuffer {
   }
 }
 
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Adaptive jitter buffer
+//
+// The viewer draws remote entities at   renderTime = estimatedTrueServerNow - delay.   A snapshot stamped T reaches the
+// viewer at about  T + owd + lateness  (owd = one-way latency of the fastest path, lateness = extra queueing / jitter /
+// retransmission delay >= 0). To have the snapshot that BRACKETS the render time already on hand (no extrapolation):
+//
+//        delay  >=  owd  +  snapshotInterval  +  lateness
+//
+// A fixed delay (the old INTERP_DELAY_MS = 100 ms) therefore starves permanently whenever owd + interval > 100 ms
+// (RTT > ~120 ms) and has no jitter margin at all above RTT ~ 40 ms. The adaptive delay is
+//
+//        target = clamp(owd + K * interval + lateness_p95 + MARGIN,  MIN, min(MAX, serverRewindCap - owd))
+//
+// `owd` is what the clock has actually applied (clock.offsetMs - clock.bestOffsetMs), so `delay` is exactly
+// serverNow - renderTime and the value the client reports to the server for lag compensation
+// (rewind = rttMs / 2 + delay, shared/lagCompensation.js) is consistent with what is on screen.
+// Raising is quick (up to UP_RATE of elapsed local time), lowering needs a sustained surplus and is slow (DOWN_RATE);
+// the render time additionally never decreases by construction.
+// ---------------------------------------------------------------------------------------------------------------------
+
+export const JITTER_WINDOW = 128;          // lateness samples (~5 s at 25 Hz)
+export const JITTER_QUANTILE = 0.95;
+export const DELAY_K_INTERVALS = 1.0;      // snapshot intervals of look-ahead (bracketing snapshot)
+export const DELAY_MARGIN_MS = 8;
+export const DELAY_RAISE_DEADBAND_MS = 4;  // raise the target only when the raw estimate exceeds it by this much ...
+export const DELAY_RAISE_HEADROOM_MS = 6;  // ... and then aim this far above the raw estimate (no creeping micro-raises)
+export const DELAY_SHRINK_DEADBAND_MS = 25;
+export const DELAY_SHRINK_HOLD_MS = 3000;  // surplus must persist this long before the delay is reduced
+export const DELAY_UP_RATE = 0.25;         // max change speed (ms of delay per ms of local time) when growing ...
+export const DELAY_DOWN_RATE = 0.05;       // ... and when shrinking
+export const DELAY_MIN_SAMPLES = 8;
+
+export class JitterBuffer {
+  constructor(opts = {}) {
+    this.minMs = isNum(opts.minDelayMs) ? opts.minDelayMs : INTERP_DELAY_MIN_MS;
+    this.maxMs = isNum(opts.maxDelayMs) ? opts.maxDelayMs : INTERP_DELAY_MAX_MS;
+    this.rewindCapMs = isNum(opts.rewindCapMs) ? opts.rewindCapMs : MAX_LAG_COMP_REWIND_MS;
+    this.k = isNum(opts.k) ? opts.k : DELAY_K_INTERVALS;
+    this.marginMs = isNum(opts.marginMs) ? opts.marginMs : DELAY_MARGIN_MS;
+    this.quantile = isNum(opts.jitterQuantile) ? opts.jitterQuantile : JITTER_QUANTILE;
+    this.initialMs = isNum(opts.initialDelayMs) ? opts.initialDelayMs : INTERP_DELAY_MS;
+    this.reset();
+  }
+
+  reset() {
+    this.late = [];            // ring of lateness samples
+    this._lateHead = 0;
+    this.intervals = [];       // ring of recent snapshot spacings
+    this._intHead = 0;
+    this._lastT = null;
+    this._scratch = [];
+    this.intervalMs = 40;
+    this.jitterMs = 0;         // lateness quantile
+    this.rawMs = this.initialMs;
+    this.targetMs = this.initialMs;
+    this.currentMs = this.initialMs;
+    this.initialised = false;
+    this._advancedAt = null;
+    this._shrinkSince = null;
+    this.samples = 0;
+    this.raises = 0;
+    this.shrinks = 0;
+  }
+
+  /** One accepted envelope: server stamp and its lateness (ms, >= 0) relative to the fastest path. */
+  observe(serverT, lateness) {
+    if (this._lastT !== null && serverT > this._lastT) {
+      const d = serverT - this._lastT;
+      if (this.intervals.length < 16) this.intervals.push(d);
+      else {
+        this.intervals[this._intHead] = d;
+        this._intHead = (this._intHead + 1) % 16;
+      }
+      const s = this._scratch;
+      s.length = this.intervals.length;
+      for (let i = 0; i < s.length; i++) s[i] = this.intervals[i];
+      s.sort((a, b) => a - b);
+      this.intervalMs = Math.max(10, Math.min(200, s[s.length >> 1]));
+    }
+    this._lastT = serverT;
+    const l = Math.max(0, lateness);
+    if (this.late.length < JITTER_WINDOW) this.late.push(l);
+    else {
+      this.late[this._lateHead] = l;
+      this._lateHead = (this._lateHead + 1) % JITTER_WINDOW;
+    }
+    this.samples++;
+  }
+
+  _jitterQuantile() {
+    const n = this.late.length;
+    if (n === 0) return 0;
+    const s = this._scratch;
+    s.length = n;
+    for (let i = 0; i < n; i++) s[i] = this.late[i];
+    s.sort((a, b) => a - b);
+    return s[Math.min(n - 1, Math.floor(this.quantile * (n - 1)))];
+  }
+
+  /** Upper bound of the delay: what the server can still rewind (rewind = rtt / 2 + delay) and the report limit. */
+  maxFor(owdMs) {
+    return Math.max(this.minMs, Math.min(this.maxMs, this.rewindCapMs - owdMs));
+  }
+
+  /** Recomputes the (hysteretic) target for the current one-way latency; call once per accepted envelope. */
+  retarget(owdMs, localMs) {
+    if (this.samples < DELAY_MIN_SAMPLES) return;
+    this.jitterMs = this._jitterQuantile();
+    const raw = owdMs + this.k * this.intervalMs + this.jitterMs + this.marginMs;
+    const max = this.maxFor(owdMs);
+    this.rawMs = Math.max(this.minMs, Math.min(max, raw));
+    if (!this.initialised) {
+      this.targetMs = this.rawMs;
+      this.currentMs = this.rawMs;
+      this._advancedAt = localMs;
+      this.initialised = true;
+      return;
+    }
+    if (this.rawMs > this.targetMs + DELAY_RAISE_DEADBAND_MS) {
+      this.targetMs = Math.min(max, this.rawMs + DELAY_RAISE_HEADROOM_MS);
+      this._shrinkSince = null;
+      this.raises++;
+    } else if (this.rawMs < this.targetMs - DELAY_SHRINK_DEADBAND_MS) {
+      if (this._shrinkSince === null) this._shrinkSince = localMs;
+      else if (localMs - this._shrinkSince >= DELAY_SHRINK_HOLD_MS) {
+        this.targetMs = Math.max(this.minMs, this.rawMs + DELAY_RAISE_HEADROOM_MS);
+        this._shrinkSince = null;
+        this.shrinks++;
+      }
+    } else {
+      this._shrinkSince = null;
+    }
+    if (this.targetMs > max) this.targetMs = max; // cap fell (owd rose)
+  }
+
+  /** Moves the applied delay towards the target at a bounded speed; returns it. */
+  advance(localMs) {
+    if (!this.initialised) return this.currentMs;
+    if (this._advancedAt === null) this._advancedAt = localMs;
+    const dt = localMs - this._advancedAt;
+    if (dt > 0) {
+      this._advancedAt = localMs;
+      const diff = this.targetMs - this.currentMs;
+      const step = (diff > 0 ? DELAY_UP_RATE : DELAY_DOWN_RATE) * dt;
+      this.currentMs += Math.max(-step, Math.min(step, diff));
+    }
+    return this.currentMs;
+  }
+}
+
 export class SnapshotInterpolator {
   constructor(opts = {}) {
-    this.interpDelayMs = isNum(opts.interpDelayMs) ? opts.interpDelayMs : INTERP_DELAY_MS;
+    // A caller-supplied interpDelayMs pins the delay (tests / diagnostics); otherwise it is adaptive.
+    this.fixedDelay = isNum(opts.interpDelayMs);
+    this.interpDelayMs = this.fixedDelay ? opts.interpDelayMs : INTERP_DELAY_MS;
     this.opts = opts;
     this.clock = new ServerClock(opts);
+    this.jitter = new JitterBuffer(opts);
     this.buffers = new Map(); // entity id -> SnapshotBuffer
+    this.visual = new Map();  // entity id -> catch-up state (see sample)
+    this._lastRenderT = -Infinity;
+    this.catchupOmega = isNum(opts.catchupOmega) ? opts.catchupOmega : CATCHUP_OMEGA;
   }
 
   has(id) {
@@ -359,8 +537,20 @@ export class SnapshotInterpolator {
     return this.buffers.size;
   }
 
+  /** The delay (ms) the render time currently lags behind the estimated true server time (= what the server must rewind). */
+  get delayMs() {
+    return this.fixedDelay ? this.interpDelayMs : this.jitter.currentMs;
+  }
+
   setRttMs(rttMs) {
     this.clock.setRttMs(rttMs);
+  }
+
+  /** True when an envelope stamped `serverT` would be accepted (newer than the newest seen, or a new server epoch). */
+  acceptsEnvelope(serverT) {
+    if (!isNum(serverT)) return false;
+    const newest = this.clock.newestServerT;
+    return serverT > newest || newest - serverT > this.clock.epochResetMs;
   }
 
   /**
@@ -372,7 +562,17 @@ export class SnapshotInterpolator {
     if (!Array.isArray(entities)) return false;
     const epochs = this.clock.epochResets;
     if (!this.clock.observe(serverT, localMs)) return false;
-    if (this.clock.epochResets !== epochs) this.buffers.clear(); // server restart: old snapshots are meaningless
+    if (this.clock.epochResets !== epochs) {
+      this.buffers.clear(); // server restart: old snapshots are meaningless
+      this.visual.clear();
+      this.jitter.reset();
+      this._lastRenderT = -Infinity;
+    }
+    if (!this.fixedDelay) {
+      const clock = this.clock;
+      this.jitter.observe(serverT, clock.bestOffsetMs - (serverT - localMs));
+      this.jitter.retarget(Math.max(0, clock.offsetMs - clock.bestOffsetMs), localMs);
+    }
     for (let i = 0; i < entities.length; i++) {
       const e = entities[i];
       if (!e || e.id === undefined || e.id === skipId) continue;
@@ -389,27 +589,106 @@ export class SnapshotInterpolator {
   /** Estimated server time shown on screen at local time `localMs` (NaN before the first snapshot); never decreases. */
   renderTime(localMs) {
     const s = this.clock.serverNow(localMs); // already monotone
-    return isNum(s) ? s - this.interpDelayMs : NaN;
+    if (!isNum(s)) return NaN;
+    const delay = this.fixedDelay ? this.interpDelayMs : this.jitter.advance(localMs);
+    let r = s - delay;
+    if (r < this._lastRenderT) r = this._lastRenderT; // the displayed timeline never runs backwards
+    this._lastRenderT = r;
+    return r;
   }
 
-  sample(id, renderT, out) {
+  /**
+   * Samples one entity. On top of SnapshotBuffer.sample a critically damped catch-up is applied: whenever the raw path
+   * jumps while starving or recovering from starvation (extrapolation ended / base snapshot changed), the jump is turned
+   * into an offset that decays smoothly (CATCHUP_OMEGA), so a late snapshot slides the entity onto the real path instead
+   * of teleporting it. Teleports (> TELEPORT_SNAP_DISTANCE, alive flips, `snap`) still snap and clear the offset.
+   */
+  sample(id, renderT, out = {}) {
     const buf = this.buffers.get(id);
-    return buf ? buf.sample(renderT, out) : null;
+    if (!buf) return null;
+    const r = buf.sample(renderT, out);
+    if (!r) return null;
+    let st = this.visual.get(id);
+    if (!st) {
+      st = { has: false, rx: 0, ry: 0, rz: 0, rvx: 0, rvy: 0, rvz: 0, rt: 0, extrap: false, ox: 0, oy: 0, oz: 0, ovx: 0, ovy: 0, ovz: 0, outT: NaN };
+      this.visual.set(id, st);
+    }
+    const rawX = out.x, rawY = out.y, rawZ = out.z;
+    const rawVx = out.vx, rawVy = out.vy, rawVz = out.vz;
+    if (st.has && renderT === st.outT) {
+      // same render time sampled again (diagnostics, second pass): idempotent
+      out.x = rawX + st.ox; out.y = rawY + st.oy; out.z = rawZ + st.oz;
+      out.vx = rawVx + st.ovx; out.vy = rawVy + st.ovy; out.vz = rawVz + st.ovz;
+      return out;
+    }
+    const wasExtrap = st.extrap;
+    if (st.has) {
+      const dtMs = renderT - st.rt;
+      if (dtMs > 0) {
+        const dt = dtMs / 1000;
+        // peak speed of a critically damped slide of size x0 is w * x0 / e: slow the rate down for big offsets
+        const mag = Math.hypot(st.ox, st.oy, st.oz);
+        const w = mag > 0 ? Math.max(1.5, Math.min(this.catchupOmega, (CATCHUP_MAX_EXTRA_SPEED * Math.E) / mag)) : this.catchupOmega;
+        const e = Math.exp(-w * dt);
+        let t = st.ovx + w * st.ox;
+        st.ox = (st.ox + t * dt) * e;
+        st.ovx = (st.ovx - w * t * dt) * e;
+        t = st.ovy + w * st.oy;
+        st.oy = (st.oy + t * dt) * e;
+        st.ovy = (st.ovy - w * t * dt) * e;
+        t = st.ovz + w * st.oz;
+        st.oz = (st.oz + t * dt) * e;
+        st.ovz = (st.ovz - w * t * dt) * e;
+        if (out.snapped) {
+          st.ox = st.oy = st.oz = st.ovx = st.ovy = st.ovz = 0;
+        } else if (wasExtrap || out.extrapolated) {
+          const jx = rawX - (st.rx + st.rvx * dt);
+          const jy = rawY - (st.ry + st.rvy * dt);
+          const jz = rawZ - (st.rz + st.rvz * dt);
+          const jm = Math.hypot(jx, jy, jz);
+          if (jm > TELEPORT_SNAP_DISTANCE) {
+            st.ox = st.oy = st.oz = st.ovx = st.ovy = st.ovz = 0;
+          } else if (jm > CATCHUP_MIN_JUMP) {
+            st.ox -= jx;
+            st.oy -= jy;
+            st.oz -= jz;
+          }
+        }
+      }
+    }
+    st.has = true;
+    st.rx = rawX; st.ry = rawY; st.rz = rawZ;
+    st.rvx = rawVx; st.rvy = rawVy; st.rvz = rawVz;
+    st.rt = renderT;
+    st.outT = renderT;
+    st.extrap = Boolean(out.extrapolated);
+    out.x = rawX + st.ox;
+    out.y = rawY + st.oy;
+    out.z = rawZ + st.oz;
+    out.vx = rawVx + st.ovx;
+    out.vy = rawVy + st.ovy;
+    out.vz = rawVz + st.ovz;
+    return out;
   }
 
   /** Forget the history of one entity (respawn: no streak from the death position). */
   reset(id) {
     const buf = this.buffers.get(id);
     if (buf) buf.clear();
+    this.visual.delete(id);
   }
 
   /** Drops the entity's buffer (entity left the match). */
   remove(id) {
     this.buffers.delete(id);
+    this.visual.delete(id);
   }
 
   clear() {
     this.buffers.clear();
+    this.visual.clear();
+    this.jitter.reset();
+    this._lastRenderT = -Infinity;
     const rtts = this.clock._rtts; // the latency measurements stay valid across matches
     this.clock.reset();
     this.clock._rtts = rtts;

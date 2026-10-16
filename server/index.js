@@ -33,6 +33,9 @@ server.on('connection', (tcpSocket) => {
 // to the WebSocket handshake Origin check (non-browser clients w/o Origin pass).
 const CORS_ORIGINS = parseCorsOrigins(process.env.CORS_ORIGINS);
 
+const PING_INTERVAL_MS = 10000;
+const PING_TIMEOUT_MS = 8000;
+
 const io = new SocketIOServer(server, {
   cors: {
     origin: createCorsOriginCheck(CORS_ORIGINS)
@@ -42,8 +45,13 @@ const io = new SocketIOServer(server, {
   transports: ['websocket', 'polling'],
   perMessageDeflate: false,
   httpCompression: false,
-  pingInterval: 10000,
-  pingTimeout: 8000
+  // Heartbeat: the server pings every 10 s and drops a socket 8 s after an unanswered ping, i.e. a silent link may be dead for
+  // up to 18 s before the player is removed. Shorter values turn an ordinary Wi-Fi hiccup / roaming gap (several seconds) into
+  // a disconnect -> new socket id -> player removed and re-created ("teleport"/ghost storms); longer ones would leave a
+  // frozen ghost body of a really dead client in the room for even longer. 10 s / 8 s is also well below the idle timeouts of
+  // Render's proxy. (The client now re-joins the room by itself after a reconnect, see networkAdapter.installRejoinOnReconnect.)
+  pingInterval: PING_INTERVAL_MS,
+  pingTimeout: PING_TIMEOUT_MS
 });
 
 // Serve static assets
@@ -70,6 +78,12 @@ const HOST_ONLY_MESSAGE = 'Chỉ chủ phòng mới có thể đổi map.';
 // Render.com Health Check Endpoint
 app.get('/healthz', (_req, res) => {
   res.status(200).json({ status: 'ok', uptime: Math.floor(process.uptime()) });
+});
+
+// Server health for load tests / debugging: tick duration + lateness, snapshot size. Counts and timings only.
+app.get('/api/netstats', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(roomManager.getNetStats());
 });
 
 // REST endpoint for active rooms summary

@@ -95,8 +95,8 @@ describe('Spawn protection ends when the player attacks', () => {
 });
 
 describe('Lag compensation uses only server-measured latency', () => {
-  it('rewind = clamp(rttMs / 2 + INTERP_DELAY_MS, 0, 200ms)', () => {
-    assert.equal(LAG_COMP_MAX_REWIND_MS, 200);
+  it('rewind = clamp(rttMs / 2 + interpolation delay, 0, LAG_COMP_MAX_REWIND_MS); the delay defaults to INTERP_DELAY_MS', () => {
+    assert.equal(LAG_COMP_MAX_REWIND_MS, 450);
     assert.equal(INTERP_DELAY_MS, 100);
     assert.equal(LAG_COMP_INTERP_ALLOWANCE_MS, INTERP_DELAY_MS);
 
@@ -104,8 +104,10 @@ describe('Lag compensation uses only server-measured latency', () => {
     assert.equal(resolveShotRewindMs(shooter, {}, Date.now()), 100);
     shooter.rttMs = 80;
     assert.equal(resolveShotRewindMs(shooter, {}, Date.now()), 140);
-    shooter.rttMs = 300;
-    assert.equal(resolveShotRewindMs(shooter, {}, Date.now()), 200);
+    shooter.rttMs = 600;
+    assert.equal(resolveShotRewindMs(shooter, {}, Date.now()), 400);
+    shooter.rttMs = 800;
+    assert.equal(resolveShotRewindMs(shooter, {}, Date.now()), 450);
     shooter.rttMs = 1000;
     assert.equal(resolveShotRewindMs(shooter, {}, Date.now()), LAG_COMP_MAX_REWIND_MS);
   });

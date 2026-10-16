@@ -247,7 +247,9 @@ export class PerfOverlay {
     const text =
       `FPS ${this.fps}   tier ${extra.tier ?? '?'}   pr ${extra.pixelRatio ?? '?'}\n` +
       `calls ${info?.render?.calls ?? '?'}   tris ${info?.render?.triangles ?? '?'}\n` +
-      `textures ${info?.memory?.textures ?? '?'}   geometries ${info?.memory?.geometries ?? '?'}`;
+      `textures ${info?.memory?.textures ?? '?'}   geometries ${info?.memory?.geometries ?? '?'}` +
+      (extra.net ? `
+${extra.net}` : '');
     this.text = text;
     if (this.el) this.el.textContent = text;
   }

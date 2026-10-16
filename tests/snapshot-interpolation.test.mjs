@@ -2,7 +2,8 @@
  * Snapshot interpolation of REMOTE players (step 6):
  *  - the server stamps every stateUpdate with its clock (`t`)
  *  - public/js/snapshotBuffer.js (pure): per-entity buffer, interpolation / snap / extrapolation, server-clock model
- *  - the client render time (estimated server time - INTERP_DELAY_MS) matches the server's lag-compensation rewind
+ *  - the client render time (estimated server time - adaptive delay) matches the server's lag-compensation rewind
+ *    (the client reports its current delay, see tests/network-impairment.test.mjs for the impairment profiles)
  *  - the real Game3D (headless) draws the remote rig at the interpolated position
  */
 
@@ -273,7 +274,7 @@ describe('(d) jittered arrival', () => {
       frames++;
       if (s.extrapolated) extrapolated++;
       if (L - T0 - OFFSET > 3500) { // after clock warm-up
-        const truth = path(L - OFFSET - INTERP_DELAY_MS);
+        const truth = path(L - OFFSET - interp.delayMs); // the adaptive delay currently applied
         maxPosErr = Math.max(maxPosErr, Math.abs(s.x - truth));
         if (prevX !== null) maxStepErr = Math.max(maxStepErr, Math.abs((s.x - prevX) - SPEED * STEP / 1000));
       }
@@ -288,22 +289,32 @@ describe('(d) jittered arrival', () => {
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
-describe('(e) starvation: extrapolate <= 100 ms, then hold', () => {
-  it('extrapolates by velocity for at most MAX_EXTRAPOLATION_MS and then holds with zero speed', () => {
-    assert.equal(MAX_EXTRAPOLATION_MS, 100);
+describe('(e) starvation: damped extrapolation <= MAX_EXTRAPOLATION_MS, then hold', () => {
+  it('extrapolates with a damped velocity for at most MAX_EXTRAPOLATION_MS and then holds with zero speed', () => {
+    assert.equal(MAX_EXTRAPOLATION_MS, 250);
     const buf = new SnapshotBuffer();
     buf.push(snap(1000, 0, { vx: 10 }));
     buf.push(snap(1040, 0.4, { vx: 10 }));
     assert.equal(buf.sample(1040).extrapolated, false);
+    const tau = buf.extrapolationTauMs / 1000;
+    const disp = (ms) => 10 * tau * (1 - Math.exp(-ms / buf.extrapolationTauMs)); // integral of v * exp(-t / tau)
     const a = buf.sample(1040 + 50);
-    assert.ok(Math.abs(a.x - 0.9) < 1e-9);
+    assert.ok(Math.abs(a.x - (0.4 + disp(50))) < 1e-9);
+    assert.ok(a.x < 0.4 + 10 * 0.05, 'damped: less than undamped dead reckoning');
     assert.equal(a.extrapolated, true);
-    assert.equal(a.vx, 10);
-    const b = buf.sample(1040 + 100);
-    assert.ok(Math.abs(b.x - 1.4) < 1e-9);
-    for (const over of [101, 300, 5000]) {
+    assert.ok(a.vx < 10 && a.vx > 0, 'speed decays while starving');
+    // monotone and bounded: never overshoots v * tau
+    let prev = 0.4;
+    for (let over = 10; over <= MAX_EXTRAPOLATION_MS; over += 10) {
+      const x = buf.sample(1040 + over).x;
+      assert.ok(x >= prev - 1e-12 && x <= 0.4 + 10 * tau + 1e-9);
+      prev = x;
+    }
+    const b = buf.sample(1040 + MAX_EXTRAPOLATION_MS);
+    assert.ok(Math.abs(b.x - (0.4 + disp(MAX_EXTRAPOLATION_MS))) < 1e-9);
+    for (const over of [MAX_EXTRAPOLATION_MS + 1, 400, 5000]) {
       const c = buf.sample(1040 + over);
-      assert.ok(Math.abs(c.x - 1.4) < 1e-9, `holds at ${over} ms`);
+      assert.ok(Math.abs(c.x - b.x) < 1e-9, `holds at ${over} ms`);
       assert.equal(c.vx, 0);
     }
     // A new snapshot ends the starvation: positions continue from the real data (corrected, no explosion)
@@ -315,7 +326,7 @@ describe('(e) starvation: extrapolate <= 100 ms, then hold', () => {
     const buf = new SnapshotBuffer();
     buf.push(snap(1000, 0, { y: 2, vy: -8 }));
     assert.equal(buf.sample(1080).y, 2);
-    const up = new SnapshotBuffer();
+    const up = new SnapshotBuffer({ extrapolationTauMs: 0 }); // tau 0 = plain linear dead reckoning
     up.push(snap(1000, 0, { y: 2, vy: 4 }));
     assert.ok(Math.abs(up.sample(1050).y - 2.2) < 1e-9);
     const dead = new SnapshotBuffer();
@@ -479,8 +490,10 @@ describe('(g) clock offset', () => {
 describe('(h) lag-compensation parity: what the shooter sees == what the server rewinds to', () => {
   it('rewind constants: INTERP_DELAY_MS is the single source, history covers the maximum rewind', () => {
     assert.equal(INTERP_DELAY_MS, 100);
-    assert.equal(resolveShotRewindMs({ id: 's', rttMs: 120 }), 120 / 2 + INTERP_DELAY_MS);
+    assert.equal(resolveShotRewindMs({ id: 's', rttMs: 120 }), 120 / 2 + INTERP_DELAY_MS, 'no report yet: the start delay');
+    assert.equal(resolveShotRewindMs({ id: 's', rttMs: 120, interpDelayMs: 180 }), 120 / 2 + 180, 'reported delay is used');
     assert.equal(new SnapshotInterpolator().interpDelayMs, INTERP_DELAY_MS);
+    assert.equal(new SnapshotInterpolator().delayMs, INTERP_DELAY_MS, 'adaptive delay starts at the shared start value');
     assert.ok(LAG_COMP_HISTORY_MS >= LAG_COMP_MAX_REWIND_MS + TICK_MS, 'history window covers the max rewind plus one tick');
     assert.ok(INTERP_DELAY_MS >= 2 * TICK_MS, 'render delay spans >= 2 snapshots');
   });
@@ -505,6 +518,7 @@ describe('(h) lag-compensation parity: what the shooter sees == what the server 
       const interp = new SnapshotInterpolator();
       const toClient = [];
       const rtts = [2 * ONE_WAY, 2 * ONE_WAY, 2 * ONE_WAY];
+      const reportedDelay = () => interp.delayMs; // what the client sends in its inputBatch (`d`)
       for (const r of rtts) interp.setRttMs(r); // client-measured RTT (pingCheck)
 
       const SIM_MS = 4000;
@@ -540,8 +554,10 @@ describe('(h) lag-compensation parity: what the shooter sees == what the server 
       const renderT = interp.renderTime(Lf);
       const seen = interp.sample(target.id, renderT);
       assert.ok(seen && !seen.extrapolated, 'enough snapshots to interpolate (not starved) at 60 ms one-way latency');
-      // convergence of the clock: renders exactly INTERP_DELAY_MS behind the true server time
-      assert.ok(Math.abs(renderT - (Sf - INTERP_DELAY_MS)) < 1, `render time ${renderT - Sf} ms vs -${INTERP_DELAY_MS}`);
+      // convergence of the clock: renders exactly the (adaptive) delay behind the true server time
+      const delay = reportedDelay();
+      assert.ok(delay >= 60 + TICK_MS, 'the adaptive delay covers the one-way latency plus a snapshot interval');
+      assert.ok(Math.abs(renderT - (Sf - delay)) < 1, `render time ${renderT - Sf} ms vs -${delay}`);
 
       // The shot reaches the server one-way later; the server keeps ticking meanwhile
       const Srx = Sf + ONE_WAY;
@@ -552,8 +568,11 @@ describe('(h) lag-compensation parity: what the shooter sees == what the server 
       }
       clock.now = Srx;
       target.x = pathX(Srx);
+      rm.noteInterpDelay(shooter, delay, Srx - 1000); // earlier reports keep the accepted value close ...
+      rm.noteInterpDelay(shooter, delay, Srx);        // ... and slew-limited to the final one
+      assert.ok(Math.abs(shooter.interpDelayMs - delay) <= 1, `accepted delay ${shooter.interpDelayMs} vs reported ${delay}`);
       const rewindMs = resolveShotRewindMs(shooter, {}, Srx);
-      assert.equal(rewindMs, ONE_WAY + INTERP_DELAY_MS);
+      assert.ok(Math.abs(rewindMs - (ONE_WAY + delay)) <= 1);
       const saved = rewindRoomPlayersForShot(room, shooter.id, rewindMs, Srx);
       const rewoundX = target.x;
       restoreRewoundPlayers(saved);
@@ -564,7 +583,7 @@ describe('(h) lag-compensation parity: what the shooter sees == what the server 
         `server rewound x=${rewoundX.toFixed(3)} vs shooter's rendered x=${seen.x.toFixed(3)} (diff ${(rewoundX - seen.x).toFixed(4)} m)`
       );
       // and both equal the true path at (fire time - INTERP_DELAY_MS), up to the 0.01 m wire quantisation
-      assert.ok(Math.abs(rewoundX - pathX(Sf - INTERP_DELAY_MS)) < 0.03);
+      assert.ok(Math.abs(rewoundX - pathX(Sf - delay)) < 0.03 + SPEED * 0.001);
     });
   });
 });
@@ -624,9 +643,9 @@ describe('(i) headless Game3D draws remote players by snapshot interpolation', (
     assert.ok(rp);
     assert.ok(lastSync !== null);
 
-    // Position == the true path at (true server time - INTERP_DELAY_MS) after the clock has converged
+    // Position == the true path at (true server time - the adaptive delay) after the clock has converged
     const trueServerNow = L - STEP - OFFSET; // last frame time
-    const expectedT = trueServerNow - INTERP_DELAY_MS;
+    const expectedT = trueServerNow - game.snapshots.delayMs;
     assert.ok(Math.abs(rp.group.position.x - pathX(expectedT)) < 0.06, `x ${rp.group.position.x} vs ${pathX(expectedT)}`);
     assert.ok(Math.abs(rp.group.position.z + 12) < 1e-9);
     assert.ok(angDist(rp.group.rotation.y, yawAt(expectedT)) < 0.03, 'yaw interpolated');

@@ -169,11 +169,11 @@ assert.equal(updatedLoadout.primary, 'lmg', 'Updated primary should be lmg');
 assert.equal(updatedLoadout.secondary, 'glock', 'Updated secondary should be glock');
 
 console.log('⏪ [CI] Verifying Server-Side Lag Compensation (Hitbox Rewind) & +25 HP Kill Adrenaline...');
-assert.equal(LAG_COMP_HISTORY_MS, 350, 'Lag compensation history window should be 350ms');
-assert.equal(LAG_COMP_MAX_REWIND_MS, 200, 'Lag compensation max rewind clamp should be 200ms');
+assert.equal(LAG_COMP_HISTORY_MS, 550, 'Lag compensation history window should be 550ms');
+assert.equal(LAG_COMP_MAX_REWIND_MS, 450, 'Lag compensation max rewind clamp should be 450ms');
 assert.equal(KILL_ADRENALINE_HEAL, 25, 'Kill adrenaline heal should be +25 HP');
-assert.equal(INTERP_DELAY_MS, 100, 'Snapshot interpolation delay should be 100ms');
-assert.equal(resolveShotRewindMs({ id: 'ci', rttMs: 60 }, {}), 60 / 2 + INTERP_DELAY_MS, 'Rewind = rtt/2 + INTERP_DELAY_MS');
+assert.equal(INTERP_DELAY_MS, 100, 'Snapshot interpolation START delay should be 100ms (the live delay is adaptive)');
+assert.equal(resolveShotRewindMs({ id: 'ci', rttMs: 60 }, {}), 60 / 2 + INTERP_DELAY_MS, 'Rewind = rtt/2 + INTERP_DELAY_MS until the client reports its own delay');
 assert.ok(LAG_COMP_HISTORY_MS >= LAG_COMP_MAX_REWIND_MS + 40, 'Lag-comp history must cover the max rewind plus one tick');
 
 const { player: player2 } = rm.addHumanPlayer({ id: 'socket_p2' }, {
@@ -218,8 +218,8 @@ const midRewind = getRewoundPlayerPosition(player2, baseNow - 100, baseNow);
 assert.ok(Math.abs(midRewind.x - 10) < 0.05, `Expected rewound x ~ 10 at -100ms, got ${midRewind.x}`);
 assert.equal(midRewind.z, -10, 'Rewound z should remain -10');
 
-// 2) Clamp check: requesting 400ms rewind (baseNow - 400) clamps to max LAG_COMP_MAX_REWIND_MS rewind
-const clampedRewind = getRewoundPlayerPosition(player2, baseNow - 400, baseNow);
+// 2) Clamp check: requesting more than the max rewind (cap + 100 ms) clamps to max LAG_COMP_MAX_REWIND_MS rewind
+const clampedRewind = getRewoundPlayerPosition(player2, baseNow - (LAG_COMP_MAX_REWIND_MS + 100), baseNow);
 assert.equal(clampedRewind.timestamp, baseNow - LAG_COMP_MAX_REWIND_MS, 'Rewind timestamp must clamp at LAG_COMP_MAX_REWIND_MS');
 assert.ok(Math.abs(clampedRewind.x - 0) < 0.05, 'Clamped rewind should stop at earliest snapshot x=0');
 

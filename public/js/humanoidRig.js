@@ -205,81 +205,6 @@ export function disposeObject3D(root) {
   });
 }
 
-export function createPlayerNameSprite(name) {
-  const canvas = typeof document !== 'undefined' && typeof document.createElement === 'function'
-    ? document.createElement('canvas')
-    : { width: 280, height: 80, getContext: () => null };
-  canvas.width = 280;
-  canvas.height = 80;
-  const ctx = canvas.getContext?.('2d');
-
-  const texture = new THREE.CanvasTexture(canvas);
-  const material = new THREE.SpriteMaterial({
-    map: texture,
-    transparent: true,
-    depthTest: false,
-    depthWrite: false
-  });
-  const sprite = new THREE.Sprite(material);
-  sprite.scale.set(2.3, 0.65, 1);
-  sprite.position.set(0, 2.36, 0);
-  sprite.renderOrder = 10;
-  sprite.frustumCulled = false;
-
-  const updateLabel = (hp) => {
-    if (!ctx) return;
-    ctx.clearRect(0, 0, 280, 80);
-
-    // Chamfered military gunmetal HUD plate
-    ctx.fillStyle = 'rgba(11, 14, 18, 0.92)';
-    ctx.beginPath();
-    ctx.moveTo(26, 8);
-    ctx.lineTo(254, 8);
-    ctx.lineTo(264, 18);
-    ctx.lineTo(264, 64);
-    ctx.lineTo(24, 64);
-    ctx.lineTo(16, 56);
-    ctx.lineTo(16, 18);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.strokeStyle = 'rgba(229, 160, 36, 0.72)';
-    ctx.lineWidth = 1.8;
-    ctx.stroke();
-
-    // Tactical amber corner ticks
-    ctx.fillStyle = '#e5a024';
-    ctx.fillRect(16, 16, 4, 16);
-    ctx.fillRect(260, 46, 4, 16);
-
-    // Operator callsign stencil
-    ctx.font = '800 19px "Chakra Petch", "Segoe UI", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#f1f5f9';
-    ctx.fillText(String(name || 'OPERATOR').slice(0, 15).toUpperCase(), 140, 33);
-
-    // HP Bar Track
-    ctx.fillStyle = 'rgba(5, 7, 10, 0.96)';
-    ctx.fillRect(34, 44, 212, 10);
-
-    // HP Bar Fill
-    const pct = Math.max(0, Math.min(1, hp / 100));
-    ctx.fillStyle = pct > 0.55 ? '#22c55e' : pct > 0.25 ? '#e5a024' : '#ef4444';
-    ctx.fillRect(34, 44, Math.round(212 * pct), 10);
-
-    // 25% Military Trauma Plate Segment Dividers
-    ctx.fillStyle = 'rgba(11, 14, 18, 0.85)';
-    for (let t = 1; t < 4; t++) {
-      ctx.fillRect(34 + t * 53, 44, 2, 10);
-    }
-
-    texture.needsUpdate = true;
-  };
-
-  updateLabel(100);
-  return { sprite, canvas, texture, material, updateLabel };
-}
-
 export const HITBOX_PROXY_MAT = new THREE.MeshBasicMaterial({
   visible: true,
   transparent: true,
@@ -1397,7 +1322,6 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
   const leftShinHitboxProxy = hitboxProxyById.shin_l;
   const rightShinHitboxProxy = hitboxProxyById.shin_r;
 
-  const labelInfo = null;
   if (!isShowcase && options.scene) {
     options.scene.add(group);
   }
@@ -1448,7 +1372,6 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     hitboxParts,
     setOperatorColor,
     currentWeapon: playerData.weapon || 'rifle',
-    labelInfo,
     targetPos: new THREE.Vector3(playerData.x || 0, playerData.y || 0, playerData.z || 0),
     targetYaw: playerData.yaw || 0,
     targetPitch: playerData.pitch || 0,
@@ -1544,11 +1467,6 @@ export function animateHumanoidRig(rp, dt, now, isMoving, moveSpeed = 0) {
   if (rp.armPivot) {
     const targetArmPitch = pb * 0.95 + aimPitch * 0.75 + breath + (isMoving ? Math.cos(rp.walkPhase * 2) * 0.035 : 0);
     rp.armPivot.rotation.x += (targetArmPitch - rp.armPivot.rotation.x) * 0.32;
-  }
-
-  // Keep overhead nameplate positioned cleanly above helmet
-  if (rp.labelInfo?.sprite) {
-    rp.labelInfo.sprite.position.y = 2.36 - cb * 0.26 - pb * 0.88;
   }
 
   // Hide third-person muzzle flash after 55ms

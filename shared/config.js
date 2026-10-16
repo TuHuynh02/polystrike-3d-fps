@@ -52,6 +52,17 @@ export const MATCH_CONFIG = {
 // at 25 Hz) so a lost/late snapshot still leaves two to interpolate between.
 export const INTERP_DELAY_MS = 100;
 
+// Adaptive render delay (public/js/snapshotBuffer.js JitterBuffer). INTERP_DELAY_MS above is the START value (and the
+// server's assumption until a client reports its own); the live value is clamped to [MIN, MAX] and never exceeds
+// MAX_LAG_COMP_REWIND_MS - oneWayLatency, so the server can always rewind exactly what the shooter sees.
+export const INTERP_DELAY_MIN_MS = 70;
+export const INTERP_DELAY_MAX_MS = 250; // also the largest delay the server accepts from a client report
+// Largest server-side lag-compensation rewind (ms) = rttMs / 2 + reported delay, clamped here. A client can only add
+// INTERP_DELAY_MAX_MS (250) to its measured half-RTT, so raising this cap only matters for genuinely high-latency players:
+// an RTT-200 office link needs 100 + ~190 ms, an RTT-360 link 180 + 250 ms (tests/network-impairment.test.mjs: with 350 the
+// 360 ms-RTT profile still starves, with 450 it is smooth and its shots match what the shooter saw).
+export const MAX_LAG_COMP_REWIND_MS = 450;
+
 export const PLAYER_COLORS = [
   0x38bdf8, // Cyan
   0xf43f5e, // Rose

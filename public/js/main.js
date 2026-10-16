@@ -9,7 +9,7 @@ import {
 } from '../shared/constants.js';
 import { SoundEffects } from './audio.js';
 import { Game3D } from './game3d.js';
-import { createNetworkClient, SERVER_UNREACHABLE_MESSAGE } from './networkAdapter.js';
+import { createNetworkClient, installRejoinOnReconnect, SERVER_UNREACHABLE_MESSAGE } from './networkAdapter.js';
 
 let netClient;
 let netInitFailed = false;
@@ -365,6 +365,9 @@ const hudCache = {
 const game = new Game3D(canvasContainer, {
   // Client-side prediction: input commands (never positions) go to the server; it answers with `moveAck`
   onInputBatch: (batch) => {
+    // `d` = interpolation delay (ms) remote players are drawn with right now: the server rewinds exactly this much (plus
+    // half the RTT it measures itself) when it resolves a shot in this batch (lag compensation parity)
+    batch.d = game.getInterpDelayMs();
     socket.emit('inputBatch', batch);
   },
   // The shot itself travels inside the input commands (FIRE bit + shot sequence, see Game3D.advanceFixedPhysics): there is no
@@ -1253,7 +1256,7 @@ function requestJoinRoom({ mode = 'public', roomCode = '' }) {
 
   sfx.ensureContext();
 
-  socket.emit('joinRoom', {
+  lastJoinPayload = {
     name,
     roomCode,
     mode,
@@ -1261,7 +1264,8 @@ function requestJoinRoom({ mode = 'public', roomCode = '' }) {
     weapon: selectedStartingWeapon,
     loadout: selectedLoadout,
     mapId: selectedMapId
-  });
+  };
+  socket.emit('joinRoom', lastJoinPayload);
 }
 
 // Lobby Event Listeners
@@ -1633,6 +1637,20 @@ const showServerUnreachable = () => {
 };
 if (netInitFailed) showServerUnreachable();
 socket.on('connect_error', showServerUnreachable);
+// A dropped connection in the middle of a match used to be silent (see installRejoinOnReconnect): the client now says so
+// and joins the same room again as soon as the socket is back, instead of leaving every opponent frozen in place.
+let lastJoinPayload = null;
+installRejoinOnReconnect(socket, {
+  isInMatch: () => game.inMatch,
+  onLost: () => showToast('⚠️ Mất kết nối — đang kết nối lại...'),
+  rejoin: () => {
+    if (!lastJoinPayload) return;
+    // The server removed the old socket's player: stale remote bodies must go, then re-enter the same room
+    game.clearAllRemotePlayers();
+    socket.emit('joinRoom', { ...lastJoinPayload, roomCode: activeRoomCode || lastJoinPayload.roomCode });
+  },
+  onReconnected: () => showToast('🔄 Đã kết nối lại — vào lại phòng')
+});
 socket.on('disconnect', () => {
   if (!game.inMatch) showServerUnreachable();
 });
@@ -1930,7 +1948,6 @@ socket.on('damageDealt', (data) => {
     const rp = game.remotePlayers?.get(data.targetId);
     if (rp) {
       rp.hp = data.hp;
-      rp.labelInfo?.updateLabel(data.hp);
     }
   }
 
@@ -2001,10 +2018,9 @@ socket.on('killEvent', (data) => {
   if (data.victimId && data.victimId !== game.localId) {
     const victimRp = game.remotePlayers?.get(data.victimId);
     if (victimRp) {
-      victimRp.alive = false;
-      if (victimRp.group) victimRp.group.visible = false;
-      if (victimRp.labelInfo?.sprite) victimRp.labelInfo.sprite.visible = false;
-      game.rebuildHitboxList?.();
+      // Not shootable from now on (server rules) but the body stays drawn until the interpolated timeline reaches the
+      // death snapshot (Game3D.updateRemotePlayers) instead of vanishing ~one render delay early
+      game.markRemoteDead(data.victimId);
     }
   }
 
@@ -2088,8 +2104,6 @@ socket.on('playerRespawned', (data) => {
     if (rp) {
       rp.alive = true;
       rp.hp = typeof data.hp === 'number' ? data.hp : 100;
-      rp.labelInfo?.updateLabel(rp.hp);
-      if (rp.labelInfo?.sprite) rp.labelInfo.sprite.visible = true;
       if (rp.group) {
         rp.group.position.set(data.x || 0, data.y || 0, data.z || 0);
         rp.group.rotation.y = data.yaw || 0;
@@ -2167,7 +2181,6 @@ socket.on('pickupState', (data) => {
     const rp = game.remotePlayers?.get(data.pickerId);
     if (rp) {
       rp.hp = data.newHp;
-      rp.labelInfo?.updateLabel(data.newHp);
     }
   }
 
@@ -2279,7 +2292,7 @@ socket.on('matchStarted', (data) => {
 });
 
 // Periodic Ping Measurement
-setInterval(() => {
+function measurePing() {
   if (!game.inMatch) return;
   const start = performance.now();
   socket.emit('pingCheck', start, () => {
@@ -2288,4 +2301,10 @@ setInterval(() => {
     hudPing.textContent = String(rtt);
     game.setNetworkRtt?.(rtt); // render clock: adds the one-way latency back into the server-time estimate
   });
-}, 2500);
+}
+setInterval(measurePing, 2500);
+// The adaptive render delay needs the one-way latency: measure it right after joining instead of waiting 2.5 s
+// (3 quick samples; the clock keeps the minimum of the last few)
+socket.on('roomJoined', () => {
+  for (const delay of [150, 450, 900]) setTimeout(measurePing, delay);
+});

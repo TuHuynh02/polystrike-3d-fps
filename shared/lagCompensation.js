@@ -1,22 +1,25 @@
 // Server-Side Lag Compensation (Hitbox Rewind & Interpolation) Helper Module
-// Maintains a compact ~350ms ring buffer of player position/posture snapshots
-// and provides up to 200ms hitbox rewind + restoration during server shot validation.
+// Maintains a compact ~550ms ring buffer of player position/posture snapshots
+// and provides up to 450ms hitbox rewind + restoration during server shot validation.
 
-import { INTERP_DELAY_MS, MATCH_CONFIG } from './config.js';
+import { INTERP_DELAY_MS, INTERP_DELAY_MAX_MS, MAX_LAG_COMP_REWIND_MS, MATCH_CONFIG } from './config.js';
 import { PART_PADDING, raycastPlayerParts } from './hitboxes.js';
 
-// History must cover the largest possible rewind (200 ms) plus the 40 ms tick period and scheduling slack (110 ms margin)
-export const LAG_COMP_HISTORY_MS = 350;
-export const LAG_COMP_MAX_REWIND_MS = 200;
+// History must cover the largest possible rewind (450 ms, shared/config.js) plus the 40 ms tick period and 60 ms of scheduling slack
+export const LAG_COMP_HISTORY_MS = 550;
+export const LAG_COMP_MAX_REWIND_MS = MAX_LAG_COMP_REWIND_MS;
 // Client entity interpolation delay (added on top of one-way latency = rttMs / 2). Alias of the shared
 // INTERP_DELAY_MS (shared/config.js) so the client render delay and the server rewind can never drift apart.
 export const LAG_COMP_INTERP_ALLOWANCE_MS = INTERP_DELAY_MS;
 export const LAG_COMP_MAX_SNAPSHOTS = 32;
+// A client reports the interpolation delay it currently renders with (public/js/snapshotBuffer.js). The server only
+// accepts 0..INTERP_DELAY_MAX_MS and follows it at most this fast (ms of delay per second of server time).
+export const INTERP_REPORT_SLEW_PER_S = 300;
 export const KILL_ADRENALINE_HEAL = 25;
 
 /**
  * Records a player's current position and posture `(timestamp, x, y, z, crouch, prone)`
- * into a compact ring buffer (`player.positionHistory`), pruning snapshots older than ~350ms.
+ * into a compact ring buffer (`player.positionHistory`), pruning snapshots older than LAG_COMP_HISTORY_MS (550 ms).
  */
 export function recordPlayerSnapshot(player, timestamp = Date.now()) {
   if (!player || typeof player !== 'object') return null;
@@ -53,7 +56,7 @@ export function recordPlayerSnapshot(player, timestamp = Date.now()) {
     return last;
   }
 
-  // Prune snapshots older than LAG_COMP_HISTORY_MS (350ms), keeping at most one anchor snapshot just before cutoff if needed
+  // Prune snapshots older than LAG_COMP_HISTORY_MS (LAG_COMP_HISTORY_MS), keeping at most one anchor snapshot just before cutoff if needed
   const cutoff = ts - LAG_COMP_HISTORY_MS;
   while (history.length > 0 && history[0].timestamp < cutoff) {
     history.shift();
@@ -99,7 +102,7 @@ export function recordRoomSnapshots(room, timestamp = Date.now()) {
 
 /**
  * Interpolates a player's historical `(x, y, z, crouch, prone)` at `targetTimestamp`,
- * clamped to at most `LAG_COMP_MAX_REWIND_MS` (200ms) prior to the reference current time.
+ * clamped to at most `LAG_COMP_MAX_REWIND_MS` (LAG_COMP_MAX_REWIND_MS) prior to the reference current time.
  */
 export function getRewoundPlayerPosition(player, targetTimestamp, now = Date.now()) {
   if (!player || typeof player !== 'object') return null;
@@ -224,20 +227,58 @@ export function getRewoundPlayerPosition(player, targetTimestamp, now = Date.now
 }
 
 /**
+ * Sanitises a client-reported interpolation delay: finite number, rounded, clamped to 0..INTERP_DELAY_MAX_MS; null otherwise.
+ */
+export function sanitizeInterpDelayMs(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.min(INTERP_DELAY_MAX_MS, Math.round(value)));
+}
+
+/**
+ * Records the interpolation delay a client says it is rendering with (`d` of its inputBatch) in `player.interpDelayMs`.
+ * Not trusted blindly: sanitised (0..INTERP_DELAY_MAX_MS) and the accepted value only moves towards the report by at
+ * most INTERP_REPORT_SLEW_PER_S per second of server time. The rewind that results is still clamped by
+ * LAG_COMP_MAX_REWIND_MS in resolveShotRewindMs, so a cheating client can never rewind further than any honest client with
+ * a bad connection could. Returns the accepted delay.
+ */
+export function applyReportedInterpDelay(player, reported, now = Date.now()) {
+  if (!player || typeof player !== 'object') return INTERP_DELAY_MS;
+  const prev = typeof player.interpDelayMs === 'number' && Number.isFinite(player.interpDelayMs)
+    ? player.interpDelayMs
+    : INTERP_DELAY_MS;
+  const target = sanitizeInterpDelayMs(reported);
+  const last = typeof player.interpDelayAt === 'number' ? player.interpDelayAt : null;
+  player.interpDelayAt = now;
+  if (target === null) {
+    player.interpDelayMs = prev;
+    return prev;
+  }
+  const dtS = last === null ? 0 : Math.max(0, Math.min(0.5, (now - last) / 1000));
+  const step = INTERP_REPORT_SLEW_PER_S * dtS;
+  player.interpDelayMs = prev + Math.max(-step, Math.min(step, target - prev));
+  return player.interpDelayMs;
+}
+
+/**
  * Resolves the effective rewind duration (0..LAG_COMP_MAX_REWIND_MS) for a shooter.
- * Only the SERVER-measured `shooter.rttMs` is trusted: every client-supplied latency/timestamp field
+ * Only the SERVER-measured `shooter.rttMs` is trusted for the network part: every client-supplied latency/timestamp field
  * in `payload` (rewindMs, latencyMs, pingMs, rttMs, shotTimestamp, clientTimestamp) is ignored.
- * rewind = clamp(rttMs / 2 + INTERP_DELAY_MS, 0, LAG_COMP_MAX_REWIND_MS).
- * The client draws remote players at (estimated TRUE server time - INTERP_DELAY_MS) (public/js/snapshotBuffer.js adds the
+ * rewind = clamp(rttMs / 2 + delay, 0, LAG_COMP_MAX_REWIND_MS), where `delay` is the interpolation delay the shooter's
+ * client renders with: `shooter.interpDelayMs` (sanitised + slew-limited by applyReportedInterpDelay, 0..250) and
+ * INTERP_DELAY_MS until the client has reported one.
+ * The client draws remote players at (estimated TRUE server time - delay) (public/js/snapshotBuffer.js adds the
  * one-way latency back into its clock estimate), so a shot fired at local time L arrives at L + rtt/2 and is rewound to
- * L + rtt/2 - (rtt/2 + INTERP_DELAY_MS) = L - INTERP_DELAY_MS: exactly the pose the shooter saw on screen.
+ * L + rtt/2 - (rtt/2 + delay) = L - delay: exactly the pose the shooter saw on screen.
  */
 export function resolveShotRewindMs(shooter, _payload = {}, _now = Date.now()) {
   if (!shooter) return 0;
   const rtt = typeof shooter.rttMs === 'number' && Number.isFinite(shooter.rttMs)
     ? Math.max(0, shooter.rttMs)
     : 0;
-  const rawMs = rtt * 0.5 + INTERP_DELAY_MS;
+  const delay = typeof shooter.interpDelayMs === 'number' && Number.isFinite(shooter.interpDelayMs)
+    ? Math.max(0, Math.min(INTERP_DELAY_MAX_MS, shooter.interpDelayMs))
+    : INTERP_DELAY_MS;
+  const rawMs = rtt * 0.5 + delay;
   return Math.max(0, Math.min(LAG_COMP_MAX_REWIND_MS, rawMs));
 }
 

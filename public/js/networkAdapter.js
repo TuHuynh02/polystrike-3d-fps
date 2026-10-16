@@ -9,6 +9,29 @@ import { BTN } from '../shared/netcode.js';
 
 export const SERVER_UNREACHABLE_MESSAGE = 'Không kết nối được máy chủ';
 
+/**
+ * A dropped connection in the middle of a match used to be silent: the socket reconnects under a NEW id that is in no room,
+ * so no stateUpdate ever arrives again and every opponent stays frozen where they were last seen. This watches the socket:
+ * a disconnect while `isInMatch()` marks the match as lost; the next `connect` calls `onLost()` once (so the UI can say so)
+ * and then `rejoin()` (clear stale remote players, join the same room again). Returns the state object.
+ */
+export function installRejoinOnReconnect(socket, { isInMatch, onLost, onReconnected, rejoin }) {
+  const state = { lost: false, rejoins: 0 };
+  socket.on?.('disconnect', () => {
+    if (!isInMatch()) return;
+    state.lost = true;
+    onLost?.();
+  });
+  socket.on?.('connect', () => {
+    if (!state.lost) return;
+    state.lost = false;
+    state.rejoins++;
+    rejoin();
+    onReconnected?.();
+  });
+  return state;
+}
+
 function batchHasFire(payload) {
   const cmds = payload?.cmds;
   if (!Array.isArray(cmds)) return false;
@@ -18,6 +41,37 @@ function batchHasFire(payload) {
   return false;
 }
 const KEEP_ALIVE_INTERVAL_MS = 240_000; // Render free tier sleeps after ~15 min idle
+
+// Transport policy. A pure WebSocket is tried first: Socket.IO's default (polling first, upgrade later) can leave a client
+// on HTTP long-polling for a long time - every packet then costs a request/response, batches queue up behind each other and
+// remote players stutter. Polling is only the FALLBACK, enabled when the very first connection attempt fails (a proxy
+// that blocks WebSocket); once connected it still upgrades to WebSocket.
+export const TRANSPORTS_FIRST = Object.freeze(['websocket']);
+export const TRANSPORTS_FALLBACK = Object.freeze(['polling', 'websocket']);
+
+/** Builds the Socket.IO client options (a fresh, mutable copy: socket.io-client keeps and later edits it). */
+export function buildSocketOptions() {
+  return { transports: [...TRANSPORTS_FIRST], upgrade: true };
+}
+
+/**
+ * After a failed first connection attempt (never connected yet) switch the manager to long-polling + upgrade for the
+ * following attempts. Returns an object whose `fellBack` flag tells whether it happened.
+ */
+export function installTransportFallback(socket) {
+  const state = { fellBack: false, everConnected: false };
+  socket.on?.('connect', () => {
+    state.everConnected = true;
+  });
+  socket.on?.('connect_error', () => {
+    if (state.everConnected || state.fellBack) return;
+    const opts = socket.io?.opts;
+    if (!opts) return;
+    opts.transports = [...TRANSPORTS_FALLBACK];
+    state.fellBack = true;
+  });
+  return state;
+}
 
 export async function createNetworkClient() {
   const params = new URLSearchParams(window.location.search);
@@ -33,8 +87,9 @@ export async function createNetworkClient() {
   let rawSocket;
   try {
     rawSocket = customServer
-      ? window.io(customServer, { transports: ['websocket', 'polling'], upgrade: true })
-      : window.io({ transports: ['websocket', 'polling'], upgrade: true });
+      ? window.io(customServer, buildSocketOptions())
+      : window.io(buildSocketOptions());
+    installTransportFallback(rawSocket);
   } catch {
     throw new Error(SERVER_UNREACHABLE_MESSAGE);
   }

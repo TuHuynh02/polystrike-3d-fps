@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { ServerNetStats } from './netStats.js';
 import {
   DEFAULT_MAP_ID,
   MAPS,
@@ -16,10 +17,12 @@ import {
 } from '../shared/constants.js';
 import {
   KILL_ADRENALINE_HEAL,
+  LAG_COMP_MAX_REWIND_MS,
   raycastPlayerHitbox,
   recordPlayerSnapshot,
   recordRoomSnapshots,
   resolveShotRewindMs,
+  applyReportedInterpDelay,
   restoreRewoundPlayers,
   rewindRoomPlayersForShot
 } from '../shared/lagCompensation.js';
@@ -186,6 +189,7 @@ export class RoomManager {
     this.rooms = new Map();
     this.lastTickAt = Date.now();
     this.latencyProbes = new Map(); // socketId -> interval timer of the server-side RTT probe
+    this.netStats = new ServerNetStats(); // tick duration / lateness / snapshot size for /api/netstats
 
     // 25Hz simulation and state broadcast loop: drift-corrected self-scheduling timer (see startTickLoop)
     this._tickTimer = null;
@@ -248,8 +252,10 @@ export class RoomManager {
   _onTickSlot() {
     this._tickTimer = null;
     if (this._tickStopped) return;
+    const slotStart = performance.now();
     try {
       this.tick();
+      this.netStats.recordTick(performance.now() - slotStart, slotStart - this._nextTickSlotAt);
     } finally {
       // Advance to the next absolute slot strictly in the future, skipping any slots missed while ticking
       const afterPerf = performance.now();
@@ -257,6 +263,7 @@ export class RoomManager {
       if (nextSlot <= afterPerf) {
         const missed = Math.floor((afterPerf - nextSlot) / TICK_INTERVAL_MS) + 1;
         nextSlot += missed * TICK_INTERVAL_MS;
+        this.netStats.skippedSlots += missed;
       }
       this._nextTickSlotAt = nextSlot;
       this._scheduleNextTick();
@@ -278,6 +285,15 @@ export class RoomManager {
       : sample;
     player.rttSamples = (player.rttSamples || 0) + 1;
     return player.rttMs;
+  }
+
+  /**
+   * Records the interpolation delay (ms) the client currently renders remote players with (`d` of its inputBatch). Used
+   * by lag compensation: rewind = server-measured rtt / 2 + this delay (sanitised, slew-limited, capped; see
+   * shared/lagCompensation.js applyReportedInterpDelay).
+   */
+  noteInterpDelay(player, reportedMs, now = Date.now()) {
+    return applyReportedInterpDelay(player, reportedMs, now);
   }
 
   /**
@@ -1200,6 +1216,9 @@ export class RoomManager {
     const result = { accepted: 0, stale: false };
     if (!room || !player || !player.moveState || !payload) return result;
 
+    // Interpolation delay the client renders with (lag compensation); independent of the movement epoch
+    if (payload.d !== undefined) this.noteInterpDelay(player, payload.d, now);
+
     if (payload.e !== player.moveEpoch) {
       result.stale = true;
       if (now - (player.lastStaleAckAt || 0) >= STALE_EPOCH_ACK_INTERVAL_MS) {
@@ -1216,6 +1235,9 @@ export class RoomManager {
     for (let i = 0; i < limit; i++) {
       const cmd = sanitizeInputCommand(cmds[i]);
       if (!cmd) continue;
+      // Server clock at arrival: a shot in this command is rewound relative to THIS moment, not to the (up to one tick later)
+      // moment the tick processes it - otherwise every shot would be evaluated on average half a tick too late
+      cmd.recvAt = now;
       if (cmd.seq <= player.lastProcessedSeq) continue; // already simulated (redundant resend)
       if (cmd.seq > player.lastProcessedSeq + INPUT_SEQ_AHEAD_MAX) continue;
       if (queue.length >= INPUT_QUEUE_MAX) break; // flood: surplus commands are dropped
@@ -1462,7 +1484,10 @@ export class RoomManager {
       shooter.spreadSeed,
       ss
     );
-    return this.resolveShot(room, shooter, { weaponId, origin: plan.origin, dirs: plan.dirs, now });
+    const rewindAt = Number.isFinite(cmd.recvAt) && cmd.recvAt <= now && now - cmd.recvAt <= LAG_COMP_MAX_REWIND_MS
+      ? cmd.recvAt
+      : now;
+    return this.resolveShot(room, shooter, { weaponId, origin: plan.origin, dirs: plan.dirs, now, rewindAt });
   }
 
   /**
@@ -1571,7 +1596,8 @@ export class RoomManager {
 
     // Rewind enemy hitboxes: rttMs/2 + interpolation delay (server-measured RTT only, clamped to LAG_COMP_MAX_REWIND_MS)
     const rewindMs = resolveShotRewindMs(shooter, null, now);
-    const savedStates = rewindRoomPlayersForShot(room, shooter.id, rewindMs, now);
+    const rewindRef = Number.isFinite(shot.rewindAt) ? shot.rewindAt : now; // arrival time of the shot's command
+    const savedStates = rewindRoomPlayersForShot(room, shooter.id, rewindMs, rewindRef);
 
     const hits = [];
     let firstEnd = null;
@@ -2586,8 +2612,8 @@ export class RoomManager {
       // Broadcast compact state snapshot (use volatile on Socket.IO to prevent TCP bufferbloat)
       room.stateSeq = ((room.stateSeq || 0) + 1) | 0;
       const roomTarget = this.io.to(room.code);
-      const emitter = roomTarget.volatile || roomTarget;
-      emitter.emit('stateUpdate', {
+      const emitter = process.env.SV_RELIABLE ? roomTarget : (roomTarget.volatile || roomTarget);
+      const statePayload = {
         seq: room.stateSeq,
         t: stateStampMs,
         timeRemaining,
@@ -2595,8 +2621,18 @@ export class RoomManager {
         droppedWeapons: room.droppedWeapons,
         activeGrenades: this.serializeGrenades(room),
         players: this.serializePlayers(room)
-      });
+      };
+      emitter.emit('stateUpdate', statePayload);
+      // size sample for /api/netstats (about once per second per room; the emit itself already encoded the packet)
+      if (room.stateSeq % 25 === 0) this.netStats.recordSnapshotBytes(JSON.stringify(statePayload).length);
     }
+  }
+
+  /** Counts + timings for /api/netstats (no player-identifying data). */
+  getNetStats() {
+    let players = 0;
+    for (const room of this.rooms.values()) players += this.getHumanCount(room);
+    return this.netStats.report({ tickIntervalMs: TICK_INTERVAL_MS, rooms: this.rooms.size, players });
   }
 
   getPublicRoomsSummary() {

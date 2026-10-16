@@ -301,7 +301,7 @@ const {
 } = roomManagerMod;
 
 const { buildArena, buildSkyAndAtmosphere, createProceduralEnvironmentMap } = arenaBuilderMod;
-const { createRemotePlayerMesh, animateHumanoidRig, createPlayerNameSprite, disposeObject3D } = humanoidRigMod;
+const { createRemotePlayerMesh, animateHumanoidRig, disposeObject3D } = humanoidRigMod;
 const { createWeaponMesh, setWeaponAdsCulling } = weaponModelsMod;
 const { TacticalMinimap } = minimapMod;
 const { SoundEffects } = audioMod;
@@ -1046,10 +1046,12 @@ describe('3. Player 3D Humanoid Rig, Hitboxes & Visibility Synchronization', () 
     }
     assert.ok(rp.pelvisGroup.position.y < crouchHipY, 'Prone hip height must be lower than crouch hip height');
 
-    // Nameplate sprite
-    const label = createPlayerNameSprite('STRIKER');
-    assert.ok(label.sprite instanceof THREE.Sprite);
-    label.updateLabel(45);
+    // No floating name / health-bar sprite above the head any more (names live in the scoreboard / kill feed only)
+    assert.equal('labelInfo' in rp, false, 'rig must not carry a nameplate');
+    assert.equal(humanoidRigMod.createPlayerNameSprite, undefined, 'the nameplate factory is gone');
+    let sprites = 0;
+    rp.group.traverse((o) => { if (o.isSprite) sprites++; });
+    assert.equal(sprites, 0, 'no THREE.Sprite anywhere in the remote player rig');
 
     assert.doesNotThrow(() => disposeObject3D(rp.group));
   });
@@ -1129,7 +1131,10 @@ describe('3. Player 3D Humanoid Rig, Hitboxes & Visibility Synchronization', () 
 
     assert.equal(rpHuman.currentWeapon, 'sniper', 'Remote player weapon mesh must update on weapon change');
     assert.equal(rpTwo.alive, false);
-    assert.equal(rpTwo.group.visible, false, 'Dead remote player 3D model must be hidden immediately');
+    // Not shootable at once, but the body is only hidden when the interpolated timeline reaches the death snapshot
+    // (here: no timeline at all, so the very next frame hides it)
+    game.updateRemotePlayers(0.016, 1000);
+    assert.equal(rpTwo.group.visible, false, 'Dead remote player 3D model must be hidden by the next frame update');
     const hitboxOwnersAfterDeath = new Set(game.hitboxMeshes.map((m) => m.userData.playerId));
     assert.equal(
       hitboxOwnersAfterDeath.has('remote_two'),
@@ -1406,6 +1411,7 @@ describe('4. Weapon Shooting, Hit Detection, Kill/Respawn, Grenades & Match Win'
 
     // Sync dead victim state to Game3D -> victim 3D mesh becomes invisible & un-raycastable
     game.syncPlayersState(rm.serializePlayers(room));
+    game.updateRemotePlayers(0.016, 1000);
     assert.equal(rpVictim.group.visible, false);
 
     // Let the 3s respawn delay elapse and run a server tick -> the victim respawns with full HP & spawn protection
