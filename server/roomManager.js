@@ -36,7 +36,6 @@ import {
   stepCommand
 } from '../shared/netcode.js';
 import { computeShotOrigin, createShotState, planShot, resetShotState } from '../shared/spread.js';
-import { createBotEntity, updateRoomBots } from './botAI.js';
 
 const TICK_INTERVAL_MS = 40; // 25Hz server simulation / state broadcast
 
@@ -287,7 +286,7 @@ export class RoomManager {
    * with the server's own monotonic clock. The timer is cleared by `stopLatencyProbe` / `removePlayer`.
    */
   startLatencyProbe(socket, player) {
-    if (!socket || !player || player.isBot || typeof socket.emit !== 'function') return null;
+    if (!socket || !player || typeof socket.emit !== 'function') return null;
     this.stopLatencyProbe(socket.id);
 
     const intervalMs = MATCH_CONFIG.LATENCY_PROBE_INTERVAL_MS || 2000;
@@ -341,7 +340,7 @@ export class RoomManager {
     }));
   }
 
-  createRoom(code, isPublic = true, desiredBots = MATCH_CONFIG.DEFAULT_BOTS, mapId = DEFAULT_MAP_ID) {
+  createRoom(code, isPublic = true, mapId = DEFAULT_MAP_ID) {
     const roomCode = code || generateRoomCode(this.rooms);
     const cleanMapId = sanitizeMapId(mapId);
     const now = Date.now();
@@ -354,21 +353,19 @@ export class RoomManager {
       matchStartedAt: now,
       matchEndsAt: now + MATCH_CONFIG.MATCH_DURATION_SEC * 1000,
       nextMatchAt: 0,
-      desiredBots: Math.max(0, Math.min(MATCH_CONFIG.MAX_BOTS, Number(desiredBots) || 0)),
       players: new Map(),
       pickups: this.createPickupsForMap(cleanMapId),
       droppedWeapons: [],
       grenades: [],
       recentSpawns: [],
-      hostId: null // first human in the room; only the host may change map / bot count
+      hostId: null // first player in the room; only the host may change the map
     };
 
     this.rooms.set(roomCode, room);
-    this.syncRoomBots(room);
     return room;
   }
 
-  findOrCreatePublicRoom(desiredBots = MATCH_CONFIG.DEFAULT_BOTS, preferredMapId = null) {
+  findOrCreatePublicRoom(preferredMapId = null) {
     const cleanMapId = preferredMapId ? sanitizeMapId(preferredMapId) : null;
 
     // First look for an open public room matching the requested map
@@ -383,23 +380,19 @@ export class RoomManager {
 
     // Create a public room for this map
     const defaultCode = !this.rooms.has('PUB001') ? 'PUB001' : generateRoomCode(this.rooms);
-    return this.createRoom(defaultCode, true, desiredBots, cleanMapId || DEFAULT_MAP_ID);
+    return this.createRoom(defaultCode, true, cleanMapId || DEFAULT_MAP_ID);
   }
 
-  getOrCreateRoomByCode(rawCode, isPublic = false, desiredBots = MATCH_CONFIG.DEFAULT_BOTS, mapId = DEFAULT_MAP_ID) {
+  getOrCreateRoomByCode(rawCode, isPublic = false, mapId = DEFAULT_MAP_ID) {
     const code = sanitizeRoomCode(rawCode);
     if (code && this.rooms.has(code)) {
       return this.rooms.get(code);
     }
-    return this.createRoom(code || generateRoomCode(this.rooms), isPublic, desiredBots, mapId);
+    return this.createRoom(code || generateRoomCode(this.rooms), isPublic, mapId);
   }
 
   getHumanCount(room) {
-    let count = 0;
-    for (const p of room.players.values()) {
-      if (!p.isBot) count++;
-    }
-    return count;
+    return room.players.size;
   }
 
   pickSafeSpawnPoint(room, excludeId = null) {
@@ -602,69 +595,20 @@ export class RoomManager {
     return chosen;
   }
 
-  syncRoomBots(room) {
-    const humans = [];
-    const bots = [];
-    for (const p of room.players.values()) {
-      if (p.isBot) bots.push(p);
-      else humans.push(p);
-    }
-
-    // If no humans remain in the room, do not keep bots running
-    if (humans.length === 0) {
-      for (const b of bots) {
-        room.players.delete(b.id);
-      }
-      return;
-    }
-
-    const mapCfg = getMapConfig(room.mapId);
-    const maxAllowedBots = Math.max(0, MATCH_CONFIG.MAX_PLAYERS - humans.length);
-    const targetBotCount = Math.min(room.desiredBots, maxAllowedBots);
-
-    // Add bots if needed
-    while (bots.length < targetBotCount) {
-      const idx = bots.length;
-      const sp = this.pickSafeSpawnPoint(room);
-      const bot = createBotEntity(idx, sp, mapCfg);
-      bot._staticMeta = {
-        id: bot.id,
-        name: bot.name,
-        isBot: true,
-        color: bot.color
-      };
-      recordPlayerSnapshot(bot);
-      room.players.set(bot.id, bot);
-      bots.push(bot);
-    }
-
-    // Remove excess bots if needed
-    while (bots.length > targetBotCount) {
-      const removed = bots.pop();
-      if (removed) {
-        room.players.delete(removed.id);
-      }
-    }
-  }
-
-  addHumanPlayer(socket, { name, roomCode, mode, botCount, weapon, loadout, mapId }) {
+  addHumanPlayer(socket, { name, roomCode, mode, weapon, loadout, mapId }) {
     const cleanName = sanitizeName(name);
     const requestedCode = sanitizeRoomCode(roomCode);
     const cleanLoadout = sanitizeLoadout(loadout, weapon);
     const initialWeapon = WEAPONS[weapon] ? weapon : cleanLoadout.primary;
     const cleanMapId = sanitizeMapId(mapId);
-    const hasBotPref = typeof botCount === 'number' && !Number.isNaN(botCount);
-    const desiredBots = hasBotPref
-      ? Math.max(0, Math.min(MATCH_CONFIG.MAX_BOTS, Math.floor(botCount)))
-      : MATCH_CONFIG.DEFAULT_BOTS;
 
     let room;
     if (requestedCode) {
-      room = this.getOrCreateRoomByCode(requestedCode, mode === 'public', desiredBots, cleanMapId);
+      room = this.getOrCreateRoomByCode(requestedCode, mode === 'public', cleanMapId);
     } else if (mode === 'private') {
-      room = this.createRoom(generateRoomCode(this.rooms), false, desiredBots, cleanMapId);
+      room = this.createRoom(generateRoomCode(this.rooms), false, cleanMapId);
     } else {
-      room = this.findOrCreatePublicRoom(desiredBots, cleanMapId);
+      room = this.findOrCreatePublicRoom(cleanMapId);
     }
 
     // Check human capacity
@@ -672,11 +616,8 @@ export class RoomManager {
       return { error: 'Phòng này đã đủ 12 người chơi thật! Vui lòng tạo phòng mới hoặc vào phòng chung.' };
     }
 
-    // Update bot count & map if this player is the first human in the room
+    // Update the map if this player is the first human in the room
     if (this.getHumanCount(room) === 0) {
-      if (hasBotPref) {
-        room.desiredBots = desiredBots;
-      }
       if (mapId && MAPS[mapId] && room.mapId !== mapId) {
         room.mapId = mapId;
         room.pickups = this.createPickupsForMap(mapId);
@@ -692,7 +633,6 @@ export class RoomManager {
     const player = {
       id: socket.id,
       name: cleanName,
-      isBot: false,
       color: PLAYER_COLORS[colorIdx],
       x: spawn.x,
       y: spawn.y || 0,
@@ -740,7 +680,6 @@ export class RoomManager {
       _staticMeta: {
         id: socket.id,
         name: cleanName,
-        isBot: false,
         color: PLAYER_COLORS[colorIdx]
       }
     };
@@ -753,7 +692,6 @@ export class RoomManager {
     recordPlayerSnapshot(player, now);
     room.players.set(socket.id, player);
     this.ensureRoomHost(room);
-    this.syncRoomBots(room);
     recordRoomSnapshots(room, now);
 
     return { room, player };
@@ -766,13 +704,11 @@ export class RoomManager {
   ensureRoomHost(room) {
     if (!room) return false;
     const current = room.hostId ? room.players.get(room.hostId) : null;
-    if (current && !current.isBot) return false;
+    if (current) return false;
     let next = null;
     for (const p of room.players.values()) {
-      if (!p.isBot) {
-        next = p.id;
-        break;
-      }
+      next = p.id;
+      break;
     }
     const changed = next !== room.hostId;
     room.hostId = next;
@@ -786,7 +722,7 @@ export class RoomManager {
    * keeps counting across lives (it is reset together with the player object on join).
    */
   resetShotSession(player) {
-    if (!player || player.isBot) return null;
+    if (!player) return null;
     player.spreadSeed = randomSpreadSeed();
     player.shotState = player.shotState ? resetShotState(player.shotState) : createShotState();
     player.lastFireCmdTimeMs = -Infinity;
@@ -797,37 +733,26 @@ export class RoomManager {
     return Boolean(room && playerId && room.hostId === playerId);
   }
 
-  /** Host-only: change the number of bots. Returns { ok, error?, botCount?, players? }. */
-  handleSetBots(room, player, payload = {}) {
-    if (!room || !player || player.isBot) return { ok: false, error: 'invalid' };
-    if (!this.isRoomHost(room, player.id)) return { ok: false, error: 'not_host' };
-    const count = Math.max(0, Math.min(MATCH_CONFIG.MAX_BOTS, Math.floor(Number(payload?.botCount) || 0)));
-    room.desiredBots = count;
-    this.syncRoomBots(room);
-    return { ok: true, botCount: room.desiredBots, players: this.serializePlayers(room) };
-  }
-
   /** Host-only: switch the room's map (emits `mapChanged` itself). Returns { ok, error? }. */
   handleChangeMap(room, player, payload = {}) {
-    if (!room || !player || player.isBot) return { ok: false, error: 'invalid' };
+    if (!room || !player) return { ok: false, error: 'invalid' };
     if (!this.isRoomHost(room, player.id)) return { ok: false, error: 'not_host' };
     this.changeRoomMap(room, payload?.mapId);
     return { ok: true };
   }
 
   /**
-   * A human may only use weapons from their server-side loadout (primary / secondary / melee).
-   * Bots are exempt (they are server-controlled).
+   * A player may only use weapons from their server-side loadout (primary / secondary / melee).
    */
   isWeaponAllowed(player, weaponId) {
     if (!WEAPONS[weaponId]) return false;
-    if (!player || player.isBot) return true;
+    if (!player) return true;
     const lo = player.loadout;
     return weaponId === lo?.primary || weaponId === lo?.secondary || weaponId === (lo?.melee || 'knife');
   }
 
   handleUpdateLoadout(room, player, payload = {}) {
-    if (!room || !player || player.isBot) return null;
+    if (!room || !player) return null;
     const nextLoadout = sanitizeLoadout(payload, player.loadout?.primary || 'rifle');
 
     // Changing loadout mid-life used to refill ammo and unlock any weapon for free. Now a live player
@@ -897,12 +822,9 @@ export class RoomManager {
       p.alive = false;
     }
 
-    // Respawn all players and bots on the new map's spawn points
+    // Respawn all players on the new map's spawn points
     const mapCfg = getMapConfig(nextMapId);
     for (const p of room.players.values()) {
-      if (p.isBot) {
-        p.waypointIdx = Math.floor(Math.random() * mapCfg.botWaypoints.length);
-      }
       this.respawnPlayer(room, p);
     }
 
@@ -926,8 +848,6 @@ export class RoomManager {
           playerId: socketId,
           name: leaving?.name || 'Player'
         });
-
-        this.syncRoomBots(room);
 
         if (this.getHumanCount(room) === 0) {
           this.rooms.delete(code);
@@ -1011,7 +931,7 @@ export class RoomManager {
     }
 
     const postAmmo = player.ammoByWeapon?.[wId] ?? player.ammo ?? 0;
-    if (emitIfChanged && !player.isBot && (postAmmo !== prevAmmo || player.reloadingUntil !== prevReloading)) {
+    if (emitIfChanged && (postAmmo !== prevAmmo || player.reloadingUntil !== prevReloading)) {
       this.sendSelfState(player, now, true);
     }
   }
@@ -1062,7 +982,7 @@ export class RoomManager {
       return true;
     }
 
-    if (!player.isBot && now - (player.lastCorrectionAt || 0) >= MOVE_CORRECTION_INTERVAL_MS) {
+    if (now - (player.lastCorrectionAt || 0) >= MOVE_CORRECTION_INTERVAL_MS) {
       player.lastCorrectionAt = now;
       this.io.to(room.code).emit('positionCorrection', {
         playerId: player.id,
@@ -1160,7 +1080,7 @@ export class RoomManager {
    * MovementState. The caller sends the resync ack (`sendMoveAck(player, true)`) when the owner's socket is ready.
    */
   resetPlayerMovement(player, now = Date.now()) {
-    if (!player || player.isBot) return;
+    if (!player) return;
     player.moveEpoch = (player.moveEpoch || 0) + 1;
     player.lastProcessedSeq = player.lastProcessedSeq || 0;
     player.cmdQueue = [];
@@ -1191,7 +1111,7 @@ export class RoomManager {
 
   /** Sends the owner (and only the owner: every socket auto-joins a room named by its id) the authoritative state. */
   sendMoveAck(player, reliable = false) {
-    if (!player || player.isBot || !player.moveState) return null;
+    if (!player || !player.moveState) return null;
     const ack = createMoveAck(player.moveState, player.lastProcessedSeq || 0, player.moveEpoch);
     const target = this.io.to(player.id);
     (reliable ? target : (target.volatile || target)).emit('moveAck', ack);
@@ -1200,7 +1120,7 @@ export class RoomManager {
 
   /** Emits an owner-only `shotRejected { ss, reason }` and records `player.lastShotReject`. */
   emitShotRejected(player, ss, reason) {
-    if (!player || player.isBot) return null;
+    if (!player) return null;
     const payload = { ss: Number.isSafeInteger(ss) ? ss : 0, reason };
     player.lastShotReject = payload;
     this.io.to(player.id).emit('shotRejected', payload);
@@ -1209,7 +1129,7 @@ export class RoomManager {
 
   /** Builds the owner-only `selfState` payload for a human player. */
   buildSelfState(player, now = Date.now()) {
-    if (!player || player.isBot) return null;
+    if (!player) return null;
     this.syncPlayerReloadState(player, now, false);
     const weapon = player.weapon;
     const wCfg = WEAPONS[weapon] || WEAPONS.rifle;
@@ -1251,7 +1171,7 @@ export class RoomManager {
 
   /** Sends the owner-only `selfState` snapshot to `player.id` (never broadcast to the room). */
   sendSelfState(player, now = Date.now(), reliable = false) {
-    if (!player || player.isBot) return null;
+    if (!player) return null;
     const state = this.buildSelfState(player, now);
     if (!state) return null;
     player.lastSelfStateAt = now;
@@ -1262,7 +1182,7 @@ export class RoomManager {
   }
 
   sendSelfStateIfChanged(player, now = Date.now(), reliable = false) {
-    if (!player || player.isBot) return null;
+    if (!player) return null;
     this.syncPlayerReloadState(player, now, false);
     if (this._selfStateSignature(player) !== player._selfStateSig) {
       return this.sendSelfState(player, now, reliable);
@@ -1278,7 +1198,7 @@ export class RoomManager {
    */
   handleInputBatch(room, player, payload, now = Date.now()) {
     const result = { accepted: 0, stale: false };
-    if (!room || !player || player.isBot || !player.moveState || !payload) return result;
+    if (!room || !player || !player.moveState || !payload) return result;
 
     if (payload.e !== player.moveEpoch) {
       result.stale = true;
@@ -1317,7 +1237,7 @@ export class RoomManager {
    * Afterwards the owner gets a `moveAck`. Returns the number of commands simulated.
    */
   processPlayerInputs(room, player, now = Date.now()) {
-    if (!room || !player || player.isBot || !player.moveState) return 0;
+    if (!room || !player || !player.moveState) return 0;
 
     // Anything other than this method moved the player (test setup, new server-side feature): that is a teleport
     if (player.x !== player._mx || player.y !== player._my || player.z !== player._mz) {
@@ -1458,7 +1378,7 @@ export class RoomManager {
       player.reloadingUntil = now + reloadDuration;
     }
 
-    if (emitSelfState && !player.isBot) {
+    if (emitSelfState) {
       this.sendSelfState(player, now, true);
     }
   }
@@ -1467,7 +1387,7 @@ export class RoomManager {
   // Shots. A human's shot is part of the input command (BTN.FIRE + `ss`): the SERVER builds the pellet rays from the
   // authoritative pose, the command's yaw / pitch and the deterministic spread (shared/spread.js), then ray-casts them
   // against map obstacles and player part boxes (resolveShot). Nothing about direction, spread, hit lists, hit points or
-  // headshot flags is read from the client. Bots keep their server-side claim path (handleBotShot).
+  // headshot flags is read from the client.
   // ======================================================================================================================
 
   /**
@@ -1482,7 +1402,7 @@ export class RoomManager {
       this.emitShotRejected(shooter, ss, reason);
       return null;
     };
-    if (!room || !shooter || shooter.isBot || !shooter.moveState) return null;
+    if (!room || !shooter || !shooter.moveState) return null;
     if (!shooter.alive) return reject(SHOT_REJECT.DEAD);
     if (room.state !== 'PLAYING') return reject(SHOT_REJECT.STATE);
 
@@ -1558,7 +1478,7 @@ export class RoomManager {
     }
 
     if (shooter.reloadingUntil > now) {
-      if (!shooter.isBot && now >= shooter.reloadingUntil - 350) {
+      if (now >= shooter.reloadingUntil - 350) {
         this.syncPlayerReloadState(shooter, shooter.reloadingUntil, false);
       }
     }
@@ -1787,17 +1707,12 @@ export class RoomManager {
    * for a human, `payload.dir` is treated as the exact aim direction with NO spread, the origin is always the server's eye
    * (stance + lean), and the same resolveShot runs. `hits`, `targetId`, `isHeadshot`, `isLegshot`, `hitPoint`, `origin`
    * and every latency / timestamp field of the payload are ignored (`isAiming` only selects the fire interval of the old
-   * wall-clock rate limit, 0.82 x interval). Bots are routed to handleBotShot.
+   * wall-clock rate limit, 0.82 x interval).
    */
   handleShoot(room, shooter, payload, customNow = null) {
     if (!room || !shooter || !shooter.alive || room.state !== 'PLAYING') return;
 
     const now = typeof customNow === 'number' && Number.isFinite(customNow) ? customNow : Date.now();
-    if (shooter.isBot) {
-      this.handleBotShot(room, shooter, payload, now);
-      return;
-    }
-
     this.syncPlayerReloadState(shooter, now);
 
     // Firing (or dealing damage) ends spawn protection
@@ -1832,165 +1747,6 @@ export class RoomManager {
     });
     const dirs = new Array(Math.max(1, weaponCfg.pellets || 1)).fill(aimDir);
     this.resolveShot(room, shooter, { weaponId, origin, dirs, now });
-  }
-
-  /**
-   * Bot shots: bots are server-controlled (server/botAI.js), so their `targetId` / `isHeadshot` / `hitPoint` hit decision
-   * (random accuracy roll) is trusted. This is the only remaining claim-based path; it is never reachable from a socket.
-   */
-  handleBotShot(room, shooter, payload, now) {
-    this.syncPlayerReloadState(shooter, now);
-    this.endSpawnProtection(room, shooter, now);
-
-    const weaponId = this.isWeaponAllowed(shooter, payload?.weapon) ? payload.weapon : shooter.weapon;
-    const weaponCfg = WEAPONS[weaponId];
-    if (weaponId !== shooter.weapon) {
-      shooter.weapon = weaponId;
-      shooter.reloadingUntil = 0;
-      shooter.reloadWeapon = null;
-      shooter.nextShellAt = 0;
-      shooter.ammo = shooter.ammoByWeapon?.[weaponId] ?? weaponCfg.magSize;
-      shooter.reserveAmmo = shooter.reserveAmmoByWeapon?.[weaponId] ?? (weaponCfg.reserveAmmo ?? 0);
-    }
-
-    const isAiming = Boolean(payload?.isAiming ?? shooter.isAiming);
-    const effectiveFireRateMs = getEffectiveFireRateMs(weaponCfg, isAiming);
-    if (now - shooter.lastShotAt < effectiveFireRateMs * 0.82) return;
-    if (this.consumeShotAmmo(room, shooter, weaponId, weaponCfg, now)) return;
-    shooter.lastShotAt = now;
-
-    const obstacles = getMapConfig(room.mapId).obstacles;
-    const shooterEye = computeShotOrigin({
-      x: shooter.x,
-      y: shooter.y,
-      z: shooter.z,
-      yaw: shooter.yaw,
-      lean: shooter.lean,
-      prone: shooter.prone,
-      crouching: shooter.crouching
-    });
-    const origin = isFiniteVec(payload?.origin) ? payload.origin : shooterEye;
-    const dir = normalizeDir(payload?.dir) || {
-      x: -Math.sin(shooter.yaw) * Math.cos(shooter.pitch),
-      y: Math.sin(shooter.pitch),
-      z: -Math.cos(shooter.yaw) * Math.cos(shooter.pitch)
-    };
-
-    this.io.to(room.code).emit('shotFired', {
-      shooterId: shooter.id,
-      weapon: weaponId,
-      origin,
-      dir,
-      hitPoint: isFiniteVec(payload?.hitPoint) ? payload.hitPoint : null
-    });
-
-    const maxRange = weaponCfg.isMelee ? weaponCfg.range * 1.45 : weaponCfg.range * 1.15;
-    const damageMap = new Map();
-    const blockedShieldTargets = new Set();
-
-    let hitClaims = payload?.targetId
-      ? [{
-          targetId: payload.targetId,
-          isHeadshot: Boolean(payload.isHeadshot),
-          isLegshot: Boolean(payload.isLegshot)
-        }]
-      : [];
-
-    if (weaponCfg.pellets > 1 && hitClaims.length === 1) {
-      const botTarget = room.players.get(hitClaims[0].targetId);
-      if (botTarget && botTarget.alive) {
-        const d = Math.hypot(botTarget.x - shooter.x, botTarget.y - shooter.y, botTarget.z - shooter.z);
-        const distRatio = Math.max(0, Math.min(1, d / Math.max(1, weaponCfg.range)));
-        const expectedPellets = Math.max(
-          2,
-          Math.min(weaponCfg.pellets, Math.round(weaponCfg.pellets * (1 - distRatio * 0.65)))
-        );
-        while (hitClaims.length < expectedPellets) {
-          hitClaims.push({
-            targetId: botTarget.id,
-            isHeadshot: Boolean(hitClaims[0].isHeadshot),
-            isLegshot: Boolean(hitClaims[0].isLegshot)
-          });
-        }
-      }
-    }
-
-    for (const claim of hitClaims) {
-      if (!claim || !claim.targetId || claim.targetId === shooter.id) continue;
-      const target = room.players.get(claim.targetId);
-      if (!target || !target.alive) continue;
-
-      if (target.invulnerableUntil && now < target.invulnerableUntil) {
-        blockedShieldTargets.add(target.id);
-        continue;
-      }
-
-      const dist = Math.min(
-        Math.hypot(target.x - shooter.x, target.y - shooter.y, target.z - shooter.z),
-        Math.hypot(target.x - origin.x, target.y - origin.y, target.z - origin.z)
-      );
-      if (dist > maxRange) continue;
-
-      // Line of sight against map obstacles across multi-point anatomical zones (bots hugging cover corners etc.)
-      const checkMultiPointLos = (tBase) => {
-        const tFootY = Number(tBase.y) || 0;
-        const tProne = Boolean(tBase.prone);
-        const tCrouch = Boolean(tBase.crouching ?? tBase.crouch);
-        const helmetTopH = tProne ? 0.65 : tCrouch ? 1.34 : 1.94;
-        const headH = tProne ? 0.52 : tCrouch ? 1.18 : 1.76;
-        const chestH = tProne ? 0.36 : tCrouch ? 0.85 : 1.35;
-        const pelvisH = tProne ? 0.22 : tCrouch ? 0.52 : 0.78;
-        const primaryH = claim.isHeadshot ? headH : chestH;
-
-        const toTargetX = tBase.x - shooterEye.x;
-        const toTargetZ = tBase.z - shooterEye.z;
-        const horizLen = Math.hypot(toTargetX, toTargetZ) || 1;
-        const perpX = (-toTargetZ / horizLen) * 0.38;
-        const perpZ = (toTargetX / horizLen) * 0.38;
-
-        const samplePoints = [
-          { x: tBase.x, y: tFootY + primaryH, z: tBase.z },
-          { x: tBase.x, y: tFootY + headH, z: tBase.z },
-          { x: tBase.x, y: tFootY + helmetTopH, z: tBase.z },
-          { x: tBase.x, y: tFootY + chestH, z: tBase.z },
-          { x: tBase.x, y: tFootY + pelvisH, z: tBase.z },
-          { x: tBase.x + perpX, y: tFootY + chestH, z: tBase.z + perpZ },
-          { x: tBase.x - perpX, y: tFootY + chestH, z: tBase.z - perpZ },
-          { x: tBase.x + perpX, y: tFootY + headH, z: tBase.z + perpZ },
-          { x: tBase.x - perpX, y: tFootY + headH, z: tBase.z - perpZ }
-        ];
-
-        for (let s = 0; s < samplePoints.length; s++) {
-          const pt = samplePoints[s];
-          if (hasLineOfSight(shooterEye, pt, obstacles)) return true;
-          if (origin !== shooterEye && hasLineOfSight(origin, pt, obstacles)) return true;
-        }
-        return false;
-      };
-
-      let losOk = checkMultiPointLos(target);
-      if (!losOk && target.isBot && Array.isArray(target.positionHistory)) {
-        for (let i = target.positionHistory.length - 1; i >= 0; i--) {
-          const snap = target.positionHistory[i];
-          if (!snap || now - snap.timestamp > 220) continue;
-          if (checkMultiPointLos(snap)) {
-            losOk = true;
-            break;
-          }
-        }
-      }
-      if (!losOk && dist > 1.5) continue;
-
-      const falloffMult = computeDistanceFalloff(weaponCfg, dist);
-      const hitZoneMult = claim.isHeadshot ? weaponCfg.headshotMult : claim.isLegshot ? 0.78 : 1.0;
-      const pelletDmg = Math.max(1, Math.round(weaponCfg.damage * falloffMult * hitZoneMult));
-      const prev = damageMap.get(target.id) || { totalDamage: 0, anyHeadshot: false };
-      prev.totalDamage += pelletDmg;
-      prev.anyHeadshot = prev.anyHeadshot || Boolean(claim.isHeadshot);
-      damageMap.set(target.id, prev);
-    }
-
-    this.applyShotDamage(room, shooter, weaponId, damageMap, blockedShieldTargets, now);
   }
 
   spawnDroppedWeapon(room, dropData = {}, broadcast = true) {
@@ -2473,10 +2229,10 @@ export class RoomManager {
         droppedWeapon
       });
 
-      if (victim && !victim.isBot) {
+      if (victim) {
         this.sendSelfState(victim, Date.now(), true);
       }
-      if (killer && !killer.isBot && killer.id !== victim.id && adrenalineHeal > 0) {
+      if (killer && killer.id !== victim.id && adrenalineHeal > 0) {
         this.sendSelfState(killer, Date.now(), true);
       }
 
@@ -2490,19 +2246,17 @@ export class RoomManager {
     const now = Date.now();
     const protectionMs = MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500;
     const sp = this.pickSafeSpawnPoint(room, player.id);
-    if (!player.isBot) {
-      if (player.pendingLoadout) {
-        player.loadout = player.pendingLoadout;
-        player.savedLoadoutPrimary = player.pendingLoadout.primary;
-        player.pendingLoadout = null;
-      }
-      const basePrimary = player.savedLoadoutPrimary || player.loadout?.primary || 'rifle';
-      if (player.loadout && WEAPONS[basePrimary]?.slot === 1) {
-        player.loadout.primary = basePrimary;
-      }
-      if (player.loadout?.primary && WEAPONS[player.loadout.primary]) {
-        player.weapon = player.loadout.primary;
-      }
+    if (player.pendingLoadout) {
+      player.loadout = player.pendingLoadout;
+      player.savedLoadoutPrimary = player.pendingLoadout.primary;
+      player.pendingLoadout = null;
+    }
+    const basePrimary = player.savedLoadoutPrimary || player.loadout?.primary || 'rifle';
+    if (player.loadout && WEAPONS[basePrimary]?.slot === 1) {
+      player.loadout.primary = basePrimary;
+    }
+    if (player.loadout?.primary && WEAPONS[player.loadout.primary]) {
+      player.weapon = player.loadout.primary;
     }
     const wCfg = WEAPONS[player.weapon] || WEAPONS.rifle;
     player.x = sp.x;
@@ -2583,7 +2337,7 @@ export class RoomManager {
         continue;
       }
 
-      // Check if any injured alive player/bot walks over the health pack
+      // Check if any injured alive player walks over the health pack
       for (const player of room.players.values()) {
         if (!player.alive || player.hp >= MATCH_CONFIG.MAX_HP) continue;
         const dist = Math.hypot(player.x - pack.x, player.z - pack.z);
@@ -2598,9 +2352,7 @@ export class RoomManager {
             pickerId: player.id,
             newHp: player.hp
           });
-          if (!player.isBot) {
-            this.sendSelfState(player, now, true);
-          }
+          this.sendSelfState(player, now, true);
           break;
         }
       }
@@ -2612,7 +2364,6 @@ export class RoomManager {
       .map((p) => ({
         id: p.id,
         name: p.name,
-        isBot: p.isBot,
         color: p.color,
         kills: p.kills,
         deaths: p.deaths,
@@ -2671,7 +2422,7 @@ export class RoomManager {
       p.lastDeathZ = null;
     }
 
-    // Reset all player/bot scores and respawn
+    // Reset all player scores and respawn
     for (const p of room.players.values()) {
       p.kills = 0;
       p.deaths = 0;
@@ -2722,7 +2473,7 @@ export class RoomManager {
     const list = new Array(room.players.size);
     let idx = 0;
     for (const p of room.players.values()) {
-      if (!p.alive || (!p.isBot && p.lastMoveAt && now - p.lastMoveAt > 120)) {
+      if (!p.alive || (p.lastMoveAt && now - p.lastMoveAt > 120)) {
         p.vx = 0;
         p.vy = 0;
         p.vz = 0;
@@ -2732,7 +2483,6 @@ export class RoomManager {
         meta = {
           id: p.id,
           name: p.name,
-          isBot: Boolean(p.isBot),
           color: p.color
         };
         p._staticMeta = meta;
@@ -2741,7 +2491,6 @@ export class RoomManager {
       list[idx++] = {
         id: meta.id,
         name: meta.name,
-        isBot: meta.isBot,
         color: meta.color,
         x: round2(p.x),
         y: round2(p.y),
@@ -2805,28 +2554,16 @@ export class RoomManager {
 
       // Respawn human players whose 3s respawn delay has elapsed & advance reloads
       for (const p of room.players.values()) {
-        if (!p.isBot) {
-          if (!p.alive && now >= p.respawnAt) {
-            this.respawnPlayer(room, p);
-          } else if (p.alive && p.reloadingUntil) {
-            this.syncPlayerReloadState(p, now);
-          }
-          // Authoritative movement: simulate the player's queued input commands (time-credit limited) and ack them
-          this.processPlayerInputs(room, p, now);
+        if (!p.alive && now >= p.respawnAt) {
+          this.respawnPlayer(room, p);
+        } else if (p.alive && p.reloadingUntil) {
+          this.syncPlayerReloadState(p, now);
         }
+        // Authoritative movement: simulate the player's queued input commands (time-credit limited) and ack them
+        this.processPlayerInputs(room, p, now);
       }
 
-      if (!room._botCallbacks) {
-        room._botCallbacks = {
-          onRespawnPlayer: (bot) => this.respawnPlayer(room, bot),
-          onBotShoot: (bot, shotPayload, tickNow) => this.handleShoot(room, bot, shotPayload, tickNow)
-        };
-      }
-
-      // Update Bot AI movement & shooting
-      updateRoomBots(room, dt, now, room._botCallbacks);
-
-      // Record lag compensation position snapshots for all alive players/bots
+      // Record lag compensation position snapshots for all alive players
       recordRoomSnapshots(room, now);
 
       // Update active Frag Grenades physics & 2.2s fuse detonation
@@ -2838,13 +2575,11 @@ export class RoomManager {
 
       // Owner-only `selfState` reconciliation: immediate on state change, or periodic (~8.3 Hz)
       for (const p of room.players.values()) {
-        if (!p.isBot) {
-          if (
-            this._selfStateSignature(p) !== p._selfStateSig ||
-            now - (p.lastSelfStateAt || 0) >= SELF_STATE_INTERVAL_MS
-          ) {
-            this.sendSelfState(p, now, false);
-          }
+        if (
+          this._selfStateSignature(p) !== p._selfStateSig ||
+          now - (p.lastSelfStateAt || 0) >= SELF_STATE_INTERVAL_MS
+        ) {
+          this.sendSelfState(p, now, false);
         }
       }
 
@@ -2868,7 +2603,6 @@ export class RoomManager {
     const list = [];
     for (const room of this.rooms.values()) {
       const humans = this.getHumanCount(room);
-      const total = room.players.size;
       const mapCfg = getMapConfig(room.mapId);
       list.push({
         code: room.code,
@@ -2876,8 +2610,7 @@ export class RoomManager {
         mapId: room.mapId,
         mapName: mapCfg.name,
         humans,
-        bots: total - humans,
-        total,
+        total: humans,
         maxPlayers: MATCH_CONFIG.MAX_PLAYERS,
         state: room.state,
         timeRemaining: Math.max(0, Math.ceil((room.matchEndsAt - Date.now()) / 1000))

@@ -30,14 +30,14 @@ Mọi thông tin dưới đây đã được kiểm tra bằng lệnh chạy th�
 |---|---|---|
 | Chỉ chơi qua server Render (gỡ P2P/PeerJS/GitHub Pages) | `public/js/networkAdapter.js` (~55 dòng), `.github/workflows/ci-cd.yml`, `render.yaml` | Mất kết nối → lobby hiện "Không kết nối được máy chủ", không có đường dự phòng |
 | Server là nguồn sự thật cho vị trí | `shared/movement.js`, `shared/netcode.js`, `public/js/prediction.js`, `server/roomManager.js` (`handleInputBatch`, `processPlayerInputs`) | Client gửi lệnh `inputBatch`; server mô phỏng bằng đúng module dùng chung; `moveAck` gửi riêng chủ nhân; client dự đoán + đối chiếu |
-| Bước thời gian cố định 60Hz + một cài đặt va chạm duy nhất | `shared/movement.js`, `shared/physics.js` (`collideCapsuleVsBoxes`, `stepGrenade`) | Client, bot, lựu đạn đều dùng chung |
+| Bước thời gian cố định 60Hz + một cài đặt va chạm duy nhất | `shared/movement.js`, `shared/physics.js` (`collideCapsuleVsBoxes`, `stepGrenade`) | Client, server và lựu đạn đều dùng chung |
 | Tick server 25Hz chống trôi nhịp | `RoomManager.startLatencyProbe/tick` | `rm.tickInterval` vẫn clear được bằng `clearInterval` (test dùng) |
 | Đo RTT phía server, rewind ≤ 200ms | `shared/lagCompensation.js` (`resolveShotRewindMs`), `RoomManager.recordRtt/startLatencyProbe` | `rewind = clamp(rttMs/2 + INTERP_DELAY_MS, 0, 200)`; mọi trường ping do client gửi bị bỏ qua |
 | Nội suy snapshot cho người chơi từ xa | `public/js/snapshotBuffer.js`, `stateUpdate.t` (giờ server), `INTERP_DELAY_MS = 100` trong `shared/config.js` | Không còn ngoại suy theo vận tốc |
 | Hitbox theo bộ phận dùng chung | `shared/hitboxes.js`, `humanoidRig.js` (proxy dựng từ `HITBOX_PART_DEFS`) | Headshot/legshot do server quyết theo bộ phận trúng |
 | Bảo mật cơ bản | `server/socketGuard.js` (rate-limit, bọc try/catch, kiểm payload), `maxHttpBufferSize` 100KB, CORS theo `CORS_ORIGINS` | |
 | Bảo vệ hồi sinh hết khi bắn / ném lựu | `RoomManager.endSpawnProtection` | Phát `spawnProtectionEnded` |
-| Loadout/vũ khí được kiểm ở server; chỉ chủ phòng đổi map/bot | `isWeaponAllowed`, `handleSetBots`, `handleChangeMap`, `actionDenied` | |
+| Loadout/vũ khí được kiểm ở server; chỉ chủ phòng đổi map | `isWeaponAllowed`, `handleChangeMap`, `actionDenied` | |
 
 ### 2.2 Làm dở: BƯỚC 7b "bắn đi qua luồng lệnh" (agent bị dừng giữa chừng)
 
@@ -46,7 +46,7 @@ Mọi thông tin dưới đây đã được kiểm tra bằng lệnh chạy th�
 Đã có trong mã (đã grep xác nhận sự tồn tại, **chưa xác nhận chạy đúng đầu-cuối trong trình duyệt**):
 - `shared/spread.js` (328 dòng): `computeSpreadAmount`, PRNG theo seed (`hashSpread`, `mulberry32`), `planShot`, `consumeShot`, `createShotState`, bloom theo thời gian mô phỏng.
 - `shared/netcode.js`: bit `BTN.FIRE = 64` và trường `ss` (shot sequence) trong lệnh; `isFireIntervalOk` (nhịp bắn theo thời gian mô phỏng, dung sai 0.9).
-- `server/roomManager.js`: `resetShotSession` (sinh `spreadSeed` ngẫu nhiên 32-bit mỗi mạng), `resolveShot`, `consumeShotAmmo`, `handleBotShot` (bot giữ đường cũ), xử lý `BTN.FIRE` trong `processPlayerInputs` (quanh dòng ~1284), sự kiện chủ nhân-only `selfSeed`.
+- `server/roomManager.js`: `resetShotSession` (sinh `spreadSeed` ngẫu nhiên 32-bit mỗi mạng), `resolveShot`, `consumeShotAmmo`, xử lý `BTN.FIRE` trong `processPlayerInputs` (quanh dòng ~1284), sự kiện chủ nhân-only `selfSeed`.
 - Client: `public/js/game3d.js` có `spreadSeed`, `shotSeq`, `pendingFire` (ý định bắn gắn vào lệnh kế tiếp), `setSpreadSeed`; `public/js/main.js` có `socket.on('selfSeed', ...)` (dòng ~1783). Sự kiện socket `shoot` **đã bị gỡ** khỏi client, `server/index.js` và `RATE_LIMITS`.
 
 **7 test đang fail (nguyên nhân: test cũ vẫn mô tả cơ chế "tin danh sách trúng của client", hoặc vẫn nhắc sự kiện `shoot` đã gỡ):**
@@ -54,7 +54,7 @@ Mọi thông tin dưới đây đã được kiểm tra bằng lệnh chạy th�
 | Test | File | Lý do |
 |---|---|---|
 | `registers headshots, bodyshots, legshots, enforces fire rate & ammo, and blocks shots through walls` | `tests/game.test.mjs` (~dòng 1170) | Tính sát thương theo claim cũ (expected 71, got 22). Viết lại theo quy tắc mới: hướng bắn do server tính; vùng trúng do bộ phận hitbox; tường chắn là che chắn tia thật |
-| `damages, kills, drops weapon from, and respawns a Bot via client 3D raycast (Game3D.attemptShoot) -> Server RoomManager` | `tests/game.test.mjs` | `onShoot` không còn tồn tại; cần dùng luồng lệnh FIRE (hoặc adapter `handleShoot` dành cho test) |
+| `damages, kills, drops weapon from, and respawns a human target via client 3D raycast (Game3D.attemptShoot) -> Server RoomManager` | `tests/game.test.mjs` | `onShoot` không còn tồn tại; cần dùng luồng lệnh FIRE (hoặc adapter `handleShoot` dành cho test) |
 | `shotgun pellets: the claimed hit point decides the part on the server pose, claim flags are ignored` | `tests/hitboxes.test.mjs` | `getHitPointZone` đã được thay bằng cơ chế tia theo từng viên đạn; viết lại: mỗi viên có hướng riêng do server tính |
 | `takes the headshot flag from the server hitbox, not from the client` | `tests/server-authority.test.mjs` | Cùng lý do: hướng/headshot giờ hoàn toàn do server |
 | `documents the per-event budget table` | `tests/socket-guard.test.mjs` | Bảng `RATE_LIMITS` đã bỏ `shoot` |
@@ -65,9 +65,9 @@ Còn thiếu của 7b (**cần làm tiếp**): file `tests/shot-in-command.test.
 
 ### 2.3 Quyết định của chủ dự án (đừng làm ngược lại)
 
-- **Bỏ**: bước 8 (nâng cấp AI bot) và bước 9 (tối ưu băng thông) — không làm.
+- **Bỏ**: bước 8 (nâng cấp AI bot — nay không còn bot) và bước 9 (tối ưu băng thông) — không làm.
 - **Bỏ**: chế độ P2P "người chơi làm host" và deploy GitHub Pages — đã gỡ, đừng thêm lại.
-- Bot vẫn hoạt động theo logic cũ; chỉ đường bắn của bot đi qua `handleBotShot`.
+- **Đã gỡ hoàn toàn bot theo quyết định của chủ dự án** (bot quá mạnh: bắn headshot một phát, nhìn 360°): xoá `server/botAI.js`, `handleBotShot`, `setBots`/`botsUpdated`, `botCount`, `MAX_BOTS`/`DEFAULT_BOTS`/`BOT_MOVE_SPEED`/`BOT_WEAPON_POOL`, `botWaypoints`, trường `isBot`, ô chọn bot ở sảnh/menu tạm dừng. Game chỉ còn người chơi thật; `joinRoom` bỏ qua `botCount` của client cũ. Đừng thêm lại bot.
 - Chưa commit gì. Bước 10 (tách file, reconnect) **được hoãn** theo yêu cầu, nay là T2 (làm sau cùng).
 
 ---
@@ -77,8 +77,8 @@ Còn thiếu của 7b (**cần làm tiếp**): file `tests/shot-in-command.test.
 ```
 Client (public/js)                          Server (server/, shared/)
  main.js  (UI, HUD, socket handlers)  ──►   index.js  (Express + Socket.IO, bọc bởi socketGuard.js)
- game3d.js (Three.js, vật lý bước cố định,  ──► roomManager.js (phòng, tick 25Hz, bắn, lựu đạn, spawn, bot)
-            bắn, người chơi từ xa)             botAI.js
+ game3d.js (Three.js, vật lý bước cố định,  ──► roomManager.js (phòng, tick 25Hz, bắn, lựu đạn, spawn)
+            bắn, người chơi từ xa)
  prediction.js (lệnh đầu vào, đối chiếu)   shared/: movement.js, netcode.js, spread.js, hitboxes.js,
  snapshotBuffer.js (nội suy từ xa)                  physics.js, lagCompensation.js, weapons.js, maps.js, config.js
 ```
@@ -96,7 +96,7 @@ Quy ước quan trọng: **owner-only emit** hiện dùng `this.io.to(player.id)
 **Mục tiêu**: một client bị sửa không thể tác động tới sát thương bằng cách nói dối về hướng, độ lệch đạn, danh sách trúng, điểm trúng hay cờ headshot.
 
 Việc cần làm:
-1. **Đọc và rà soát** phần đã viết dở: `server/roomManager.js` (tìm `resolveShot`, `handleBotShot`, `consumeShotAmmo`, `resetShotSession`, `processPlayerInputs` đoạn `BTN.FIRE`), `shared/spread.js`, `shared/netcode.js`, phần bắn trong `public/js/game3d.js` (`attemptShoot`, `pendingFire`, `advanceFixedPhysics`).
+1. **Đọc và rà soát** phần đã viết dở: `server/roomManager.js` (tìm `resolveShot`, `consumeShotAmmo`, `resetShotSession`, `processPlayerInputs` đoạn `BTN.FIRE`), `shared/spread.js`, `shared/netcode.js`, phần bắn trong `public/js/game3d.js` (`attemptShoot`, `pendingFire`, `advanceFixedPhysics`).
    Kiểm các điểm dễ sai:
    - Hướng bắn trên server = `aimDirection(yaw, pitch)` của lệnh, **không** cộng flinch/punch/recoil của client.
    - Mắt bắn = vị trí vật lý + chiều cao mắt theo tư thế (`EYE_HEIGHT`: đứng 1.62, ngồi 1.04, trượt 0.78, nằm 0.52) + lệch nghiêng người.
@@ -137,7 +137,7 @@ Việc cần làm:
 Hoãn theo yêu cầu. Chỉ làm khi T0 và T1 xong và đã commit.
 
 **2A. Tách file (chỉ di chuyển code, không đổi hành vi; chạy test sau mỗi lần di chuyển):**
-- `server/roomManager.js` (~2750 dòng) → giữ lớp `RoomManager` làm "mặt tiền" (tên phương thức công khai giữ nguyên vì test gọi trực tiếp), tách thân vào `server/room/`: `rooms.js` (tạo/tìm phòng, host), `spawn.js` (`pickSafeSpawnPoint`), `inputs.js` (lệnh đầu vào/`moveAck`), `combat.js` (`resolveShot`, `handleBotShot`, sát thương, kill), `grenades.js`, `pickups.js`, `tick.js`.
+- `server/roomManager.js` (~2750 dòng) → giữ lớp `RoomManager` làm "mặt tiền" (tên phương thức công khai giữ nguyên vì test gọi trực tiếp), tách thân vào `server/room/`: `rooms.js` (tạo/tìm phòng, host), `spawn.js` (`pickSafeSpawnPoint`), `inputs.js` (lệnh đầu vào/`moveAck`), `combat.js` (`resolveShot`, sát thương, kill), `grenades.js`, `pickups.js`, `tick.js`.
 - `public/js/game3d.js` (~3360 dòng) → `public/js/game/`: vật lý/dự đoán, vũ khí & bắn, người chơi từ xa, hiệu ứng/âm thanh, đầu vào (`bindEvents`), camera/viewmodel.
 - `public/js/main.js` (~2240 dòng, script cấp module với trạng thái toàn cục) → `public/js/ui/`: lobby, HUD, kill feed, scoreboard, loadout, socket handlers.
 - Hàm quá dài cần chẻ: `createRemotePlayerMesh` (~1170 dòng, `humanoidRig.js`), `buildDetailedWeaponModel` (~1200 dòng, `weaponModels.js`), `buildArena` (~600 dòng).
@@ -174,7 +174,7 @@ Toàn bộ kiểm thử đến nay chạy trong Node không giao diện. Trướ
 4. **Bắn**: đứng yên vs đang chạy (độ lệch đạn khác nhau), ADS, shotgun, dao; kiểm hit marker, headshot, tia đạn, âm thanh; bắn xuyên tường phải không trúng.
 5. **Đạn/nạp đạn** (sau T1): bắn liên tục đến hết đạn, nạp, đổi súng — số đạn HUD luôn khớp.
 6. **Hồi sinh/bảo vệ hồi sinh**: khiên hết khi bắn.
-7. **Chủ phòng**: người thứ hai không đổi được map/số bot, thấy thông báo; chủ thoát thì quyền chuyển cho người kia.
+7. **Chủ phòng**: người thứ hai không đổi được map, thấy thông báo; chủ thoát thì quyền chuyển cho người kia.
 8. **Mất kết nối**: tắt mạng 5s rồi bật lại (sau T2B); dừng server → lobby hiện "Không kết nối được máy chủ".
 9. **Triển khai Render**: kiểm `GET /healthz`, biến `CORS_ORIGINS` nếu chạy frontend khác origin, thời gian "đánh thức" của gói free (~30–60s lần đầu).
 

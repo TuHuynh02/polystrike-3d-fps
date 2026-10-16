@@ -217,7 +217,7 @@ export function hasLineOfSight(p1, p2, obstaclesOrMapId = null) {
 
 // ---------------------------------------------------------------------------------------------
 // Deterministic collision primitives shared by the client (player + grenades), the server
-// (grenades, throw start-position test) and the server bots. Pure functions: no DOM/Three/Node.
+// (grenades, throw start-position test). Pure functions: no DOM/Three/Node.
 // ---------------------------------------------------------------------------------------------
 
 /**

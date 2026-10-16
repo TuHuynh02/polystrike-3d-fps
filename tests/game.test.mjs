@@ -2,12 +2,12 @@
  * Comprehensive Automated Test Suite for POLYSTRIKE 3D FPS Arena
  *
  * Covers:
- * 1. Room Creation, Matchmaking, Sanitization, Capacity, Map Switching & Bot Sync
+ * 1. Room Creation, Matchmaking, Sanitization, Capacity & Map Switching (humans only: bots were removed)
  * 2. WebSocket / Socket.IO Live Event Flow, Sequence Ordering, Quantization & Lag Comp
- * 3. Player & Bot State Fields, 3D Humanoid Rig, Hitbox Proxies & Game3D Remote Visibility/Lifecycle Sync
- * 4. Weapon Shooting (all 11 weapons), Client-to-Server 3D Raycast Hit Detection, Bot Damage/Kill/Respawn,
- *    Spawn Protection, Kill Adrenaline, Dropped Weapons, Frag Grenades, Bot AI & 20-Kill Win Condition
- * 5. Health Pack Pickups (Move-Triggered, Elevation/Radius Bounds, Bot Seeking, Healing Cap, 15s Cooldown & Client 3D Sync)
+ * 3. Player State Fields, 3D Humanoid Rig, Hitbox Proxies & Game3D Remote Visibility/Lifecycle Sync
+ * 4. Weapon Shooting (all 11 weapons), Client-to-Server 3D Raycast Hit Detection, Player Damage/Kill/Respawn,
+ *    Spawn Protection, Kill Adrenaline, Dropped Weapons, Frag Grenades & 20-Kill Win Condition
+ * 5. Health Pack Pickups (Move-Triggered, Elevation/Radius Bounds, Healing Cap, 15s Cooldown & Client 3D Sync)
  * 6. Map/Terrain Collision, AABB Raycasting, Entity Physics, Anti-Z-Fighting/Flickering Invariants & Game3D PointerLock/ADS
  * 7. UI / DOM Elements, Decluttered Text & CSS Invariants, Tactical Minimap Projection & 3D Spatial Audio
  */
@@ -251,7 +251,6 @@ const THREE = await import('three');
 const constants = await import('../shared/constants.js');
 const lagCompMod = await import('../shared/lagCompensation.js');
 const roomManagerMod = await import('../server/roomManager.js');
-const botAIMod = await import('../server/botAI.js');
 
 const arenaBuilderMod = await import('../public/js/arenaBuilder.js');
 const humanoidRigMod = await import('../public/js/humanoidRig.js');
@@ -277,6 +276,7 @@ const {
   isPointClearOfObstacles,
   rayIntersectsAABB,
   hasLineOfSight,
+  collideCapsuleVsBoxes,
 } = constants;
 
 const {
@@ -300,7 +300,6 @@ const {
   generateRoomCode,
 } = roomManagerMod;
 
-const { resolveEntityPhysics, createBotEntity, updateRoomBots } = botAIMod;
 const { buildArena, buildSkyAndAtmosphere, createProceduralEnvironmentMap } = arenaBuilderMod;
 const { createRemotePlayerMesh, animateHumanoidRig, createPlayerNameSprite, disposeObject3D } = humanoidRigMod;
 const { createWeaponMesh, setWeaponAdsCulling } = weaponModelsMod;
@@ -365,9 +364,9 @@ function createTestGame3D(callbacks = {}) {
 }
 
 // ============================================================================
-// 1. ROOM CREATION, JOINING, SANITIZATION, CAPACITY & BOT/MAP MANAGEMENT
+// 1. ROOM CREATION, JOINING, SANITIZATION, CAPACITY & MAP MANAGEMENT
 // ============================================================================
-describe('1. Room Creation, Joining, Sanitization & Bot/Map Synchronization', () => {
+describe('1. Room Creation, Joining, Sanitization & Map Synchronization', () => {
   it('sanitizes player names, room codes, map IDs, and loadouts against invalid/XSS input', () => {
     assert.match(sanitizeName(''), /^Striker_\d{3}$/);
     assert.match(sanitizeName('   '), /^Striker_\d{3}$/);
@@ -399,6 +398,7 @@ describe('1. Room Creation, Joining, Sanitization & Bot/Map Synchronization', ()
 
   it('creates private rooms with unique 6-character codes and allows joining by code', () => {
     const { rm } = createTestRoomManager();
+    // `botCount` is a field of OLD clients: it must be ignored (no bots exist any more), never an error
     const createRes = rm.addHumanPlayer(
       { id: 'host_1' },
       { name: 'HostPlayer', mode: 'private', botCount: 3, mapId: 'cargo_dock', weapon: 'm4a1' }
@@ -408,7 +408,8 @@ describe('1. Room Creation, Joining, Sanitization & Bot/Map Synchronization', ()
     const { room, player: hostPlayer } = createRes;
     assert.equal(room.isPublic, false);
     assert.equal(room.mapId, 'cargo_dock');
-    assert.equal(room.desiredBots, 3);
+    assert.equal(room.desiredBots, undefined, 'rooms no longer carry a bot count');
+    assert.equal(room.players.size, 1, 'a legacy botCount adds no extra entities');
     assert.match(room.code, /^[A-Z0-9]{6}$/);
     assert.equal(hostPlayer.id, 'host_1');
     assert.equal(hostPlayer.weapon, 'm4a1');
@@ -424,17 +425,16 @@ describe('1. Room Creation, Joining, Sanitization & Bot/Map Synchronization', ()
     assert.equal(rm.getHumanCount(room), 2);
   });
 
-  it('enforces MATCH_CONFIG.MAX_PLAYERS capacity and dynamically trims bots as humans join', () => {
+  it('enforces MATCH_CONFIG.MAX_PLAYERS capacity (humans only)', () => {
     const { rm } = createTestRoomManager();
     const { room } = rm.addHumanPlayer(
       { id: 'h1' },
-      { name: 'Host', mode: 'private', botCount: MATCH_CONFIG.MAX_BOTS, mapId: DEFAULT_MAP_ID }
+      { name: 'Host', mode: 'private', mapId: DEFAULT_MAP_ID }
     );
 
-    // 1 human + 8 bots = 9 total players initially
-    assert.equal(room.players.size, 1 + MATCH_CONFIG.MAX_BOTS);
+    assert.equal(room.players.size, 1, 'a solo room contains only the joining human');
 
-    // Join humans up to MATCH_CONFIG.MAX_PLAYERS (12 humans, 0 bots)
+    // Join humans up to MATCH_CONFIG.MAX_PLAYERS
     for (let i = 2; i <= MATCH_CONFIG.MAX_PLAYERS; i++) {
       const res = rm.addHumanPlayer(
         { id: `h${i}` },
@@ -448,8 +448,7 @@ describe('1. Room Creation, Joining, Sanitization & Bot/Map Synchronization', ()
     }
 
     assert.equal(rm.getHumanCount(room), MATCH_CONFIG.MAX_PLAYERS);
-    const botsRemaining = Array.from(room.players.values()).filter((p) => p.isBot).length;
-    assert.equal(botsRemaining, 0, 'All bots should be trimmed when room reaches max human capacity');
+    assert.equal(room.players.size, MATCH_CONFIG.MAX_PLAYERS);
 
     // 13th human should be rejected with error
     const overflowRes = rm.addHumanPlayer(
@@ -463,7 +462,7 @@ describe('1. Room Creation, Joining, Sanitization & Bot/Map Synchronization', ()
     const { rm } = createTestRoomManager();
     const { room: room1 } = rm.addHumanPlayer(
       { id: 'pub_1' },
-      { name: 'Pub1', mode: 'public', botCount: 2, mapId: 'neon_lab' }
+      { name: 'Pub1', mode: 'public', mapId: 'neon_lab' }
     );
     assert.equal(room1.isPublic, true);
     assert.equal(room1.mapId, 'neon_lab');
@@ -480,30 +479,20 @@ describe('1. Room Creation, Joining, Sanitization & Bot/Map Synchronization', ()
     // Next public join on neon_lab must create a new public room
     const { room: room2 } = rm.addHumanPlayer(
       { id: 'pub_next' },
-      { name: 'PubNext', mode: 'public', botCount: 4, mapId: 'neon_lab' }
+      { name: 'PubNext', mode: 'public', mapId: 'neon_lab' }
     );
     assert.notEqual(room2.code, room1.code);
     assert.equal(room2.isPublic, true);
     assert.equal(room2.mapId, 'neon_lab');
   });
 
-  it('handles bot count updates, map switching, and automatic empty room cleanup', () => {
+  it('handles map switching and automatic empty room cleanup', () => {
     const { rm, io } = createTestRoomManager();
     const { room } = rm.addHumanPlayer(
       { id: 'p1' },
-      { name: 'One', mode: 'private', botCount: 2, mapId: 'cyber_citadel' }
+      { name: 'One', mode: 'private', mapId: 'cyber_citadel' }
     );
     rm.addHumanPlayer({ id: 'p2' }, { name: 'Two', roomCode: room.code });
-
-    // Update bot count to 0
-    room.desiredBots = 0;
-    rm.syncRoomBots(room);
-    assert.equal(Array.from(room.players.values()).filter((p) => p.isBot).length, 0);
-
-    // Update bot count to 6
-    room.desiredBots = 6;
-    rm.syncRoomBots(room);
-    assert.equal(Array.from(room.players.values()).filter((p) => p.isBot).length, 6);
 
     // Switch map to desert_outpost
     rm.changeRoomMap(room, 'desert_outpost');
@@ -520,6 +509,49 @@ describe('1. Room Creation, Joining, Sanitization & Bot/Map Synchronization', ()
     rm.removePlayer('p2');
     assert.equal(rm.rooms.has(room.code), false);
   });
+
+  it('solo play: one human alone keeps ticking (timer, respawn, health packs) and the match is never auto-ended', () => {
+    const { rm, io } = createTestRoomManager();
+    const { room, player } = rm.addHumanPlayer({ id: 'solo' }, { name: 'Solo', mode: 'private', mapId: 'cyber_citadel' });
+    assert.equal(room.players.size, 1);
+    assert.equal(room.state, 'PLAYING');
+    assert.equal(room.hostId, 'solo');
+
+    // The tick loop keeps broadcasting state for a room with a single human
+    rm.tick(0.04);
+    rm.tick(0.04);
+    const states = io.roomEmitted.filter((e) => e.event === 'stateUpdate' && e.roomId === room.code);
+    assert.ok(states.length >= 2, 'a solo room must keep receiving stateUpdate broadcasts');
+    assert.equal(states[states.length - 1].payload.players.length, 1);
+    assert.equal(room.state, 'PLAYING', 'a solo match must not end just because nobody else is there');
+    assert.equal(io.roomEmitted.some((e) => e.event === 'matchEnded'), false);
+
+    // Respawn after death runs through the normal tick path
+    player.alive = false;
+    player.hp = 0;
+    player.respawnAt = Date.now() - 1;
+    rm.tick(0.04);
+    assert.equal(player.alive, true);
+    assert.equal(player.hp, MATCH_CONFIG.MAX_HP);
+
+    // Health packs work for a solo player
+    const pack = room.pickups[0];
+    placeServerSide(player, pack.x, pack.y || 0, pack.z);
+    player.hp = 40;
+    rm.updateHealthPacks(room, Date.now());
+    assert.equal(player.hp, 40 + MATCH_CONFIG.HEALTH_PACK_HEAL);
+    assert.equal(pack.active, false);
+
+    // The match timer still ends the match normally
+    room.matchEndsAt = Date.now() - 1;
+    rm.tick(0.04);
+    assert.equal(room.state, 'ENDED');
+
+    // A room whose last human left is dropped (and an empty room is never ticked)
+    rm.removePlayer('solo');
+    assert.equal(rm.rooms.has(room.code), false);
+    assert.doesNotThrow(() => rm.tick(0.04));
+  });
 });
 
 // ============================================================================
@@ -530,7 +562,7 @@ describe('2. State Synchronization, Sequence Ordering, Quantization, Lag Comp & 
     const { rm } = createTestRoomManager();
     const { room, player } = rm.addHumanPlayer(
       { id: 'mover' },
-      { name: 'Mover', mode: 'private', botCount: 0, mapId: 'cyber_citadel' }
+      { name: 'Mover', mode: 'private', mapId: 'cyber_citadel' }
     );
 
     placeServerSide(player, 10, 2.5, -15);
@@ -616,15 +648,16 @@ describe('2. State Synchronization, Sequence Ordering, Quantization, Lag Comp & 
     const { rm, io } = createTestRoomManager();
     const { room, player } = rm.addHumanPlayer(
       { id: 'ser_1' },
-      { name: 'SerialTester', mode: 'private', botCount: 1, mapId: 'cyber_citadel' }
+      { name: 'SerialTester', mode: 'private', mapId: 'cyber_citadel' }
     );
+    rm.addHumanPlayer({ id: 'ser_2' }, { name: 'SerialOther', roomCode: room.code, mode: 'private' });
     player.lastMoveAt = Date.now();
     player.x = 12.34567;
     player.z = -8.99123;
     player.vx = 4.567;
 
     const serialized = rm.serializePlayers(room);
-    assert.equal(serialized.length, 2); // 1 human + 1 bot
+    assert.equal(serialized.length, 2); // 2 humans
 
     const sp = serialized.find((p) => p.id === 'ser_1');
     assert.ok(sp);
@@ -633,7 +666,7 @@ describe('2. State Synchronization, Sequence Ordering, Quantization, Lag Comp & 
     assert.equal(sp.vx, 4.6);
 
     const requiredFields = [
-      'id', 'name', 'isBot', 'color', 'x', 'y', 'z', 'vx', 'vy', 'vz',
+      'id', 'name', 'color', 'x', 'y', 'z', 'vx', 'vy', 'vz',
       'yaw', 'pitch', 'crouching', 'prone', 'lean', 'weapon', 'ammo',
       'reserveAmmo', 'grenades', 'hp', 'alive', 'invulnerable',
       'invulnerableUntil', 'kills', 'deaths', 'streak',
@@ -641,6 +674,7 @@ describe('2. State Synchronization, Sequence Ordering, Quantization, Lag Comp & 
     for (const field of requiredFields) {
       assert.ok(field in sp, `Serialized player missing required field: ${field}`);
     }
+    assert.equal('isBot' in sp, false, 'the bot flag no longer exists in the wire format');
 
     // Grenade quantization & non-finite safety
     room.grenades = [{
@@ -679,7 +713,7 @@ describe('2. State Synchronization, Sequence Ordering, Quantization, Lag Comp & 
     const { rm } = createTestRoomManager();
     const { room, player: p1 } = rm.addHumanPlayer(
       { id: 'p1' },
-      { name: 'Shooter', mode: 'private', botCount: 0 }
+      { name: 'Shooter', mode: 'private' }
     );
     const { player: p2 } = rm.addHumanPlayer(
       { id: 'p2' },
@@ -764,7 +798,6 @@ describe('2. State Synchronization, Sequence Ordering, Quantization, Lag Comp & 
           isPublic: room.isPublic,
           mapId: room.mapId,
           mapName: mapCfg.name,
-          botCount: room.desiredBots,
           player: { id: player.id, name: player.name, hp: player.hp, weapon: player.weapon },
           players: rm.serializePlayers(room),
           pickups: room.pickups,
@@ -782,17 +815,6 @@ describe('2. State Synchronization, Sequence Ordering, Quantization, Lag Comp & 
         const room = rm.rooms.get(currentRoomCode);
         const player = room?.players.get(socket.id);
         if (room && player) rm.handleInputBatch(room, player, payload);
-      });
-
-      socket.on('setBots', (payload = {}) => {
-        const room = rm.rooms.get(currentRoomCode);
-        if (!room) return;
-        room.desiredBots = Math.max(0, Math.min(MATCH_CONFIG.MAX_BOTS, Math.floor(Number(payload?.botCount) || 0)));
-        rm.syncRoomBots(room);
-        io.to(room.code).emit('botsUpdated', {
-          botCount: room.desiredBots,
-          players: rm.serializePlayers(room),
-        });
       });
 
       socket.on('changeMap', (payload = {}) => {
@@ -897,18 +919,22 @@ describe('2. State Synchronization, Sequence Ordering, Quantization, Lag Comp & 
       clientA = await connectSocketIOClient();
       clientB = await connectSocketIOClient();
 
-      // Client A joins a public room with 2 bots on cyber_citadel
+      // Client A joins a public room on cyber_citadel (a legacy `botCount` from an old client is ignored)
       clientA.emit('joinRoom', { name: 'AlphaWS', mode: 'public', botCount: 2, mapId: 'cyber_citadel', weapon: 'm4a1' });
       const joinedA = await clientA.waitFor('roomJoined');
       assert.equal(joinedA.mapId, 'cyber_citadel');
       assert.equal(joinedA.isPublic, true);
-      assert.equal(joinedA.botCount, 2);
+      assert.equal(joinedA.botCount, undefined, 'roomJoined no longer reports a bot count');
+      assert.equal(joinedA.players.length, 1, 'no bots are spawned for a legacy botCount');
 
       // Verify /api/rooms reflects the live room
       const roomsRes = await fetch(`http://127.0.0.1:${port}/api/rooms`);
       const roomsJson = await roomsRes.json();
       assert.equal(roomsJson.rooms.length, 1);
       assert.equal(roomsJson.rooms[0].code, joinedA.roomCode);
+      assert.equal(roomsJson.rooms[0].humans, 1);
+      assert.equal(roomsJson.rooms[0].total, 1);
+      assert.equal('bots' in roomsJson.rooms[0], false, 'the room list has no bot field any more');
 
       // Client B joins Client A's room by code -> Client A receives playerJoined
       const playerJoinedPromise = clientA.waitFor('playerJoined');
@@ -975,9 +1001,9 @@ describe('2. State Synchronization, Sequence Ordering, Quantization, Lag Comp & 
 });
 
 // ============================================================================
-// 3. PLAYER & BOT 3D HUMANOID RIG, HITBOX PROXIES & VISIBILITY SYNCHRONIZATION
+// 3. PLAYER 3D HUMANOID RIG, HITBOX PROXIES & VISIBILITY SYNCHRONIZATION
 // ============================================================================
-describe('3. Player & Bot 3D Humanoid Rig, Hitboxes & Visibility Synchronization', () => {
+describe('3. Player 3D Humanoid Rig, Hitboxes & Visibility Synchronization', () => {
   it('constructs 3D remote player meshes with head/body/leg hitbox proxies, frustum safety, and grounded boots', () => {
     const scene = new THREE.Scene();
     const rp = createRemotePlayerMesh(
@@ -1028,7 +1054,7 @@ describe('3. Player & Bot 3D Humanoid Rig, Hitboxes & Visibility Synchronization
     assert.doesNotThrow(() => disposeObject3D(rp.group));
   });
 
-  it('synchronizes remote players and bots in Game3D: visibility toggling on death/respawn, hitbox registration, weapon swap, and disposal', () => {
+  it('synchronizes remote players in Game3D: visibility toggling on death/respawn, hitbox registration, weapon swap, and disposal', () => {
     const game = createTestGame3D();
     game.localId = 'local_me';
     game.inMatch = true;
@@ -1037,7 +1063,6 @@ describe('3. Player & Bot 3D Humanoid Rig, Hitboxes & Visibility Synchronization
       {
         id: 'local_me',
         name: 'LocalHero',
-        isBot: false,
         x: 0, y: 0, z: 0,
         yaw: 0, pitch: 0,
         weapon: 'rifle',
@@ -1048,7 +1073,6 @@ describe('3. Player & Bot 3D Humanoid Rig, Hitboxes & Visibility Synchronization
       {
         id: 'remote_human',
         name: 'EnemyHuman',
-        isBot: false,
         color: 0xef4444,
         x: 10, y: 0, z: -12,
         vx: 2, vy: 0, vz: -1,
@@ -1061,9 +1085,8 @@ describe('3. Player & Bot 3D Humanoid Rig, Hitboxes & Visibility Synchronization
         alive: true,
       },
       {
-        id: 'bot_alpha',
-        name: 'BOT_Alpha',
-        isBot: true,
+        id: 'remote_two',
+        name: 'EnemyTwo',
         color: 0xf97316,
         x: -14, y: 0, z: -20,
         vx: 0, vy: 0, vz: 3,
@@ -1084,52 +1107,50 @@ describe('3. Player & Bot 3D Humanoid Rig, Hitboxes & Visibility Synchronization
     assert.equal(game.remotePlayers.size, 2);
 
     const rpHuman = game.remotePlayers.get('remote_human');
-    const rpBot = game.remotePlayers.get('bot_alpha');
-    assert.ok(rpHuman && rpBot);
-    assert.equal(rpHuman.isBot, false);
-    assert.equal(rpBot.isBot, true);
+    const rpTwo = game.remotePlayers.get('remote_two');
+    assert.ok(rpHuman && rpTwo);
     assert.equal(rpHuman.group.visible, true);
-    assert.equal(rpBot.group.visible, true);
+    assert.equal(rpTwo.group.visible, true);
     assert.equal(game.scene.children.includes(rpHuman.group), true);
-    assert.equal(game.scene.children.includes(rpBot.group), true);
+    assert.equal(game.scene.children.includes(rpTwo.group), true);
     assert.equal(rpHuman.currentWeapon, 'smg');
-    assert.equal(rpBot.currentWeapon, 'shotgun');
+    assert.equal(rpTwo.currentWeapon, 'shotgun');
 
     // Both alive remote entities must have their hitbox proxies in game.hitboxMeshes
     const hitboxOwnerIds = new Set(game.hitboxMeshes.map((m) => m.userData.playerId));
     assert.equal(hitboxOwnerIds.has('remote_human'), true);
-    assert.equal(hitboxOwnerIds.has('bot_alpha'), true);
+    assert.equal(hitboxOwnerIds.has('remote_two'), true);
 
-    // Bot dies (`alive: false`) and human switches weapon to 'sniper'
+    // Second remote player dies (`alive: false`) and human switches weapon to 'sniper'
     initialSnapshot[1].weapon = 'sniper';
     initialSnapshot[2].alive = false;
     initialSnapshot[2].hp = 0;
     game.syncPlayersState(initialSnapshot);
 
     assert.equal(rpHuman.currentWeapon, 'sniper', 'Remote player weapon mesh must update on weapon change');
-    assert.equal(rpBot.alive, false);
-    assert.equal(rpBot.group.visible, false, 'Dead bot 3D model must be hidden immediately');
-    const hitboxOwnersAfterBotDeath = new Set(game.hitboxMeshes.map((m) => m.userData.playerId));
+    assert.equal(rpTwo.alive, false);
+    assert.equal(rpTwo.group.visible, false, 'Dead remote player 3D model must be hidden immediately');
+    const hitboxOwnersAfterDeath = new Set(game.hitboxMeshes.map((m) => m.userData.playerId));
     assert.equal(
-      hitboxOwnersAfterBotDeath.has('bot_alpha'),
+      hitboxOwnersAfterDeath.has('remote_two'),
       false,
-      'Dead bot hitbox proxies must be removed from active raycast targets'
+      'Dead remote player hitbox proxies must be removed from active raycast targets'
     );
-    assert.equal(hitboxOwnersAfterBotDeath.has('remote_human'), true);
+    assert.equal(hitboxOwnersAfterDeath.has('remote_human'), true);
 
-    // Bot respawns at new spawn point (`alive: true`, `hp: 100`)
+    // Second remote player respawns at new spawn point (`alive: true`, `hp: 100`)
     initialSnapshot[2].alive = true;
     initialSnapshot[2].hp = 100;
     initialSnapshot[2].x = 24;
     initialSnapshot[2].z = 18;
     game.syncPlayersState(initialSnapshot);
 
-    assert.equal(rpBot.alive, true);
-    assert.equal(rpBot.group.visible, true, 'Respawned bot 3D model must become visible again');
-    assert.equal(rpBot.group.position.x, 24, 'Respawned bot position must snap to respawn point');
-    assert.equal(rpBot.group.position.z, 18);
+    assert.equal(rpTwo.alive, true);
+    assert.equal(rpTwo.group.visible, true, 'Respawned remote player 3D model must become visible again');
+    assert.equal(rpTwo.group.position.x, 24, 'Respawned remote player position must snap to respawn point');
+    assert.equal(rpTwo.group.position.z, 18);
     const hitboxOwnersAfterRespawn = new Set(game.hitboxMeshes.map((m) => m.userData.playerId));
-    assert.equal(hitboxOwnersAfterRespawn.has('bot_alpha'), true, 'Respawned bot hitboxes must be restored');
+    assert.equal(hitboxOwnersAfterRespawn.has('remote_two'), true, 'Respawned remote player hitboxes must be restored');
 
     // Remote human disconnects (omitted from snapshot) -> mesh disposed and removed from scene
     game.syncPlayersState([initialSnapshot[0], initialSnapshot[2]]);
@@ -1139,9 +1160,9 @@ describe('3. Player & Bot 3D Humanoid Rig, Hitboxes & Visibility Synchronization
 });
 
 // ============================================================================
-// 4. WEAPON SHOOTING, HIT DETECTION, BOT AI, KILL/RESPAWN, GRENADES & WIN
+// 4. WEAPON SHOOTING, HIT DETECTION, KILL/RESPAWN, GRENADES & WIN
 // ============================================================================
-describe('4. Weapon Shooting, Hit Detection, Bot AI, Kill/Respawn, Grenades & Match Win', () => {
+describe('4. Weapon Shooting, Hit Detection, Kill/Respawn, Grenades & Match Win', () => {
   it('validates all 11 weapons across 3 slots, ADS fire rate slowdown, and distance falloff curves', () => {
     assert.equal(WEAPON_ORDER.length, 11);
     assert.equal(PRIMARY_WEAPONS.length, 7);
@@ -1170,7 +1191,7 @@ describe('4. Weapon Shooting, Hit Detection, Bot AI, Kill/Respawn, Grenades & Ma
     const { rm } = createTestRoomManager();
     const { room, player: shooter } = rm.addHumanPlayer(
       { id: 'shooter' },
-      { name: 'Shooter', mode: 'private', botCount: 0, mapId: 'cyber_citadel', weapon: 'm4a1' }
+      { name: 'Shooter', mode: 'private', mapId: 'cyber_citadel', weapon: 'm4a1' }
     );
     const { player: target } = rm.addHumanPlayer(
       { id: 'target' },
@@ -1262,31 +1283,41 @@ describe('4. Weapon Shooting, Hit Detection, Bot AI, Kill/Respawn, Grenades & Ma
     assert.equal(target.hp, 100, 'Shot blocked by solid container obstacle must deal 0 damage');
   });
 
-  it('damages, kills, drops weapon from, and respawns a Bot via client 3D raycast (Game3D.attemptShoot) -> Server RoomManager', () => {
+  it('damages, kills, drops weapon from, and respawns a human target via client 3D raycast (Game3D.attemptShoot) -> Server RoomManager', () => {
     const { rm, io } = createTestRoomManager();
     const { room, player: human } = rm.addHumanPlayer(
       { id: 'human_1' },
-      { name: 'BotHunter', mode: 'private', botCount: 1, mapId: 'cyber_citadel', weapon: 'm4a1' }
+      { name: 'Hunter', mode: 'private', mapId: 'cyber_citadel', weapon: 'm4a1' }
     );
-    const bot = Array.from(room.players.values()).find((p) => p.isBot);
-    assert.ok(bot, 'Room should contain a bot');
+    const { player: victim } = rm.addHumanPlayer(
+      { id: 'victim' },
+      {
+        name: 'Victim',
+        roomCode: room.code,
+        mode: 'private',
+        weapon: 'scar',
+        loadout: { primary: 'scar', secondary: 'pistol', melee: 'knife' },
+      }
+    );
+    assert.ok(victim && victim.id === 'victim', 'Room should contain the second human');
+    assert.equal(room.players.size, 2);
 
     human.invulnerableUntil = 0;
-    bot.invulnerableUntil = 0;
-    bot.weapon = 'scar';
-    bot.loadout.primary = 'scar';
-    bot.ammo = 20;
-    bot.ammoByWeapon.scar = 20;
+    victim.invulnerableUntil = 0;
+    victim.weapon = 'scar';
+    victim.ammo = 20;
+    victim.ammoByWeapon.scar = 20;
 
-    // Position human at (0, 0, -16) looking North (-Z) at bot at (0, 0, -22) in open plaza
+    // Position human at (0, 0, -16) looking North (-Z) at victim at (0, 0, -22) in open plaza
     const now0 = Date.now();
     placeServerSide(human, 0, 0, -16);
     human.yaw = 0;
     human.pitch = 0;
     rm.resetPlayerMovement(human, now0);
-    placeServerSide(bot, 0, 0, -22);
-    bot.yaw = Math.PI;
-    recordPlayerSnapshot(bot, now0);
+    placeServerSide(victim, 0, 0, -22);
+    rm.resetPlayerMovement(victim, now0);
+    victim.yaw = Math.PI;
+    recordPlayerSnapshot(victim, now0);
 
     const localShots = [];
     const game = createTestGame3D({
@@ -1309,11 +1340,11 @@ describe('4. Weapon Shooting, Hit Detection, Bot AI, Kill/Respawn, Grenades & Ma
     });
     game.equipUntil = 0;
 
-    // Sync players into Game3D so bot's 3D humanoid rig & hitbox proxies are built in the scene
+    // Sync players into Game3D so victim's 3D humanoid rig & hitbox proxies are built in the scene
     game.syncPlayersState(rm.serializePlayers(room));
-    const rpBot = game.remotePlayers.get(bot.id);
-    assert.ok(rpBot);
-    rpBot.group.updateMatrixWorld(true);
+    const rpVictim = game.remotePlayers.get(victim.id);
+    assert.ok(rpVictim);
+    rpVictim.group.updateMatrixWorld(true);
 
     // Helper: advance fixed physics until the queued shot leaves in an input command, then deliver the batch to the server
     let simNow = now0;
@@ -1332,13 +1363,13 @@ describe('4. Weapon Shooting, Hit Detection, Bot AI, Kill/Respawn, Grenades & Ma
       assert.ok(fireCmd, 'inputBatch must contain a command with BTN.FIRE');
       simNow += 150;
       human.moveCredit = 1;
-      recordPlayerSnapshot(bot, simNow);
+      recordPlayerSnapshot(victim, simNow);
       rm.handleInputBatch(room, human, batch, simNow);
       rm.processPlayerInputs(room, human, simNow);
       return fireCmd;
     };
 
-    // 1. Aim at bot's head box (pitch = 0 from standing eye y = 1.62 hits head [1.47..1.95] at 6m) and fire M4A1
+    // 1. Aim at victim's head box (pitch = 0 from standing eye y = 1.62 hits head [1.47..1.95] at 6m) and fire M4A1
     game.onGround = true;
     game.isAiming = true;
     game.velocity.set(0, 0, 0);
@@ -1348,51 +1379,48 @@ describe('4. Weapon Shooting, Hit Detection, Bot AI, Kill/Respawn, Grenades & Ma
     const fireCmd1 = stepAndFlushFire(0);
     assert.equal(localShots.length, 1, 'Game3D.attemptShoot should trigger local shot feedback');
     assert.equal(fireCmd1.ss, 1);
-    assert.equal(bot.hp, 100 - Math.round(WEAPONS.m4a1.damage * WEAPONS.m4a1.headshotMult)); // 100 - 78 = 22 HP
-    assert.equal(bot.alive, true);
+    assert.equal(victim.hp, 100 - Math.round(WEAPONS.m4a1.damage * WEAPONS.m4a1.headshotMult)); // 100 - 78 = 22 HP
+    assert.equal(victim.alive, true);
 
-    // 2. Aim at bot's torso center (y = 1.21 at 6m from eye y = 1.62 => pitch ≈ -0.068) to finish off the bot
+    // 2. Aim at victim's torso center (y = 1.21 at 6m from eye y = 1.62 => pitch ≈ -0.068) to finish off the victim
     game.pitch = Math.atan2(1.21 - 1.62, 6);
     game.yaw = 0;
-    human.hp = 80; // Injure human to verify +25 HP Kill Adrenaline on bot kill
+    human.hp = 80; // Injure human to verify +25 HP Kill Adrenaline on victim kill
 
     const fireCmd2 = stepAndFlushFire(10);
     assert.equal(localShots.length, 2);
     assert.equal(fireCmd2.ss, 2);
-    assert.equal(bot.hp, 0, 'Second shot must reduce bot HP to 0');
-    assert.equal(bot.alive, false, 'Bot must be marked dead at 0 HP');
-    assert.equal(bot.deaths, 1, 'Bot death counter must increment');
-    assert.equal(human.kills, 1, 'Human kill counter must increment on bot kill');
-    assert.equal(human.hp, 100, 'Killing a bot must grant +25 HP Kill Adrenaline (capped at 100)');
-    assert.ok(bot.respawnAt > Date.now(), 'Dead bot must have a scheduled respawnAt timestamp');
+    assert.equal(victim.hp, 0, 'Second shot must reduce victim HP to 0');
+    assert.equal(victim.alive, false, 'Victim must be marked dead at 0 HP');
+    assert.equal(victim.deaths, 1, 'Victim death counter must increment');
+    assert.equal(human.kills, 1, 'Human kill counter must increment on victim kill');
+    assert.equal(human.hp, 100, 'Killing a victim must grant +25 HP Kill Adrenaline (capped at 100)');
+    assert.ok(victim.respawnAt > Date.now(), 'Dead victim must have a scheduled respawnAt timestamp');
 
-    // Bot must drop its primary weapon ('scar') at death location
+    // Victim must drop its primary weapon ('scar') at death location
     assert.equal(room.droppedWeapons.length, 1);
     assert.equal(room.droppedWeapons[0].weapon, 'scar');
 
-    const killEvt = io.roomEmitted.find((e) => e.event === 'killEvent' && e.payload.victimId === bot.id);
-    assert.ok(killEvt, 'Server must broadcast killEvent when bot is killed');
+    const killEvt = io.roomEmitted.find((e) => e.event === 'killEvent' && e.payload.victimId === victim.id);
+    assert.ok(killEvt, 'Server must broadcast killEvent when victim is killed');
 
-    // Sync dead bot state to Game3D -> bot 3D mesh becomes invisible & un-raycastable
+    // Sync dead victim state to Game3D -> victim 3D mesh becomes invisible & un-raycastable
     game.syncPlayersState(rm.serializePlayers(room));
-    assert.equal(rpBot.group.visible, false);
+    assert.equal(rpVictim.group.visible, false);
 
-    // Advance past bot's 3s respawn delay and run updateRoomBots -> bot respawns with full HP & spawn protection
-    const respawnNow = bot.respawnAt + 20;
-    updateRoomBots(room, 0.04, respawnNow, {
-      onRespawnPlayer: (b) => rm.respawnPlayer(room, b),
-      onBotShoot: () => {},
-    });
-    assert.equal(bot.alive, true, 'Bot must respawn after respawnAt delay');
-    assert.equal(bot.hp, MATCH_CONFIG.MAX_HP, 'Respawned bot must have 100 HP');
-    assert.ok(bot.invulnerableUntil > Date.now(), 'Respawned bot must receive spawn protection shield');
+    // Let the 3s respawn delay elapse and run a server tick -> the victim respawns with full HP & spawn protection
+    victim.respawnAt = Date.now() - 1;
+    rm.tick(0.04);
+    assert.equal(victim.alive, true, 'Victim must respawn after respawnAt delay');
+    assert.equal(victim.hp, MATCH_CONFIG.MAX_HP, 'Respawned victim must have 100 HP');
+    assert.ok(victim.invulnerableUntil > Date.now(), 'Respawned victim must receive spawn protection shield');
   });
 
   it('enforces 1.5s spawn protection shield and emits spawnProtectedHit', () => {
     const { rm, io } = createTestRoomManager();
     const { room, player: attacker } = rm.addHumanPlayer(
       { id: 's1' },
-      { name: 'Attacker', mode: 'private', botCount: 0 }
+      { name: 'Attacker', mode: 'private' }
     );
     const { player: defender } = rm.addHumanPlayer(
       { id: 's2' },
@@ -1423,7 +1451,7 @@ describe('4. Weapon Shooting, Hit Detection, Bot AI, Kill/Respawn, Grenades & Ma
     const { rm, io } = createTestRoomManager();
     const { room, player: killer } = rm.addHumanPlayer(
       { id: 'killer' },
-      { name: 'Killer', mode: 'private', botCount: 0 }
+      { name: 'Killer', mode: 'private' }
     );
     const { player: victim } = rm.addHumanPlayer(
       { id: 'victim' },
@@ -1496,7 +1524,7 @@ describe('4. Weapon Shooting, Hit Detection, Bot AI, Kill/Respawn, Grenades & Ma
     const { rm, io } = createTestRoomManager();
     const { room, player: grenadier } = rm.addHumanPlayer(
       { id: 'grenadier' },
-      { name: 'Grenadier', mode: 'private', botCount: 0 }
+      { name: 'Grenadier', mode: 'private' }
     );
     const { player: target } = rm.addHumanPlayer(
       { id: 'blast_target' },
@@ -1533,61 +1561,11 @@ describe('4. Weapon Shooting, Hit Detection, Bot AI, Kill/Respawn, Grenades & Ma
     assert.ok(expEvt, 'Expected grenadeExploded event');
   });
 
-  it('runs bot AI targeting, movement, obstacle collision, shooting, and reloading', () => {
-    const { rm } = createTestRoomManager();
-    const { room, player: human } = rm.addHumanPlayer(
-      { id: 'human_target' },
-      { name: 'Human', mode: 'private', botCount: 1, mapId: 'cyber_citadel' }
-    );
-    const bot = Array.from(room.players.values()).find((p) => p.isBot);
-    assert.ok(bot);
-
-    human.invulnerableUntil = 0;
-    bot.invulnerableUntil = 0;
-
-    // Place bot and human in clear view of each other in the northern plaza
-    bot.x = 0; bot.y = 0; bot.z = -16;
-    human.x = 0; human.y = 0; human.z = -26;
-    bot.weapon = 'rifle';
-    bot.ammo = 30;
-    bot.lastShotAt = 0;
-    bot.nextDecisionAt = 0;
-
-    let botFired = false;
-    const now = Date.now();
-    updateRoomBots(room, 0.05, now, {
-      onRespawnPlayer: (b) => rm.respawnPlayer(room, b),
-      onBotShoot: (b, payload, tickNow) => {
-        botFired = true;
-        rm.handleShoot(room, b, payload, tickNow);
-      },
-    });
-
-    assert.equal(botFired, true, 'Bot should acquire target and fire when LOS is clear');
-
-    // Verify bot auto-reloads when magazine hits 0 (move human out of LOS so bot doesn't immediately fire on reload completion)
-    human.alive = false;
-    bot.ammo = 0;
-    bot.reserveAmmo = 60;
-    bot.reloadingUntil = 0;
-    updateRoomBots(room, 0.05, now + 1000, {
-      onRespawnPlayer: () => {},
-      onBotShoot: () => {},
-    });
-    assert.ok(bot.reloadingUntil > now + 1000, 'Bot should start reload timer when ammo is 0');
-    updateRoomBots(room, 0.05, bot.reloadingUntil + 10, {
-      onRespawnPlayer: () => {},
-      onBotShoot: () => {},
-    });
-    assert.equal(bot.ammo, WEAPONS[bot.weapon].magSize, 'Bot should complete reload after reloadMs');
-    assert.equal(bot.reserveAmmo, 60 - WEAPONS[bot.weapon].magSize, 'Bot reload must deduct from reserveAmmo');
-  });
-
   it('handles combat edge cases: self-damage prevention, dead shooter rejection, shotgun shell reload interrupt, and expired drops', () => {
     const { rm } = createTestRoomManager();
     const { room, player: p1 } = rm.addHumanPlayer(
       { id: 'edge_1' },
-      { name: 'Edge1', mode: 'private', botCount: 0 }
+      { name: 'Edge1', mode: 'private' }
     );
     const { player: p2 } = rm.addHumanPlayer(
       { id: 'edge_2' },
@@ -1658,7 +1636,7 @@ describe('4. Weapon Shooting, Hit Detection, Bot AI, Kill/Respawn, Grenades & Ma
     const { rm, io } = createTestRoomManager();
     const { room, player: champ } = rm.addHumanPlayer(
       { id: 'champ' },
-      { name: 'Champ', mode: 'private', botCount: 0 }
+      { name: 'Champ', mode: 'private' }
     );
     const { player: fodder } = rm.addHumanPlayer(
       { id: 'fodder' },
@@ -1697,14 +1675,14 @@ describe('4. Weapon Shooting, Hit Detection, Bot AI, Kill/Respawn, Grenades & Ma
 });
 
 // ============================================================================
-// 5. HEALTH PACK PICKUP, HEALING CAP, BOT SEEKING & CLIENT 3D SYNC
+// 5. HEALTH PACK PICKUP, HEALING CAP & CLIENT 3D SYNC
 // ============================================================================
-describe('5. Health Pack Pickups, Healing Cap, Elevation Bounds, Bot Seeking & Cooldown Respawn', () => {
+describe('5. Health Pack Pickups, Healing Cap, Elevation Bounds & Cooldown Respawn', () => {
   it('heals damaged players via handlePlayerMove, enforces horizontal/vertical bounds, and respawns after 15s', () => {
     const { rm, io } = createTestRoomManager();
     const { room, player } = rm.addHumanPlayer(
       { id: 'medic' },
-      { name: 'Medic', mode: 'private', botCount: 0, mapId: 'cyber_citadel' }
+      { name: 'Medic', mode: 'private', mapId: 'cyber_citadel' }
     );
     const pack = room.pickups[0];
 
@@ -1760,33 +1738,28 @@ describe('5. Health Pack Pickups, Healing Cap, Elevation Bounds, Bot Seeking & C
     assert.ok(pickupOnEvt, 'Expected pickupState(active=true) event on respawn');
   });
 
-  it('allows injured bots (hp < 65) to seek and consume active health packs and syncs 3D pickup meshes in Game3D', () => {
+  it('heals an injured player standing next to an active health pack in the server tick path and syncs 3D pickup meshes in Game3D', () => {
     const { rm } = createTestRoomManager();
     const { room, player: human } = rm.addHumanPlayer(
       { id: 'h_obs' },
-      { name: 'Observer', mode: 'private', botCount: 1, mapId: 'cyber_citadel' }
+      { name: 'Observer', mode: 'private', mapId: 'cyber_citadel' }
     );
-    human.alive = false; // Hide human so bot focuses on navigation/healing
-    const bot = Array.from(room.players.values()).find((p) => p.isBot);
+    human.alive = false; // the first human is dead and far away: it must not take the pack
+    const { player: injured } = rm.addHumanPlayer(
+      { id: 'h_injured' },
+      { name: 'Injured', roomCode: room.code, mode: 'private' }
+    );
     const pack = room.pickups[0];
 
-    // Place injured bot (hp = 40) 1.2m away from active health pack
-    bot.hp = 40;
-    bot.x = pack.x + 1.2;
-    bot.y = pack.y || 0;
-    bot.z = pack.z;
-    bot.targetId = null;
+    // Place the injured player (hp = 40) 1.2m away from the active health pack
+    injured.hp = 40;
+    placeServerSide(injured, pack.x + 1.2, pack.y || 0, pack.z);
 
-    // Step bot AI & room health pack check
     const now = Date.now();
-    updateRoomBots(room, 0.1, now, {
-      onRespawnPlayer: () => {},
-      onBotShoot: () => {},
-    });
     rm.updateHealthPacks(room, now);
 
-    assert.equal(bot.hp, 90, 'Injured bot should consume nearby health pack and heal +50 HP (40 -> 90)');
-    assert.equal(pack.active, false, 'Health pack consumed by bot should enter cooldown');
+    assert.equal(injured.hp, 90, 'Injured player should consume the nearby health pack and heal +50 HP (40 -> 90)');
+    assert.equal(pack.active, false, 'Health pack consumed by the player should enter cooldown');
 
     // Verify client-side Game3D 3D pickup mesh creation and visibility toggling
     const game = createTestGame3D();
@@ -1835,7 +1808,7 @@ describe('6. Terrain/Map Collision, AABB Raycasting, Entity Physics & 3D Renderi
     }
   });
 
-  it('computes rayIntersectsAABB, hasLineOfSight, and bot resolveEntityPhysics (step-up & wall pushout)', () => {
+  it('computes rayIntersectsAABB, hasLineOfSight, and shared collideCapsuleVsBoxes (step-up & wall pushout)', () => {
     const box = { minX: -2, maxX: 2, minY: 0, maxY: 4, minZ: -2, maxZ: 2 };
 
     // Direct hit from z = 10 towards -Z (signature: origin, dir, maxDist, box)
@@ -1855,14 +1828,18 @@ describe('6. Terrain/Map Collision, AABB Raycasting, Entity Physics & 3D Renderi
     assert.equal(hasLineOfSight({ x: 0, y: 1, z: -10 }, { x: 0, y: 1, z: 10 }, customObs), false);
     assert.equal(hasLineOfSight({ x: 0, y: 5, z: -10 }, { x: 0, y: 5, z: 10 }, customObs), true);
 
-    // Bot entity physics step-up onto a low step (height 0.4m <= 0.55m step height)
-    const lowStepMap = {
-      arenaHalfSize: 60,
-      obstacles: [{ x: 0, y: 0.2, z: 0, w: 4, h: 0.4, d: 4 }],
-    };
-    const entity = { x: 0, y: 0, z: 0 };
-    resolveEntityPhysics(entity, 0.45, lowStepMap);
-    assert.equal(entity.y, 0.4, 'Entity should automatically step up onto a 0.4m ledge');
+    // Shared capsule collision (used by player movement + grenades): a low step (0.4m <= 0.52m step-up) is walkable floor
+    const lowStep = [{ x: 0, y: 0.2, z: 0, w: 4, h: 0.4, d: 4 }];
+    const stepper = { x: 0, y: 0, z: 0, vy: 0 };
+    const floorTop = collideCapsuleVsBoxes(stepper, lowStep, 0.4, 1.8);
+    assert.equal(floorTop, 0.4, 'A 0.4m ledge must be reported as walkable floor (step-up)');
+    assert.equal(stepper.x, 0, 'Walkable floor must not push the body out sideways');
+
+    // A tall wall pushes the body out horizontally instead
+    const wall = [{ x: 0, y: 1.5, z: 0, w: 4, h: 3, d: 4 }];
+    const blocked = { x: 1.9, y: 0, z: 0, vy: 0 };
+    collideCapsuleVsBoxes(blocked, wall, 0.4, 1.8);
+    assert.ok(blocked.x >= 2.4 - 1e-6, `Body must be pushed out of a 3m wall (x=${blocked.x})`);
   });
 
   it('enforces anti-z-fighting polygonOffset, InstancedMesh frustumCulled=false, IBL envMap, and weapon ADS culling across all 4 maps', () => {
@@ -2081,7 +2058,6 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
       'player-name',
       'lobby-weapon-grid',
       'lobby-map-grid',
-      'lobby-bot-count',
       'operator-color-swatches',
       'btn-showcase-crouch',
       'btn-showcase-walk',
@@ -2142,6 +2118,11 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
         `public/index.html is missing required UI element id="${id}"`
       );
     }
+
+    // Bots were removed from the game: no bot selectors / bot UI may remain in the page or the stylesheet
+    assert.ok(!html.includes('lobby-bot-count') && !html.includes('pause-bot-select'), 'bot selectors must be gone');
+    assert.ok(!/Bot AI/i.test(html) && !html.includes('🤖'), 'no bot text in the HTML');
+    assert.ok(!css.includes('bot-setting-row'), 'bot setting row CSS must be gone');
 
     // Verify cleaned-up Vietnamese modal headers & removal of old verbose English/Vietnamese bloat headers
     assert.ok(html.includes('KHO VŨ KHÍ'), 'Loadout modal should display concise KHO VŨ KHÍ header');

@@ -129,7 +129,7 @@ describe('socketGuard: rate limiter', () => {
     assert.equal(RATE_LIMITS.throwGrenade.rate, 4);
     assert.equal(RATE_LIMITS.pickupWeapon.rate, 5);
     assert.equal(RATE_LIMITS.updateLoadout.rate, 2);
-    assert.equal(RATE_LIMITS.setBots.rate, 1);
+    assert.equal(RATE_LIMITS.setBots, undefined, 'the bot-count event was removed together with the bots');
     assert.equal(RATE_LIMITS.changeMap.rate, 1);
     assert.equal(RATE_LIMITS.joinRoom.rate, 2);
     assert.equal(RATE_LIMITS.pingCheck.rate, 5);
@@ -163,7 +163,7 @@ describe('socketGuard: rate limiter', () => {
 
   it('budgets are independent per event', () => {
     const limiter = createRateLimiter({ now: fakeClock() });
-    for (let i = 0; i < 50; i += 1) limiter.allow('setBots');
+    for (let i = 0; i < 50; i += 1) limiter.allow('pickupWeapon');
     assert.equal(limiter.allow('inputBatch'), true);
     assert.equal(limiter.allow('changeMap'), true);
   });
@@ -340,7 +340,7 @@ describe('socketGuard: live server hardening (real server/index.js)', () => {
   it('survives malformed payloads on every event (server stays up)', async () => {
     const { sid } = await openPolling();
     await connectNamespace(sid);
-    const events = ['joinRoom', 'inputBatch', 'shoot', 'throwGrenade', 'reload', 'pickupWeapon', 'updateLoadout', 'setBots', 'changeMap'];
+    const events = ['joinRoom', 'inputBatch', 'shoot', 'throwGrenade', 'reload', 'pickupWeapon', 'updateLoadout', 'changeMap', 'setBots' /* legacy event of old clients: ignored */];
     const bad = ['null', '"str"', '[1,2]', '12345'];
     // Join a real room first so the handler bodies (not just the early returns) are reachable.
     const packets = ['42["joinRoom",{"name":"tester"}]'];

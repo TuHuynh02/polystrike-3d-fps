@@ -1,4 +1,4 @@
-// Snapshot interpolation for REMOTE entities (humans and bots). Pure module: no DOM, no Three.js.
+// Snapshot interpolation for REMOTE entities (other players). Pure module: no DOM, no Three.js.
 //
 //   ServerClock          maps the local clock to (estimated) server time from the `t` stamped on every stateUpdate
 //   SnapshotBuffer       the last ~1 s of server snapshots of ONE entity + sampling (interpolate / snap / extrapolate)

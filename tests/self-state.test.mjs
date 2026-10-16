@@ -52,13 +52,13 @@ function createTwoPlayerRoom(roomCode = 'SELF01') {
   const { rm, emitted } = createServerHarness();
   const joinA = rm.addHumanPlayer(
     { id: 'p1' },
-    { name: 'Alice', roomCode, mode: 'private', botCount: 0, mapId: MAP_ID, weapon: 'rifle' }
+    { name: 'Alice', roomCode, mode: 'private', mapId: MAP_ID, weapon: 'rifle' }
   );
   assert.ok(!joinA.error, `joinA failed: ${joinA.error}`);
 
   const joinB = rm.addHumanPlayer(
     { id: 'p2' },
-    { name: 'Bob', roomCode, mode: 'private', botCount: 0, mapId: MAP_ID, weapon: 'rifle' }
+    { name: 'Bob', roomCode, mode: 'private', mapId: MAP_ID, weapon: 'rifle' }
   );
   assert.ok(!joinB.error, `joinB failed: ${joinB.error}`);
 
@@ -343,7 +343,6 @@ describe('Step 3 (T1) — Owner-only selfState & shotRejected', () => {
           name: 'Buckshot',
           roomCode: 'SHG001',
           mode: 'private',
-          botCount: 0,
           mapId: MAP_ID,
           weapon: 'shotgun',
           loadout: { primary: 'shotgun', secondary: 'pistol', melee: 'knife' }

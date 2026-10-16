@@ -9,7 +9,6 @@ export const RATE_LIMITS = Object.freeze({
   throwGrenade: { rate: 4, burst: 6 },
   pickupWeapon: { rate: 5, burst: 8 },
   updateLoadout: { rate: 2, burst: 5 },
-  setBots: { rate: 1, burst: 3 },
   changeMap: { rate: 1, burst: 3 },
   joinRoom: { rate: 2, burst: 4 },
   pingCheck: { rate: 5, burst: 10 },

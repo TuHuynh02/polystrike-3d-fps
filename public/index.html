@@ -8,10 +8,26 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,500;0,600;0,700;1,700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700;800&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="./css/style.css" />
+  <!-- Import map: `three` -> the SAME module URL game code imports as ../vendor/three/three.module.js (one shared instance,
+       so instanceof checks keep working); three/addons/ -> examples/jsm (GLTFLoader, lazy-loaded by js/assets.js). -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three/three.module.js",
+        "three/addons/": "./vendor/three-examples/"
+      }
+    }
+  </script>
 </head>
 <body>
   <!-- 3D WebGL Canvas Container -->
   <div id="canvas-container"></div>
+
+  <!-- Asset loading progress (glTF models + PBR textures); shown only when loading takes a noticeable time -->
+  <div id="asset-loading" class="asset-loading hidden" role="status" aria-live="polite">
+    <span id="asset-loading-text">Đang tải đồ họa… 0/0</span>
+    <div class="asset-loading-bar"><i id="asset-loading-fill"></i></div>
+  </div>
 
   <!-- Toast Notification -->
   <div id="toast" class="toast hidden">Đã sao chép link phòng vào Clipboard!</div>
@@ -170,16 +186,14 @@
             </button>
           </div>
 
-          <div class="bot-setting-row">
-            <div class="field-label" style="margin-bottom:0;">Bot AI</div>
-            <select id="lobby-bot-count" class="select-input">
-              <option value="0">0 Bot</option>
-              <option value="2">2 Bot</option>
-              <option value="4" selected>4 Bot</option>
-              <option value="6">6 Bot</option>
-              <option value="8">8 Bot</option>
-            </select>
-          </div>
+          <label class="field-label" for="lobby-quality-select">Đồ họa</label>
+          <select id="lobby-quality-select" class="select-input quality-select" aria-describedby="lobby-quality-hint">
+            <option value="auto">Tự động</option>
+            <option value="low">Thấp (máy văn phòng)</option>
+            <option value="medium">Vừa</option>
+            <option value="high">Cao</option>
+          </select>
+          <p id="lobby-quality-hint" class="quality-hint"></p>
         </section>
 
         <!-- Center Stage: Live 3D Humanoid Operator Showcase -->
@@ -532,17 +546,6 @@
         </div>
 
         <div class="setting-item">
-          <label for="pause-bot-select">Bot AI</label>
-          <select id="pause-bot-select" class="select-input">
-            <option value="0">0 Bot</option>
-            <option value="2">2 Bot</option>
-            <option value="4">4 Bot</option>
-            <option value="6">6 Bot</option>
-            <option value="8">8 Bot</option>
-          </select>
-        </div>
-
-        <div class="setting-item">
           <label for="sens-slider">Độ nhạy chuột: <span id="sens-value">1.0</span></label>
           <input type="range" id="sens-slider" min="0.3" max="2.5" step="0.1" value="1.0" />
         </div>
@@ -551,6 +554,17 @@
           <label for="sound-checkbox">Âm thanh 3D</label>
           <input type="checkbox" id="sound-checkbox" checked />
         </div>
+
+        <div class="setting-item">
+          <label for="pause-quality-select">Đồ họa</label>
+          <select id="pause-quality-select" class="select-input quality-select" aria-describedby="pause-quality-hint">
+            <option value="auto">Tự động</option>
+            <option value="low">Thấp</option>
+            <option value="medium">Vừa</option>
+            <option value="high">Cao</option>
+          </select>
+        </div>
+        <p id="pause-quality-hint" class="quality-hint"></p>
       </div>
 
       <div class="pause-actions">
@@ -575,7 +589,6 @@
           <tr>
             <th>#</th>
             <th>TÊN</th>
-            <th>LOẠI</th>
             <th>HẠ</th>
             <th>CHẾT</th>
             <th>K/D</th>

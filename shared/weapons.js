@@ -610,7 +610,6 @@ export const DEFAULT_LOADOUT = {
   secondary: 'pistol',
   melee: 'knife'
 };
-export const BOT_WEAPON_POOL = ['rifle', 'm4a1', 'scar', 'smg', 'shotgun', 'sniper', 'lmg'];
 export const WEAPON_ORDER = [
   'rifle',
   'm4a1',

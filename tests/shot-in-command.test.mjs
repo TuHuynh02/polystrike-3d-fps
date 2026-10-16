@@ -68,7 +68,7 @@ function createServer() {
 function join(rm, id, roomCode = 'SHOT01', extra = {}) {
   const res = rm.addHumanPlayer(
     { id },
-    { name: id, roomCode, mode: 'private', botCount: 0, mapId: MAP_ID, weapon: 'rifle', ...extra }
+    { name: id, roomCode, mode: 'private', mapId: MAP_ID, weapon: 'rifle', ...extra }
   );
   assert.ok(!res.error, `join failed: ${res.error}`);
   res.player.invulnerableUntil = 0;
@@ -769,7 +769,7 @@ describe('(k) & (l) live server: raw `shoot` is ignored and `spreadSeed` is owne
     const a = await connectClient(port);
     const b = await connectClient(port);
     try {
-      a.emit('joinRoom', { name: 'LiveA', mode: 'private', botCount: 0, mapId: MAP_ID });
+      a.emit('joinRoom', { name: 'LiveA', mode: 'private', mapId: MAP_ID });
       const joinedA = await a.waitFor('roomJoined');
       assert.ok(Number.isInteger(joinedA.player.spreadSeed), 'owner receives spreadSeed in roomJoined.player');
       for (const pub of joinedA.players) {
@@ -777,7 +777,7 @@ describe('(k) & (l) live server: raw `shoot` is ignored and `spreadSeed` is owne
       }
 
       const playerJoinedP = a.waitFor('playerJoined');
-      b.emit('joinRoom', { name: 'LiveB', roomCode: joinedA.roomCode, mode: 'private', botCount: 0, mapId: MAP_ID });
+      b.emit('joinRoom', { name: 'LiveB', roomCode: joinedA.roomCode, mode: 'private', mapId: MAP_ID });
       const joinedB = await b.waitFor('roomJoined');
       const pj = await playerJoinedP;
       assert.equal(pj.spreadSeed, undefined, 'playerJoined broadcast must not expose spreadSeed');

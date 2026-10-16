@@ -1,4 +1,4 @@
-// Shared 3D Arena Map Definitions (Obstacles, Health Packs, Spawn Points, Bot Waypoints)
+// Shared 3D Arena Map Definitions (Obstacles, Health Packs, Spawn Points)
 
 function createStairs(startX, startZ, stepW, stepD, dirX, dirZ, steps = 6, stepH = 0.4, color = 0x475569) {
   const list = [];
@@ -452,23 +452,6 @@ export const MAPS = {
       { x: -50, y: 0.1, z: 26, yaw: -Math.PI * 0.5 },
       { x: 50, y: 0.1, z: 26, yaw: Math.PI * 0.5 }
     ],
-    botWaypoints: [
-      { x: 0, y: 2.4, z: 4 },
-      { x: 0, y: 0, z: -29 },
-      { x: 0, y: 0, z: 29 },
-      { x: -29, y: 0, z: 0 },
-      { x: 29, y: 0, z: 0 },
-      { x: -18, y: 0, z: -20 },
-      { x: 18, y: 0, z: -20 },
-      { x: -18, y: 0, z: 20 },
-      { x: 18, y: 0, z: 20 },
-      { x: -32, y: 0, z: -15 },
-      { x: 32, y: 0, z: 15 },
-      { x: -42, y: 2.0, z: -40 },
-      { x: 42, y: 2.0, z: 40 },
-      { x: -26, y: 0, z: 34 },
-      { x: 26, y: 0, z: -34 }
-    ]
   },
 
   cargo_dock: {
@@ -520,21 +503,6 @@ export const MAPS = {
       { x: -54, y: 0.1, z: 30, yaw: -Math.PI * 0.5 },
       { x: 54, y: 0.1, z: 30, yaw: Math.PI * 0.5 }
     ],
-    botWaypoints: [
-      { x: 0, y: 2.4, z: 0 },
-      { x: 0, y: 0, z: -28 },
-      { x: 0, y: 0, z: 28 },
-      { x: -28, y: 0, z: 0 },
-      { x: 28, y: 0, z: 0 },
-      { x: -10, y: 0, z: -24 },
-      { x: 10, y: 0, z: -24 },
-      { x: -10, y: 0, z: 24 },
-      { x: 10, y: 0, z: 24 },
-      { x: -36, y: 0, z: -22 },
-      { x: 36, y: 0, z: 22 },
-      { x: -38, y: 2.0, z: 4 },
-      { x: 38, y: 2.0, z: -4 }
-    ]
   },
 
   desert_outpost: {
@@ -586,21 +554,6 @@ export const MAPS = {
       { x: -52, y: 0.1, z: 24, yaw: -Math.PI * 0.5 },
       { x: 52, y: 0.1, z: 24, yaw: Math.PI * 0.5 }
     ],
-    botWaypoints: [
-      { x: 0, y: 2.4, z: 4 },
-      { x: 0, y: 0, z: -20 },
-      { x: 0, y: 0, z: 20 },
-      { x: -24, y: 0, z: 0 },
-      { x: 24, y: 0, z: 0 },
-      { x: -16, y: 0, z: -28 },
-      { x: 16, y: 0, z: -28 },
-      { x: -16, y: 0, z: 28 },
-      { x: 16, y: 0, z: 28 },
-      { x: -36, y: 2.4, z: -34 },
-      { x: 36, y: 2.4, z: 34 },
-      { x: -38, y: 0, z: 0 },
-      { x: 38, y: 0, z: 0 }
-    ]
   },
 
   neon_lab: {
@@ -652,21 +605,6 @@ export const MAPS = {
       { x: -52, y: 0.1, z: 30, yaw: -Math.PI * 0.5 },
       { x: 52, y: 0.1, z: 30, yaw: Math.PI * 0.5 }
     ],
-    botWaypoints: [
-      { x: 0, y: 2.4, z: 3 },
-      { x: 0, y: 0, z: -22 },
-      { x: 0, y: 0, z: 22 },
-      { x: -22, y: 0, z: 0 },
-      { x: 22, y: 0, z: 0 },
-      { x: -12, y: 0, z: -32 },
-      { x: 12, y: 0, z: -32 },
-      { x: -12, y: 0, z: 32 },
-      { x: 12, y: 0, z: 32 },
-      { x: 0, y: 2.0, z: -40 },
-      { x: 0, y: 2.0, z: 40 },
-      { x: -32, y: 0, z: -20 },
-      { x: 32, y: 0, z: 20 }
-    ]
   }
 };
 
@@ -701,6 +639,5 @@ export function getMapConfig(mapId) {
 // Default exports for backward compatibility
 export const HEALTH_PACK_SPAWNS = MAPS[DEFAULT_MAP_ID].healthPacks;
 export const SPAWN_POINTS = MAPS[DEFAULT_MAP_ID].spawnPoints;
-export const BOT_WAYPOINTS = MAPS[DEFAULT_MAP_ID].botWaypoints;
 export const MAP_OBSTACLES = MAPS[DEFAULT_MAP_ID].obstacles;
 

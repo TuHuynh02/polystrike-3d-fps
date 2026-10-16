@@ -1,6 +1,6 @@
 // Tactical Top-Left Mini Map / Radar (#hud-minimap)
 // Renders static map obstacles (cached on offscreen canvas), active health packs,
-// dropped weapons, enemy/bot positions, and the local player's position + FOV cone.
+// dropped weapons, enemy positions, and the local player's position + FOV cone.
 
 import { DEFAULT_MAP_ID, getMapConfig } from '../shared/constants.js';
 

@@ -23,6 +23,26 @@ import {
 } from './humanoidRig.js';
 import { TacticalMinimap } from './minimap.js';
 import { sfx } from './audio.js';
+import {
+  PerfOverlay,
+  QUALITY,
+  applyMetalnessCap,
+  detectInitialTier,
+  isPerfOverlayRequested,
+  loadQualityChoice,
+  resolveTier,
+  saveQualityChoice
+} from './quality.js';
+import { getAssetManager } from './assets.js';
+import { applyPbrToSlots, revertPbrSlots, surfaceSetsForMap } from './surfaceMaterials.js';
+import { CRATE_MODEL_NAMES } from './arenaProps.js';
+import { applyWeaponAssetOverride, isWeaponOverrideEnabled, measureWeaponGroup } from './weaponAssetOverrides.js';
+
+function shadowTypeFor(kind) {
+  if (kind === 'pcfsoft') return THREE.PCFSoftShadowMap;
+  if (kind === 'pcf') return THREE.PCFShadowMap;
+  return THREE.BasicShadowMap;
+}
 
 export class Game3D {
   constructor(container, callbacks) {
@@ -30,6 +50,19 @@ export class Game3D {
     this.callbacks = callbacks;
     this.sfx = callbacks?.sfx || sfx;
     this._audioListenerState = { x: 0, y: 0, z: 0, yaw: 0 };
+
+    // Graphics quality tier (Thấp / Vừa / Cao, see quality.js): stored choice, else auto-detected from the GPU string
+    this.qualityChoice = callbacks?.qualityChoice || loadQualityChoice();
+    this.detectedTier = callbacks?.detectedTier || detectInitialTier();
+    this.tier = resolveTier(this.qualityChoice, this.detectedTier);
+    this.quality = QUALITY[this.tier];
+    // Real glTF/PBR texture loading only happens when served over http(s) (never in the headless Node tests)
+    this.assetsEnabled =
+      callbacks?.enableAssets ?? /^https?:$/.test(String(globalThis.window?.location?.protocol || ''));
+    this.assets = callbacks?.assets || getAssetManager();
+    this._pbrToken = 0;
+    this.pbrSlots = [];
+    this.propBatchers = [];
 
     // Three.js core scene & fog
     this.scene = new THREE.Scene();
@@ -45,16 +78,21 @@ export class Game3D {
     this.scene.add(this.camera);
 
     this.renderer = new THREE.WebGLRenderer({
-      antialias: window.devicePixelRatio <= 1.5,
+      antialias: Boolean(this.quality.antialias) && window.devicePixelRatio <= 1.5,
       powerPreference: 'high-performance'
     });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.maxPixelRatio = Math.min(window.devicePixelRatio || 1, 1.35);
+    this.maxPixelRatio = Math.min(window.devicePixelRatio || 1, this.quality.maxPixelRatio);
     this.currentPixelRatio = this.maxPixelRatio;
     this.renderer.setPixelRatio(this.currentPixelRatio);
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.enabled = this.quality.shadowMapSize > 0;
+    this.renderer.shadowMap.type = shadowTypeFor(this.quality.shadowType);
     this.renderer.shadowMap.autoUpdate = false;
+    this.camera.far = this.quality.cameraFar;
+    this.camera.updateProjectionMatrix();
+    this.assets.setMaxAnisotropy?.(this.renderer.capabilities?.getMaxAnisotropy?.() || 1);
+    this.perfOverlay = isPerfOverlayRequested() ? new PerfOverlay() : null;
+    if (this.perfOverlay) globalThis.__game3d = this; // ?perf=1 only: handle for console measurements
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.18;
     this.container.appendChild(this.renderer.domElement);
@@ -139,7 +177,7 @@ export class Game3D {
     this.activeEffects = [];        // Tracers, spark bursts, explosions, floating damage numbers
     this.activeShells = [];         // Ejected 3D brass shell casings
     this.bulletDecals = [];         // Pooled ring buffer of surface bullet holes (max 36)
-    this.maxBulletDecals = 36;
+    this.maxBulletDecals = this.quality.maxBulletDecals;
     this.citadelRings = [];
     this.ambientParticles = null;
 
@@ -315,9 +353,9 @@ export class Game3D {
     // Primary warm directional sunlight with static baked shadow map covering the arena
     this.dirLight = new THREE.DirectionalLight(0xfff1dc, 1.68);
     this.dirLight.position.set(56, 86, 46);
-    this.dirLight.castShadow = true;
-    this.dirLight.shadow.mapSize.width = 2048;
-    this.dirLight.shadow.mapSize.height = 2048;
+    this.dirLight.castShadow = this.quality.shadowMapSize > 0;
+    this.dirLight.shadow.mapSize.width = this.quality.shadowMapSize || 1;
+    this.dirLight.shadow.mapSize.height = this.quality.shadowMapSize || 1;
     this.dirLight.shadow.camera.near = 5;
     this.dirLight.shadow.camera.far = 230;
     const d = 68;
@@ -384,6 +422,10 @@ export class Game3D {
     }
     this.arenaTextures.clear();
 
+    this._pbrToken++;
+    this.pbrSlots = [];
+    this.propBatchers = [];
+
     this.clearPickups();
     this.clearGrenades();
   }
@@ -409,6 +451,7 @@ export class Game3D {
     this.arenaHalfSize = mapCfg.arenaHalfSize || MATCH_CONFIG.ARENA_HALF_SIZE;
 
     this.disposeMapResources();
+    this.needsMapRebuild = false;
 
     const theme = mapCfg.theme || {};
     const isDesert = theme.floorBase === '#27170c';
@@ -441,6 +484,102 @@ export class Game3D {
     this.rebuildHitboxList();
     this.minimap?.setMap(mapCfg);
     this.renderer.shadowMap.needsUpdate = true;
+    if (this.assetsEnabled) this.upgradeArenaMaterials();
+  }
+
+  /** Loads (cached) Poly Haven maps for the current map and applies them in place; procedural materials are the fallback. */
+  async upgradeArenaMaterials() {
+    const token = ++this._pbrToken;
+    const result = await applyPbrToSlots(this, this.assets, this.quality, () => token !== this._pbrToken);
+    if (token === this._pbrToken) this.callbacks?.onArenaMaterialsUpgraded?.(result);
+    return result;
+  }
+
+  /** Preloads glTF props + the texture sets of the current map; rebuilds the idle lobby map once props are ready. */
+  async preloadAssets(onProgress = this.callbacks?.onAssetProgress) {
+    if (!this.assetsEnabled) return 0;
+    const failures = await this.assets.preload({
+      models: this.quality.glbProps ? CRATE_MODEL_NAMES.slice(0, 1) : [],
+      textureSets: surfaceSetsForMap(this.currentMapId),
+      tier: this.quality,
+      onProgress
+    });
+    const havePropModel = this.quality.glbProps && this.assets.loadedModels.has('crate-wide');
+    if (havePropModel && !this.inMatch) this.loadMap(this.currentMapId);
+    else this.upgradeArenaMaterials();
+    return failures;
+  }
+
+  /**
+   * Applies a quality choice ('auto' | 'low' | 'medium' | 'high'). Renderer settings, shadows, camera far, decal limits and
+   * PBR maps update immediately; geometry detail / glTF props / env-map need a map rebuild (done right away in the lobby,
+   * otherwise at the next map load). MSAA (antialias) only changes when the page is reloaded.
+   */
+  applyQuality(choice = 'auto', { persist = true } = {}) {
+    this.qualityChoice = choice;
+    if (persist) saveQualityChoice(choice);
+    const prevTier = this.tier;
+    this.tier = resolveTier(choice, this.detectedTier);
+    this.quality = QUALITY[this.tier];
+    const q = this.quality;
+
+    this.maxPixelRatio = Math.min(window.devicePixelRatio || 1, q.maxPixelRatio);
+    this.currentPixelRatio = this.maxPixelRatio;
+    this.renderer.setPixelRatio(this.currentPixelRatio);
+    this.lowFpsStreak = 0;
+
+    const shadowsOn = q.shadowMapSize > 0;
+    const typeChanged = this.renderer.shadowMap.type !== shadowTypeFor(q.shadowType);
+    const enabledChanged = this.renderer.shadowMap.enabled !== shadowsOn;
+    this.renderer.shadowMap.enabled = shadowsOn;
+    this.renderer.shadowMap.type = shadowTypeFor(q.shadowType);
+    if (this.dirLight) {
+      this.dirLight.castShadow = shadowsOn;
+      const size = q.shadowMapSize || 1;
+      if (this.dirLight.shadow.mapSize.width !== size) {
+        this.dirLight.shadow.map?.dispose?.();
+        this.dirLight.shadow.map = null;
+        this.dirLight.shadow.mapSize.set(size, size);
+      }
+    }
+    this.renderer.shadowMap.needsUpdate = true;
+    this.camera.far = q.cameraFar;
+    this.camera.updateProjectionMatrix();
+
+    this.maxBulletDecals = q.maxBulletDecals;
+    while (this.bulletDecals.length > this.maxBulletDecals) {
+      const d = this.bulletDecals.shift();
+      this.scene.remove(d);
+    }
+    if (this.ambientParticles) this.ambientParticles.visible = q.ambientParticles > 0;
+
+    const cap = q.envMapSize === 0 ? 0.35 : null;
+    applyMetalnessCap(this.camera, cap);
+    applyMetalnessCap(this.lobbyShowcaseGroup, cap);
+    for (const rp of this.remotePlayers.values()) applyMetalnessCap(rp.group, cap);
+
+    if (typeChanged || enabledChanged) {
+      this.scene.traverse((o) => {
+        const mats = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
+        for (const m of mats) m.needsUpdate = true;
+      });
+    }
+
+    let rebuilt = false;
+    if (prevTier !== this.tier || this.needsMapRebuild) {
+      if (!this.inMatch) {
+        this.needsMapRebuild = false;
+        this.loadMap(this.currentMapId);
+        rebuilt = true;
+      } else {
+        this.needsMapRebuild = true;
+        revertPbrSlots(this);
+        if (this.assetsEnabled) this.upgradeArenaMaterials();
+      }
+    }
+    const info = { choice, tier: this.tier, preset: q, rebuilt, pendingMapRebuild: Boolean(this.needsMapRebuild) };
+    this.callbacks?.onQualityChanged?.(info);
+    return info;
   }
 
   buildSkyAndAtmosphere(theme = {}, halfSize = 60) {
@@ -626,7 +765,7 @@ export class Game3D {
 
     const gunSpinGroup = new THREE.Group();
     gunSpinGroup.position.y = 0.36;
-    const gunMesh = this.createWeaponMesh(drop.weapon, false);
+    const gunMesh = this.createShowcaseWeaponMesh(drop.weapon);
     gunMesh.scale.setScalar(1.22);
     gunMesh.rotation.z = 0.32;
     gunSpinGroup.add(gunMesh);
@@ -656,9 +795,9 @@ export class Game3D {
     this.scene.remove(item.group);
     item.group.traverse((obj) => {
       if (obj.isMesh) {
-        obj.geometry?.dispose();
-        if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
-        else obj.material?.dispose();
+        if (!obj.geometry?.userData?.shared) obj.geometry?.dispose();
+        if (Array.isArray(obj.material)) obj.material.forEach((m) => !m.userData?.shared && m.dispose());
+        else if (!obj.material?.userData?.shared) obj.material?.dispose();
       }
     });
     this.droppedWeaponMeshes.delete(dropId);
@@ -1012,7 +1151,7 @@ export class Game3D {
       opacity: 1.0
     });
     const particles = [];
-    const pCount = 18;
+    const pCount = Math.max(4, Math.round(18 * this.quality.particleScale));
     for (let i = 0; i < pCount; i++) {
       const pMesh = this.sparkMeshPool.pop() || new THREE.Mesh(this.sharedSparkGeo, sparkMat);
       pMesh.geometry = this.sharedSparkGeo;
@@ -1056,7 +1195,22 @@ export class Game3D {
   }
 
   createWeaponMesh(weaponId, isFirstPerson = false) {
-    return createWeaponMesh(weaponId, isFirstPerson);
+    const mesh = createWeaponMesh(weaponId, isFirstPerson);
+    if (this.quality?.envMapSize === 0) applyMetalnessCap(mesh, 0.35); // Low: no env map, keep metals from going black
+    return mesh;
+  }
+
+  /**
+   * World-space weapon (dropped pickups + lobby showcase). Procedural body first; when the opt-in glTF override
+   * (weaponAssetOverrides.js, ?glbWeapons=1) is enabled and loads, its visual replaces the body (contracts are untouched).
+   */
+  createShowcaseWeaponMesh(weaponId) {
+    const mesh = this.createWeaponMesh(weaponId, false);
+    if (this.assetsEnabled && isWeaponOverrideEnabled()) {
+      const procBox = measureWeaponGroup(mesh);
+      applyWeaponAssetOverride(mesh, weaponId, this.assets, procBox);
+    }
+    return mesh;
   }
 
   setupViewmodelWeapons() {
@@ -1168,7 +1322,7 @@ export class Game3D {
       op.currentWeapon = weaponId;
       op.gunHolder.remove(op.gunMesh);
       disposeObject3D(op.gunMesh);
-      op.gunMesh = this.createWeaponMesh(weaponId, false);
+      op.gunMesh = this.createShowcaseWeaponMesh(weaponId);
       op.gunHolder.add(op.gunMesh);
     }
     op.armPivot.rotation.x = -0.22;
@@ -1450,7 +1604,7 @@ export class Game3D {
 
   /**
    * Applies one player list. `serverTimeMs` (the `t` of a `stateUpdate`) marks it as a timestamped snapshot: the remote
-   * players' pose is then buffered and drawn by interpolation (updateRemotePlayers). Without it (join / botsUpdated /
+   * players' pose is then buffered and drawn by interpolation (updateRemotePlayers). Without it (join /
    * playerLeft re-syncs of an older list) only the entity set and the discrete state (alive, weapon, hp, ...) are applied.
    * `localNowMs` is the local receive time (defaults to performance.now()).
    */
@@ -1507,7 +1661,6 @@ export class Game3D {
         }
       }
 
-      rp.isBot = Boolean(p.isBot);
       rp.name = p.name || rp.name;
       if (stamped) {
         // Pose (position, yaw/pitch/lean, crouch/prone) comes from the snapshot buffer in updateRemotePlayers
@@ -3046,7 +3199,7 @@ export class Game3D {
   }
 
   /**
-   * Draws every remote player (humans + bots) from its snapshot buffer at renderTime = estimated server time -
+   * Draws every remote player from its snapshot buffer at renderTime = estimated server time -
    * INTERP_DELAY_MS: linear interpolation between the two bracketing server snapshots, snap on teleport / respawn /
    * alive flip, <= 100 ms velocity extrapolation when starved. Animation speed (walk cycle, footsteps) is derived from
    * the interpolated motion. `now` is the frame time (performance.now() timebase).
@@ -3117,11 +3270,11 @@ export class Game3D {
       this.callbacks.onFpsUpdate?.(this.currentFps);
 
       // Avoid up/down WebGL backbuffer reallocation oscillation during gameplay (which stalls the GPU for 100-300ms)
-      if (this.inMatch && this.currentFps < 38 && this.currentPixelRatio > 0.85) {
+      if (this.inMatch && this.currentFps < 38 && this.currentPixelRatio > this.quality.minPixelRatio) {
         this.lowFpsStreak = (this.lowFpsStreak || 0) + 1;
         if (this.lowFpsStreak >= 3) {
           this.lowFpsStreak = 0;
-          this.currentPixelRatio = Math.max(0.85, Number((this.currentPixelRatio - 0.15).toFixed(2)));
+          this.currentPixelRatio = Math.max(this.quality.minPixelRatio, Number((this.currentPixelRatio - 0.15).toFixed(2)));
           this.renderer.setPixelRatio(this.currentPixelRatio);
         }
       } else {
@@ -3192,7 +3345,7 @@ export class Game3D {
           if (!rp || !rp.alive || !rp.group) continue;
           const rx = this.minimap.clampBlipCoord(this.minimap.worldToCanvasX(rp.group.position.x), 4);
           const ry = this.minimap.clampBlipCoord(this.minimap.worldToCanvasY(rp.group.position.z), 4);
-          mCtx.fillStyle = rp.isBot ? '#f97316' : '#ef4444';
+          mCtx.fillStyle = '#ef4444';
           mCtx.strokeStyle = '#090d16';
           mCtx.lineWidth = 1.1;
           mCtx.beginPath();
@@ -3421,6 +3574,7 @@ export class Game3D {
     }
 
     this.renderer.render(this.scene, this.camera);
+    this.perfOverlay?.update(now, this.renderer, { tier: this.tier, pixelRatio: this.currentPixelRatio });
   }
 
   get mouseSensitivity() {

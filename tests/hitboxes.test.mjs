@@ -533,7 +533,7 @@ function createHarness() {
 }
 
 function join(rm, id, roomCode = 'HBX01') {
-  const res = rm.addHumanPlayer({ id }, { name: id, roomCode, mode: 'private', botCount: 0, mapId: MAP_ID });
+  const res = rm.addHumanPlayer({ id }, { name: id, roomCode, mode: 'private', mapId: MAP_ID });
   assert.ok(!res.error, `join failed: ${res.error}`);
   res.player.invulnerableUntil = 0;
   return res;
@@ -751,10 +751,9 @@ describe('handleShoot evaluates exactly two poses: rewound and live', () => {
     assert.ok(dmg() > 0);
   });
 
-  it('removed layers: a bot is judged on the rewound / live pose, not on a 220 ms position-history window', () => {
+  it('removed layers: a target is judged on the rewound / live pose, not on a 220 ms position-history window', () => {
     const { rm } = createHarness();
     const { room, shooter, target, eye, dirTo, dmg, pair } = duel(rm, 20);
-    target.isBot = true;
     const now = Date.now();
     shooter.rttMs = 0;
     const rewindMs = resolveShotRewindMs(shooter, {}, now);

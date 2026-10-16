@@ -554,20 +554,6 @@ html, body {
   line-height: 1.25;
 }
 
-.bot-setting-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding-top: 6px;
-  border-top: 1px solid rgba(148, 163, 184, 0.14);
-}
-
-.bot-setting-row .select-input {
-  width: 195px;
-  margin-bottom: 0;
-}
-
 /* ======================== CENTER 3D OPERATOR SHOWCASE STAGE ======================== */
 .operator-showcase-stage {
   position: relative;
@@ -2504,3 +2490,53 @@ kbd {
 }
 
 
+
+/* Graphics quality selector + asset loading progress */
+.quality-select {
+  margin-top: 6px;
+}
+
+.quality-hint {
+  margin: 2px 0 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: #94a3b8;
+  min-height: 1em;
+}
+
+.pause-settings .quality-hint {
+  margin-top: -4px;
+}
+
+.asset-loading {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 9000;
+  min-width: 260px;
+  padding: 8px 14px 10px;
+  border: 1px solid rgba(229, 160, 36, 0.45);
+  border-radius: 6px;
+  background: rgba(7, 13, 25, 0.88);
+  color: #e2e8f0;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
+.asset-loading-bar {
+  margin-top: 6px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(148, 163, 184, 0.25);
+  overflow: hidden;
+}
+
+.asset-loading-bar i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: #e5a024;
+  transition: width 0.2s ease;
+}

@@ -227,13 +227,13 @@ export function getRewoundPlayerPosition(player, targetTimestamp, now = Date.now
  * Resolves the effective rewind duration (0..LAG_COMP_MAX_REWIND_MS) for a shooter.
  * Only the SERVER-measured `shooter.rttMs` is trusted: every client-supplied latency/timestamp field
  * in `payload` (rewindMs, latencyMs, pingMs, rttMs, shotTimestamp, clientTimestamp) is ignored.
- * rewind = clamp(rttMs / 2 + INTERP_DELAY_MS, 0, LAG_COMP_MAX_REWIND_MS). Bots never rewind.
+ * rewind = clamp(rttMs / 2 + INTERP_DELAY_MS, 0, LAG_COMP_MAX_REWIND_MS).
  * The client draws remote players at (estimated TRUE server time - INTERP_DELAY_MS) (public/js/snapshotBuffer.js adds the
  * one-way latency back into its clock estimate), so a shot fired at local time L arrives at L + rtt/2 and is rewound to
  * L + rtt/2 - (rtt/2 + INTERP_DELAY_MS) = L - INTERP_DELAY_MS: exactly the pose the shooter saw on screen.
  */
 export function resolveShotRewindMs(shooter, _payload = {}, _now = Date.now()) {
-  if (!shooter || shooter.isBot) return 0;
+  if (!shooter) return 0;
   const rtt = typeof shooter.rttMs === 'number' && Number.isFinite(shooter.rttMs)
     ? Math.max(0, shooter.rttMs)
     : 0;

@@ -31,7 +31,7 @@ function createHarness() {
 }
 
 function join(rm, id, roomCode = 'COMBAT') {
-  const res = rm.addHumanPlayer({ id }, { name: id, roomCode, mode: 'private', botCount: 0, mapId: MAP_ID });
+  const res = rm.addHumanPlayer({ id }, { name: id, roomCode, mode: 'private', mapId: MAP_ID });
   assert.ok(!res.error, `join failed: ${res.error}`);
   return res;
 }
@@ -84,12 +84,13 @@ describe('Spawn protection ends when the player attacks', () => {
     assert.equal(emitted.filter((e) => e.event === 'spawnProtectionEnded').length, 0);
   });
 
-  it('still ends bot shields on their first shot', () => {
+  it('endSpawnProtection ends an active shield and reports whether it changed anything', () => {
     const { rm } = createHarness();
-    const { room } = join(rm, 'p1');
-    const bot = { id: 'bot1', isBot: true, alive: true, invulnerableUntil: Date.now() + 1000, lastShotAt: 0 };
-    assert.equal(rm.endSpawnProtection(room, bot), true);
-    assert.equal(bot.invulnerableUntil, 0);
+    const { room, player } = join(rm, 'p1');
+    player.invulnerableUntil = Date.now() + 1000;
+    assert.equal(rm.endSpawnProtection(room, player), true);
+    assert.equal(player.invulnerableUntil, 0);
+    assert.equal(rm.endSpawnProtection(room, player), false, 'nothing left to end');
   });
 });
 
@@ -99,7 +100,7 @@ describe('Lag compensation uses only server-measured latency', () => {
     assert.equal(INTERP_DELAY_MS, 100);
     assert.equal(LAG_COMP_INTERP_ALLOWANCE_MS, INTERP_DELAY_MS);
 
-    const shooter = { id: 's', isBot: false, rttMs: 0 };
+    const shooter = { id: 's', rttMs: 0 };
     assert.equal(resolveShotRewindMs(shooter, {}, Date.now()), 100);
     shooter.rttMs = 80;
     assert.equal(resolveShotRewindMs(shooter, {}, Date.now()), 140);
@@ -110,12 +111,12 @@ describe('Lag compensation uses only server-measured latency', () => {
   });
 
   it('uses the server-side rttMs when the shooter has not been probed yet (allowance only)', () => {
-    assert.equal(resolveShotRewindMs({ id: 's', isBot: false }, {}, Date.now()), LAG_COMP_INTERP_ALLOWANCE_MS);
+    assert.equal(resolveShotRewindMs({ id: 's' }, {}, Date.now()), LAG_COMP_INTERP_ALLOWANCE_MS);
   });
 
   it('ignores every client-supplied latency / timestamp field', () => {
     const now = Date.now();
-    const shooter = { id: 's', isBot: false, rttMs: 60, pingMs: 900, latencyMs: 900 };
+    const shooter = { id: 's', rttMs: 60, pingMs: 900, latencyMs: 900 };
     const expected = 60 / 2 + LAG_COMP_INTERP_ALLOWANCE_MS;
     const hostile = [
       { rewindMs: 900 },
@@ -130,10 +131,6 @@ describe('Lag compensation uses only server-measured latency', () => {
     for (const payload of hostile) {
       assert.equal(resolveShotRewindMs(shooter, payload, now), expected, JSON.stringify(payload));
     }
-  });
-
-  it('bots never rewind', () => {
-    assert.equal(resolveShotRewindMs({ isBot: true, rttMs: 500 }, {}, Date.now()), 0);
   });
 
   it('handleShoot / handlePlayerMove no longer store client pingMs', () => {
@@ -202,11 +199,6 @@ describe('Server-side RTT probe', () => {
     assert.equal(rm.latencyProbes.has('p1'), false, 'probe timer is cleared on leave/disconnect');
   });
 
-  it('does not probe bots', () => {
-    const { rm } = createHarness();
-    const socket = { id: 'bot', emit: () => assert.fail('bots must not be probed') };
-    assert.equal(rm.startLatencyProbe(socket, { id: 'bot', isBot: true }), null);
-  });
 });
 
 describe('Position history uses the server clock', () => {

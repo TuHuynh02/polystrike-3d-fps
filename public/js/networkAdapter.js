@@ -43,9 +43,10 @@ export async function createNetworkClient() {
   rawSocket.emit = (event, payload, ack) => {
     // Input batches are volatile: a late batch is useless (newer ones repeat the unacked commands anyway) - except a batch
     // that carries a shot (FIRE bit): the shot only exists inside the command stream, so it must not be dropped
-    if (event === 'inputBatch' && rawSocket.volatile && !batchHasFire(payload)) {
-      rawSocket.volatile.emit('inputBatch', payload);
-      return;
+    // NOTE: Socket.IO's `socket.volatile` getter sets the flag and returns the SAME socket, so calling `.emit` on it would
+    // re-enter this wrapper forever (stack overflow, nothing ever sent). Set the flag, then call the ORIGINAL emit.
+    if (event === 'inputBatch' && !batchHasFire(payload)) {
+      void rawSocket.volatile;
     }
     return origEmit(event, payload, ack);
   };

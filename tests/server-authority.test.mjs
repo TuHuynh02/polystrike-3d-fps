@@ -30,7 +30,7 @@ function createHarness() {
 }
 
 function join(rm, id, roomCode = 'AUTH01', extra = {}) {
-  const res = rm.addHumanPlayer({ id }, { name: id, roomCode, mode: 'private', botCount: 0, mapId: MAP_ID, ...extra });
+  const res = rm.addHumanPlayer({ id }, { name: id, roomCode, mode: 'private', mapId: MAP_ID, ...extra });
   assert.ok(!res.error, `join failed: ${res.error}`);
   res.player.invulnerableUntil = 0;
   return res;
@@ -374,16 +374,18 @@ describe('Loadout and weapon choice are enforced', () => {
     assert.ok(WEAPONS.sniper, 'sniper exists but is not in this loadout');
   });
 
-  it('bots keep working with any pool weapon', () => {
+  it('only allows loadout weapons (and rejects unknown ids)', () => {
     const { rm } = createHarness();
     const { player } = join(rm, 'h');
-    const bot = { isBot: true, loadout: { primary: 'scar', secondary: 'pistol', melee: 'knife' } };
-    assert.equal(rm.isWeaponAllowed(bot, 'sniper'), true);
+    assert.equal(rm.isWeaponAllowed(player, player.loadout.primary), true);
+    assert.equal(rm.isWeaponAllowed(player, player.loadout.secondary), true);
+    assert.equal(rm.isWeaponAllowed(player, 'knife'), true);
     assert.equal(rm.isWeaponAllowed(player, 'sniper'), false);
+    assert.equal(rm.isWeaponAllowed(player, 'no_such_weapon'), false);
   });
 });
 
-describe('Only the room host may change map or bot count', () => {
+describe('Only the room host may change the map', () => {
   it('makes the first human the host, and the second a normal player', () => {
     const { rm } = createHarness();
     const a = join(rm, 'host');
@@ -394,32 +396,23 @@ describe('Only the room host may change map or bot count', () => {
     assert.equal(b.room, a.room);
   });
 
-  it('rejects setBots / changeMap from a non-host and leaves the room untouched', () => {
+  it('rejects changeMap from a non-host and leaves the room untouched', () => {
     const { rm, emitted } = createHarness();
     const { room } = join(rm, 'host');
     const { player: guest } = join(rm, 'guest');
-    const botsBefore = room.desiredBots;
     const mapBefore = room.mapId;
 
-    const bots = rm.handleSetBots(room, guest, { botCount: 8 });
     const map = rm.handleChangeMap(room, guest, { mapId: 'neon_lab' });
 
-    assert.deepEqual([bots.ok, bots.error], [false, 'not_host']);
     assert.deepEqual([map.ok, map.error], [false, 'not_host']);
-    assert.equal(room.desiredBots, botsBefore);
     assert.equal(room.mapId, mapBefore);
     assert.ok(!emitted.some((e) => e.event === 'mapChanged'));
   });
 
-  it('lets the host change bots and map', () => {
+  it('lets the host change the map', () => {
     const { rm, emitted } = createHarness();
     const { room, player: host } = join(rm, 'host');
     join(rm, 'guest');
-
-    const bots = rm.handleSetBots(room, host, { botCount: 3 });
-    assert.equal(bots.ok, true);
-    assert.equal(room.desiredBots, 3);
-    assert.equal(Array.from(room.players.values()).filter((p) => p.isBot).length, 3);
 
     const map = rm.handleChangeMap(room, host, { mapId: 'neon_lab' });
     assert.equal(map.ok, true);
@@ -438,16 +431,18 @@ describe('Only the room host may change map or bot count', () => {
     const changed = emitted.find((e) => e.event === 'hostChanged');
     assert.ok(changed);
     assert.equal(changed.payload.hostId, 'guest');
-    assert.equal(rm.handleSetBots(room, guest, { botCount: 1 }).ok, true);
+    assert.equal(rm.handleChangeMap(room, guest, { mapId: 'neon_lab' }).ok, true);
   });
 
-  it('never makes a bot the host', () => {
+  it('keeps the host on the earliest remaining player and a solo player is always host', () => {
     const { rm } = createHarness();
-    const { room } = join(rm, 'host', 'AUTH02', { botCount: 4 });
-    join(rm, 'guest', 'AUTH02', { botCount: 4 });
-    assert.ok(Array.from(room.players.values()).some((p) => p.isBot), 'room has bots');
+    const { room } = join(rm, 'host', 'AUTH02');
+    join(rm, 'guest', 'AUTH02');
+    join(rm, 'third', 'AUTH02');
+    assert.equal(room.hostId, 'host');
     rm.removePlayer('host');
     assert.equal(room.hostId, 'guest');
-    assert.equal(room.players.get(room.hostId).isBot, false);
+    rm.removePlayer('guest');
+    assert.equal(room.hostId, 'third');
   });
 });

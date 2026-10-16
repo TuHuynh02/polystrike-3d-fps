@@ -68,7 +68,7 @@ function createServer(onEmit = null) {
 }
 
 function join(rm, id, roomCode = 'NET001') {
-  const res = rm.addHumanPlayer({ id }, { name: id, roomCode, mode: 'private', botCount: 0, mapId: MAP_ID });
+  const res = rm.addHumanPlayer({ id }, { name: id, roomCode, mode: 'private', mapId: MAP_ID });
   assert.ok(!res.error, `join failed: ${res.error}`);
   res.player.invulnerableUntil = 0;
   return res;
@@ -932,10 +932,10 @@ describe('live server: inputBatch -> moveAck over a real Socket.IO connection', 
     const a = await connectClient(port);
     const b = await connectClient(port);
     try {
-      a.emit('joinRoom', { name: 'AckA', mode: 'private', botCount: 0, mapId: MAP_ID });
+      a.emit('joinRoom', { name: 'AckA', mode: 'private', mapId: MAP_ID });
       const joinedA = await a.waitFor('roomJoined');
       assert.ok(Number.isInteger(joinedA.player.moveEpoch));
-      b.emit('joinRoom', { name: 'AckB', roomCode: joinedA.roomCode, mode: 'private', botCount: 0, mapId: MAP_ID });
+      b.emit('joinRoom', { name: 'AckB', roomCode: joinedA.roomCode, mode: 'private', mapId: MAP_ID });
       await b.waitFor('roomJoined');
 
       const epoch = joinedA.player.moveEpoch;

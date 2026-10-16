@@ -49,7 +49,6 @@ const filesToCheck = [
   'shared/lagCompensation.js',
   'server/index.js',
   'server/roomManager.js',
-  'server/botAI.js',
   'public/js/main.js',
   'public/js/game3d.js',
   'public/js/prediction.js',
@@ -59,7 +58,12 @@ const filesToCheck = [
   'public/js/humanoidRig.js',
   'public/js/arenaBuilder.js',
   'public/js/audio.js',
-  'public/js/networkAdapter.js'
+  'public/js/networkAdapter.js',
+  'public/js/quality.js',
+  'public/js/assets.js',
+  'public/js/surfaceMaterials.js',
+  'public/js/arenaProps.js',
+  'public/js/weaponAssetOverrides.js'
 ];
 
 console.log('🔍 [CI] Checking JavaScript syntax across all modules...');
@@ -127,11 +131,10 @@ const mockIo = {
 };
 
 const rm = new RoomManager(mockIo);
-// Tests drive state explicitly; stop the real tick loop so bots can't kill the test player during an await.
+// Tests drive state explicitly; stop the real tick loop so the loop can't change state during an await.
 clearInterval(rm.tickInterval);
 const { room, player } = rm.addHumanPlayer({ id: 'socket_p1' }, {
   name: 'Tester1',
-  botCount: 4,
   weapon: 'm4a1',
   loadout: { primary: 'scar', secondary: 'deagle', melee: 'knife' },
   mapId: 'cyber_arena'
@@ -170,7 +173,7 @@ assert.equal(LAG_COMP_HISTORY_MS, 350, 'Lag compensation history window should b
 assert.equal(LAG_COMP_MAX_REWIND_MS, 200, 'Lag compensation max rewind clamp should be 200ms');
 assert.equal(KILL_ADRENALINE_HEAL, 25, 'Kill adrenaline heal should be +25 HP');
 assert.equal(INTERP_DELAY_MS, 100, 'Snapshot interpolation delay should be 100ms');
-assert.equal(resolveShotRewindMs({ id: 'ci', isBot: false, rttMs: 60 }, {}), 60 / 2 + INTERP_DELAY_MS, 'Rewind = rtt/2 + INTERP_DELAY_MS');
+assert.equal(resolveShotRewindMs({ id: 'ci', rttMs: 60 }, {}), 60 / 2 + INTERP_DELAY_MS, 'Rewind = rtt/2 + INTERP_DELAY_MS');
 assert.ok(LAG_COMP_HISTORY_MS >= LAG_COMP_MAX_REWIND_MS + 40, 'Lag-comp history must cover the max rewind plus one tick');
 
 const { player: player2 } = rm.addHumanPlayer({ id: 'socket_p2' }, {
@@ -315,11 +318,6 @@ console.log('💣 [CI] Verifying Frag Grenade Physics, Detonation & 3D Spatial A
 assert.equal(typeof rm.handleThrowGrenade, 'function', 'RoomManager.handleThrowGrenade must be defined');
 rm.respawnPlayer(room, player2);
 assert.equal(player2.grenades, 1, 'Respawned player must have 1 Frag Grenade replenished');
-for (const p of room.players.values()) {
-  if (p.isBot) {
-    assert.equal(p.grenades, 1, 'Bot entities must initialize with 1 Frag Grenade');
-  }
-}
 player2.invulnerableUntil = 0;
 player2.x = 0;
 player2.y = 0;

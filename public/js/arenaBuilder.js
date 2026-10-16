@@ -2,6 +2,16 @@
 // Weathered concrete tarmac, corrugated ISO shipping containers, military ordnance supply depots, and industrial horizon
 
 import * as THREE from '../vendor/three/three.module.js';
+import { QUALITY } from './quality.js';
+import {
+  applyMetricBoxUV1,
+  applyMetricPlaneUV1,
+  getSurfacePlan,
+  registerPbrSlot,
+  resolveTint,
+  uvOffsetFor
+} from './surfaceMaterials.js';
+import { PropBatcher } from './arenaProps.js';
 
 /**
  * Generates a procedural equirectangular IBL environment map so all PBR metallic & rough surfaces
@@ -9,10 +19,13 @@ import * as THREE from '../vendor/three/three.module.js';
  */
 export function createProceduralEnvironmentMap(game, theme = {}) {
   if (typeof document === 'undefined') return null;
+  // Quality tier: the 512x256 design is drawn at envMapSize x envMapSize/2 (cheaper to upload / filter on medium)
+  const envSize = Math.max(64, Math.min(512, game?.quality?.envMapSize || 512));
   const canvas = document.createElement('canvas');
-  canvas.width = 512;
-  canvas.height = 256;
+  canvas.width = envSize;
+  canvas.height = envSize / 2;
   const ctx = canvas.getContext('2d');
+  ctx.scale?.(envSize / 512, envSize / 512);
 
   const isDesert = theme.floorBase === '#27170c';
   const isLab = theme.floorBase === '#0b0f1e';
@@ -151,12 +164,15 @@ export function buildSkyAndAtmosphere(game, theme = {}, halfSize = 60) {
   const isLab = theme.floorBase === '#0b0f1e';
 
   // 0. Bind Procedural IBL Environment Map for Realistic PBR Metallic & Roughness Reflections
-  const envMap = createProceduralEnvironmentMap(game, theme);
+  // (Quality tiers: envMapSize 0 = Low has no environment map at all)
+  const envMap = game?.quality?.envMapSize === 0 ? null : createProceduralEnvironmentMap(game, theme);
   if (envMap) {
     game.scene.environment = envMap;
     if ('environmentIntensity' in game.scene) {
       game.scene.environmentIntensity = 0.76;
     }
+  } else {
+    game.scene.environment = null;
   }
 
   // 1. High-Resolution Atmospheric Sky Dome with Volumetric-Style Cloud Layers, Sun Corona & 3-Layer Mountain Ridges
@@ -327,7 +343,7 @@ export function buildSkyAndAtmosphere(game, theme = {}, halfSize = 60) {
   game.arenaMaterials.add(beaconRedMat);
 
   const sharedSkyBoxGeo = new THREE.BoxGeometry(1, 1, 1);
-  const sharedCylGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, 14);
+  const sharedCylGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, game?.quality?.cylinderSegments || 14);
   const sharedDomeGeo = new THREE.SphereGeometry(0.5, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.55);
   const sharedSpireGeo = new THREE.CylinderGeometry(0.12, 0.46, 1, 8);
   game.arenaGeometries.add(sharedSkyBoxGeo);
@@ -335,16 +351,14 @@ export function buildSkyAndAtmosphere(game, theme = {}, halfSize = 60) {
   game.arenaGeometries.add(sharedDomeGeo);
   game.arenaGeometries.add(sharedSpireGeo);
 
+  // Skyline pieces are batched per (geometry, material) into InstancedMeshes: ~150 draw calls -> ~15 (matters on iGPUs)
+  const perimeterBatches = new Map();
   const addPerimeterMesh = (geo, mat, x, y, z, sx, sy, sz, rx = 0, ry = 0, rz = 0) => {
-    const m = new THREE.Mesh(geo, mat);
-    m.position.set(x, y, z);
-    m.rotation.set(rx, ry, rz);
-    m.scale.set(sx, sy, sz);
-    m.updateMatrix();
-    m.matrixAutoUpdate = false;
-    game.scene.add(m);
-    game.arenaDecorMeshes.push(m);
-    return m;
+    let byMat = perimeterBatches.get(geo);
+    if (!byMat) perimeterBatches.set(geo, (byMat = new Map()));
+    let items = byMat.get(mat);
+    if (!items) byMat.set(mat, (items = []));
+    items.push([x, y, z, sx, sy, sz, rx, ry, rz]);
   };
 
   const towerCount = 28;
@@ -413,9 +427,31 @@ export function buildSkyAndAtmosphere(game, theme = {}, halfSize = 60) {
     }
   }
 
+  const perimeterDummy = new THREE.Object3D();
+  for (const [geo, byMat] of perimeterBatches) {
+    for (const [mat, items] of byMat) {
+      const inst = new THREE.InstancedMesh(geo, mat, items.length);
+      for (let k = 0; k < items.length; k++) {
+        const [x, y, z, sx, sy, sz, rx, ry, rz] = items[k];
+        perimeterDummy.position.set(x, y, z);
+        perimeterDummy.rotation.set(rx, ry, rz);
+        perimeterDummy.scale.set(sx, sy, sz);
+        perimeterDummy.updateMatrix();
+        inst.setMatrixAt(k, perimeterDummy.matrix);
+      }
+      inst.instanceMatrix.needsUpdate = true;
+      inst.frustumCulled = false;
+      inst.updateMatrix();
+      inst.matrixAutoUpdate = false;
+      game.scene.add(inst);
+      game.skyObjects.push(inst);
+    }
+  }
+
   // 3. Subtle Sunlit Atmospheric Dust Motes inside Arena
-  const pCount = 220;
+  const pCount = game?.quality ? game.quality.ambientParticles : 220;
   const span = halfSize * 1.85;
+  if (pCount > 0) {
   const positions = new Float32Array(pCount * 3);
   for (let i = 0; i < pCount; i++) {
     positions[i * 3] = (Math.random() - 0.5) * span;
@@ -434,6 +470,7 @@ export function buildSkyAndAtmosphere(game, theme = {}, halfSize = 60) {
   game.ambientParticles = new THREE.Points(pGeo, pMat);
   game.scene.add(game.ambientParticles);
   game.skyObjects.push(game.ambientParticles);
+  }
 }
 
 export function createGridTexture(game, theme = {}, halfSize = 60) {
@@ -1131,10 +1168,65 @@ export function buildMapLandmarks(
   }
 }
 
+/**
+ * Bakes the world matrices of many indexed box meshes into ONE geometry (position, normal, uv, uv1, index).
+ * Used by the Low tier to turn ~120 obstacle draw calls into one per material.
+ */
+export function mergeMeshGeometries(meshes) {
+  let vCount = 0;
+  let iCount = 0;
+  for (const m of meshes) {
+    vCount += m.geometry.attributes.position.count;
+    iCount += m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count;
+  }
+  const hasUv1 = meshes.every((m) => m.geometry.attributes.uv1);
+  const pos = new Float32Array(vCount * 3);
+  const nor = new Float32Array(vCount * 3);
+  const uv = new Float32Array(vCount * 2);
+  const uv1 = hasUv1 ? new Float32Array(vCount * 2) : null;
+  const idx = new Uint32Array(iCount);
+  const v = new THREE.Vector3();
+  const normalMatrix = new THREE.Matrix3();
+  let vo = 0;
+  let io = 0;
+  for (const m of meshes) {
+    m.updateMatrix();
+    normalMatrix.getNormalMatrix(m.matrix);
+    const g = m.geometry;
+    const p = g.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      v.fromBufferAttribute(p, i).applyMatrix4(m.matrix);
+      pos.set([v.x, v.y, v.z], (vo + i) * 3);
+      v.fromBufferAttribute(g.attributes.normal, i).applyMatrix3(normalMatrix).normalize();
+      nor.set([v.x, v.y, v.z], (vo + i) * 3);
+      uv.set([g.attributes.uv.getX(i), g.attributes.uv.getY(i)], (vo + i) * 2);
+      if (uv1) uv1.set([g.attributes.uv1.getX(i), g.attributes.uv1.getY(i)], (vo + i) * 2);
+    }
+    if (g.index) {
+      for (let i = 0; i < g.index.count; i++) idx[io++] = g.index.getX(i) + vo;
+    } else {
+      for (let i = 0; i < p.count; i++) idx[io++] = vo + i;
+    }
+    vo += p.count;
+  }
+  const merged = new THREE.BufferGeometry();
+  merged.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  merged.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  merged.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  if (uv1) merged.setAttribute('uv1', new THREE.BufferAttribute(uv1, 2));
+  merged.setIndex(new THREE.BufferAttribute(idx, 1));
+  merged.computeBoundingSphere();
+  merged.computeBoundingBox();
+  return merged;
+}
+
 export function buildArena(game, mapCfg = game?.currentMapConfig || {}) {
   const halfSize = mapCfg.arenaHalfSize || game?.arenaHalfSize || 60;
   const span = halfSize * 2;
   const theme = mapCfg.theme || {};
+  const preset = game?.quality || QUALITY.medium;
+  const plan = getSurfacePlan(mapCfg.id);
+  game.pbrSlots = [];
 
   // Ground Floor with high-res anisotropic weathered concrete/tarmac diffuse, bump & roughness relief
   const floorGeo = new THREE.PlaneGeometry(span, span);
@@ -1151,6 +1243,9 @@ export function buildArena(game, mapCfg = game?.currentMapConfig || {}) {
     polygonOffsetUnits: 1
   });
   game.arenaMaterials.add(floorMat);
+  applyMetricPlaneUV1(floorGeo, span, span, plan.floor.tile);
+  game.arenaGeometries.add(floorGeo);
+  registerPbrSlot(game, floorMat, plan.floor, resolveTint(plan.floor, null, 'floor'));
   const floorMesh = new THREE.Mesh(floorGeo, floorMat);
   floorMesh.rotation.x = -Math.PI / 2;
   floorMesh.receiveShadow = true;
@@ -1182,6 +1277,8 @@ export function buildArena(game, mapCfg = game?.currentMapConfig || {}) {
         metalness: isMetal ? 0.66 : isPlatform ? 0.34 : isWoodCrate ? 0.16 : 0.14
       });
       game.arenaMaterials.add(m);
+      const spec = plan[type] || plan.wall;
+      registerPbrSlot(game, m, spec, resolveTint(spec, colorHex, type));
       matCache.set(key, m);
     }
     return matCache.get(key);
@@ -1283,9 +1380,9 @@ export function buildArena(game, mapCfg = game?.currentMapConfig || {}) {
   game.arenaMaterials.add(trimSecondaryMat);
 
   const unitBoxGeo = new THREE.BoxGeometry(1, 1, 1);
-  const unitCylGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, 14);
+  const unitCylGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, preset.cylinderSegments);
   const unitOctGeo = new THREE.OctahedronGeometry(0.55, 0);
-  const unitSandbagGeo = new THREE.CapsuleGeometry(0.22, 0.58, 8, 12);
+  const unitSandbagGeo = new THREE.CapsuleGeometry(0.22, 0.58, preset.capsuleSegments, preset.capsuleSegments + 4);
   game.arenaGeometries.add(unitBoxGeo);
   game.arenaGeometries.add(unitCylGeo);
   game.arenaGeometries.add(unitOctGeo);
@@ -1420,9 +1517,24 @@ export function buildArena(game, mapCfg = game?.currentMapConfig || {}) {
   let containerIdx = 0;
   let crateIdx = 0;
 
+  // glTF crate props (Low tier: none). Only models whose bounding box fits the target AABB within tolerance are used;
+  // everything else keeps the procedural box, so a missing/squashed model can never change the look badly.
+  const crateGltf = preset.glbProps ? game.assets?.loadedModels?.get('crate-wide') : null;
+  const crateObstacleBatch = crateGltf ? new PropBatcher(crateGltf.scene, 'crate-obstacle') : null;
+  const crateTopperBatch = crateGltf ? new PropBatcher(crateGltf.scene, 'crate-topper') : null;
+  game.propBatchers = [crateObstacleBatch, crateTopperBatch].filter(Boolean);
+
   for (const obs of mapCfg.obstacles) {
     const mainMat = getMat(obs.color, obs.type);
     const geo = new THREE.BoxGeometry(obs.w, obs.h, obs.d);
+    applyMetricBoxUV1(
+      geo,
+      obs.w,
+      obs.h,
+      obs.d,
+      (plan[obs.type] || plan.wall).tile,
+      uvOffsetFor(obs.x, obs.y, obs.z)
+    );
     if (obs.type === 'wall' || obs.type === 'platform') {
       applyBoxWorldUVs(geo, obs.w, obs.h, obs.d, 3.2);
     } else if (obs.type === 'step') {
@@ -1460,6 +1572,13 @@ export function buildArena(game, mapCfg = game?.currentMapConfig || {}) {
         }
         buildContainerDetails(obs.x, upperY, obs.z, obs.w * 0.96, upperH, obs.d * 0.96, upperMat, true);
       }
+    } else if (obs.type === 'crate' && crateObstacleBatch?.tryAdd(
+      { x: obs.x, y: obs.y, z: obs.z },
+      { w: obs.w, h: obs.h, d: obs.d }
+    )) {
+      // Kenney crate model fits this AABB: it replaces the box visual (the collision box and the raycast mesh stay)
+      mesh.visible = false;
+      crateIdx++;
     } else if (obs.type === 'crate') {
       crateIdx++;
       // Contoured Military Ordnance Case: Top Overhang Lid, Pallet Base, Rounded Corner Bumpers & Steel Latches
@@ -1496,9 +1615,16 @@ export function buildArena(game, mapCfg = game?.currentMapConfig || {}) {
           addMilitaryFuelDrum(obs.x - 0.42, topY + 0.08, obs.z - 0.18, barrelOliveMat);
           addMilitaryFuelDrum(obs.x + 0.36, topY + 0.08, obs.z + 0.22, gunmetalFrameMat);
         } else {
-          // Molded Pelican Tactical Weapons Case on top of supply pallet
-          addDecorBox(obs.x, topY + 0.26, obs.z, obs.w * 0.58, 0.36, obs.d * 0.48, barrelOliveMat, true);
-          addDecorBox(obs.x, topY + 0.47, obs.z, obs.w * 0.60, 0.05, obs.d * 0.50, darkSteelMat);
+          // Molded Pelican Tactical Weapons Case on top of supply pallet (glTF crate when it fits, else procedural boxes)
+          const topperFit = crateTopperBatch?.tryAddContained(
+            { x: obs.x, z: obs.z },
+            topY + 0.08,
+            { w: obs.w * 0.7, h: 0.5, d: obs.d * 0.6 }
+          );
+          if (!topperFit) {
+            addDecorBox(obs.x, topY + 0.26, obs.z, obs.w * 0.58, 0.36, obs.d * 0.48, barrelOliveMat, true);
+            addDecorBox(obs.x, topY + 0.47, obs.z, obs.w * 0.60, 0.05, obs.d * 0.50, darkSteelMat);
+          }
         }
       }
     } else if (obs.type === 'pillar') {
@@ -1723,6 +1849,30 @@ export function buildArena(game, mapCfg = game?.currentMapConfig || {}) {
       instMesh.matrixAutoUpdate = false;
       game.scene.add(instMesh);
       game.arenaDecorMeshes.push(instMesh);
+    }
+  }
+
+  for (const batcher of game.propBatchers) batcher.flush(game, true);
+
+  // Low tier: draw the obstacles as ONE merged mesh per material. The original per-obstacle meshes stay in
+  // game.worldMeshes (raycast / hit-decal targets are unchanged; three's Raycaster ignores `visible`) but are not rendered.
+  game.mergedWorldMeshes = [];
+  if (preset.mergeWorldMeshes) {
+    const byMat = new Map();
+    for (const m of game.worldMeshes.slice(1)) {
+      if (!m.visible) continue;
+      if (!byMat.has(m.material)) byMat.set(m.material, []);
+      byMat.get(m.material).push(m);
+    }
+    for (const [mat, list] of byMat) {
+      const merged = new THREE.Mesh(mergeMeshGeometries(list), mat);
+      merged.castShadow = false;
+      merged.receiveShadow = false;
+      merged.matrixAutoUpdate = false;
+      game.scene.add(merged);
+      game.arenaDecorMeshes.push(merged);
+      game.mergedWorldMeshes.push(merged);
+      for (const m of list) m.visible = false;
     }
   }
 

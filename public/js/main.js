@@ -49,7 +49,6 @@ const btnJoinInvited = document.getElementById('btn-join-invited');
 const playerNameInput = document.getElementById('player-name');
 const weaponGrid = document.getElementById('lobby-weapon-grid');
 const mapGrid = document.getElementById('lobby-map-grid');
-const lobbyBotCount = document.getElementById('lobby-bot-count');
 const lobbyError = document.getElementById('lobby-error');
 const btnQuickPlay = document.getElementById('btn-quick-play');
 const btnCreatePrivate = document.getElementById('btn-create-private');
@@ -144,7 +143,6 @@ const pauseModal = document.getElementById('pause-modal');
 const pauseInviteUrl = document.getElementById('pause-invite-url');
 const btnCopyLinkPause = document.getElementById('btn-copy-link-pause');
 const pauseMapSelect = document.getElementById('pause-map-select');
-const pauseBotSelect = document.getElementById('pause-bot-select');
 const sensSlider = document.getElementById('sens-slider');
 const sensValue = document.getElementById('sens-value');
 const soundCheckbox = document.getElementById('sound-checkbox');
@@ -263,12 +261,6 @@ function loadUserPrefs() {
     ? candidateMap
     : (DEFAULT_MAP_ID || 'cyber_citadel');
 
-  const parsedBots = Number(raw.botCount);
-  const maxBots = MATCH_CONFIG.MAX_BOTS || 8;
-  const botCount = Number.isFinite(parsedBots)
-    ? Math.max(0, Math.min(maxBots, Math.round(parsedBots)))
-    : (MATCH_CONFIG.DEFAULT_BOTS ?? 4);
-
   const parsedSens = Number(raw.sensitivity);
   const sensitivity = Number.isFinite(parsedSens)
     ? Math.max(0.3, Math.min(2.5, Math.round(parsedSens * 10) / 10))
@@ -282,7 +274,6 @@ function loadUserPrefs() {
     secondaryWeapon,
     operatorColor,
     selectedMap,
-    botCount,
     sensitivity,
     soundEnabled
   };
@@ -353,7 +344,6 @@ const MULTI_KILL_WINDOW_MS = 6500;
 let localGrenades = 1;
 let lastGrenadeThrowAt = 0;
 let currentPingMs = 0;
-let lastRoomBotCount = null;
 
 const hudCache = {
   hp: -1,
@@ -1210,15 +1200,7 @@ function applyRestoredUserPrefs() {
     }
     updateMapHud(selectedMapId);
 
-    // 5. Bot AI Count
-    if (lobbyBotCount) {
-      lobbyBotCount.value = String(userPrefs.botCount);
-    }
-    if (pauseBotSelect) {
-      pauseBotSelect.value = String(userPrefs.botCount);
-    }
-
-    // 6. Mouse Sensitivity
+    // 5. Mouse Sensitivity
     if (sensSlider) {
       sensSlider.value = String(userPrefs.sensitivity);
     }
@@ -1259,7 +1241,6 @@ function requestJoinRoom({ mode = 'public', roomCode = '' }) {
   }
   const rawName = playerNameInput.value.trim();
   const name = (rawName.replace(/[<>&"'`]/g, '').trim().slice(0, 16)) || userPrefs.playerName || 'Striker';
-  const botCount = Number(lobbyBotCount.value);
 
   selectedLoadout.primary = selectedStartingWeapon;
   saveUserPrefs({
@@ -1267,8 +1248,7 @@ function requestJoinRoom({ mode = 'public', roomCode = '' }) {
     primaryWeapon: selectedStartingWeapon,
     secondaryWeapon: selectedLoadout.secondary,
     operatorColor: selectedOperatorColor,
-    selectedMap: selectedMapId,
-    botCount
+    selectedMap: selectedMapId
   });
 
   sfx.ensureContext();
@@ -1277,7 +1257,6 @@ function requestJoinRoom({ mode = 'public', roomCode = '' }) {
     name,
     roomCode,
     mode,
-    botCount,
     color: selectedOperatorColor,
     weapon: selectedStartingWeapon,
     loadout: selectedLoadout,
@@ -1309,16 +1288,6 @@ weaponGrid.addEventListener('click', (e) => {
   syncHotbarSlotsHud();
   saveUserPrefs({ primaryWeapon: selectedStartingWeapon });
 });
-
-if (lobbyBotCount) {
-  lobbyBotCount.addEventListener('change', () => {
-    const botCount = Number(lobbyBotCount.value);
-    if (pauseBotSelect) {
-      pauseBotSelect.value = String(botCount);
-    }
-    saveUserPrefs({ botCount });
-  });
-}
 
 // Interactive 3D Humanoid Showcase Turntable & Controls in Lobby
 if (operatorDragZone) {
@@ -1475,15 +1444,6 @@ if (pauseMapSelect) {
   });
 }
 
-pauseBotSelect.addEventListener('change', () => {
-  const botCount = Number(pauseBotSelect.value);
-  if (lobbyBotCount) {
-    lobbyBotCount.value = String(botCount);
-  }
-  saveUserPrefs({ botCount });
-  socket.emit('setBots', { botCount });
-});
-
 const handleSensSliderChange = () => {
   const val = Math.max(0.3, Math.min(2.5, Math.round(Number(sensSlider.value) * 10) / 10));
   sensValue.textContent = val.toFixed(1);
@@ -1498,6 +1458,66 @@ soundCheckbox.addEventListener('change', () => {
   sfx.enabled = soundCheckbox.checked;
   saveUserPrefs({ soundEnabled: soundCheckbox.checked });
 });
+
+// Graphics quality selector (lobby + pause menu, Tự động / Thấp / Vừa / Cao) -------------------------------------------
+const QUALITY_LABELS = { low: 'Thấp', medium: 'Vừa', high: 'Cao' };
+const qualitySelects = ['lobby-quality-select', 'pause-quality-select']
+  .map((id) => document.getElementById(id))
+  .filter(Boolean);
+const qualityHints = ['lobby-quality-hint', 'pause-quality-hint']
+  .map((id) => document.getElementById(id))
+  .filter(Boolean);
+const bootAntialias = game.quality.antialias;
+let qualityNotice = '';
+
+function renderQualityUi() {
+  const tierLabel = QUALITY_LABELS[game.tier] || game.tier;
+  let text =
+    game.qualityChoice === 'auto'
+      ? `Tự động: máy được nhận diện ở mức ${tierLabel}.`
+      : `Đang dùng mức ${tierLabel}.`;
+  if (qualityNotice) text += ` ${qualityNotice}`;
+  for (const sel of qualitySelects) sel.value = game.qualityChoice;
+  for (const el of qualityHints) el.textContent = text;
+}
+
+function handleQualityChange(choice) {
+  const info = game.applyQuality(choice);
+  const notes = [];
+  if (info.pendingMapRebuild) notes.push('Chi tiết mô hình áp dụng đầy đủ khi đổi bản đồ / ván sau.');
+  if (Boolean(info.preset.antialias) !== Boolean(bootAntialias)) notes.push('Khử răng cưa cần tải lại trang.');
+  qualityNotice = notes.join(' ');
+  renderQualityUi();
+}
+
+for (const sel of qualitySelects) {
+  sel.addEventListener('change', () => handleQualityChange(sel.value));
+}
+renderQualityUi();
+
+// Asset loading progress: only visible when preloading glTF props + PBR textures takes a noticeable time
+{
+  const box = document.getElementById('asset-loading');
+  const text = document.getElementById('asset-loading-text');
+  const fill = document.getElementById('asset-loading-fill');
+  let showTimer = null;
+  let finished = false;
+  const onProgress = ({ loaded, total }) => {
+    if (text) text.textContent = `Đang tải đồ họa… ${loaded}/${total}`;
+    if (fill) fill.style.width = total ? `${Math.round((loaded / total) * 100)}%` : '0%';
+  };
+  showTimer = setTimeout(() => {
+    if (!finished) box?.classList.remove('hidden');
+  }, 450);
+  game
+    .preloadAssets(onProgress)
+    .catch(() => {})
+    .finally(() => {
+      finished = true;
+      clearTimeout(showTimer);
+      box?.classList.add('hidden');
+    });
+}
 
 // Active Rooms Browser Fetcher
 async function fetchActiveRooms() {
@@ -1551,7 +1571,6 @@ function renderScoreboard(players) {
         <tr class="${ isMe ? 'sb-row-me' : '' }">
           <td>${ i + 1 }</td>
           <td>${ p.name } ${ isMe ? '(Bạn)' : '' }</td>
-          <td>${ p.isBot ? '🤖 Bot' : '👤 Player' }</td>
           <td>${ p.kills }</td>
           <td>${ p.deaths }</td>
           <td>${ kd }</td>
@@ -1648,8 +1667,6 @@ socket.on('roomJoined', (data) => {
   hudRoomCode.textContent = `#${ activeRoomCode }`;
   sbRoomCode.textContent = `#${ activeRoomCode }`;
   pauseInviteUrl.value = shareUrl;
-  pauseBotSelect.value = String(data.botCount ?? 4);
-  lastRoomBotCount = data.botCount ?? 4;
   hudKillLimit.textContent = String(data.killLimit || 20);
   hudTimer.textContent = formatTime(data.timeRemaining || 300);
 
@@ -1763,24 +1780,12 @@ socket.on('spawnProtectionEnded', (data) => {
   if (data?.playerId && data.playerId === game.localId) clearSpawnProtectionHud();
 });
 
-socket.on('botsUpdated', (data) => {
-  if (!game.inMatch || !Array.isArray(data?.players)) return;
-  if (typeof data.botCount === 'number') {
-    lastRoomBotCount = data.botCount;
-    pauseBotSelect.value = String(data.botCount);
-  }
-  latestPlayers = data.players;
-  game.syncPlayersState(latestPlayers);
-});
-
-// Server rejected a host-only action (map / bot count): tell the player and restore the controls
+// Server rejected a host-only action (map): tell the player and restore the controls
 socket.on('actionDenied', (data) => {
   if (!game.inMatch) return;
   showToast(`⛔ ${ data?.message || 'Hành động không được phép.' }`);
   if (data?.action === 'changeMap') {
     updateMapHud(game.currentMapConfig?.id || selectedMapId);
-  } else if (data?.action === 'setBots' && lastRoomBotCount !== null) {
-    pauseBotSelect.value = String(lastRoomBotCount);
   }
 });
 

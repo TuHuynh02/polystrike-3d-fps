@@ -2,8 +2,6 @@
 
 export const MATCH_CONFIG = {
   MAX_PLAYERS: 12,
-  MAX_BOTS: 8,
-  DEFAULT_BOTS: 4,
   KILL_LIMIT: 20,
   MATCH_DURATION_SEC: 300, // 5 minutes
   RESPAWN_DELAY_MS: 3000,  // 3 seconds
@@ -45,8 +43,7 @@ export const MATCH_CONFIG = {
   GRAVITY: 22.0,
   JUMP_FORCE: 8.0,
   COYOTE_TIME_MS: 120,
-  JUMP_BUFFER_MS: 120,
-  BOT_MOVE_SPEED: 4.8
+  JUMP_BUFFER_MS: 120
 };
 
 // Snapshot-interpolation render delay (ms). SINGLE source of truth shared by the client (remote players are drawn at

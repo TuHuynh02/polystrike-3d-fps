@@ -47,12 +47,25 @@ const io = new SocketIOServer(server, {
 });
 
 // Serve static assets
+// glTF models + PBR textures are large and never change under the same URL: cache them for a week and make sure .glb
+// has the right content type even if the installed `mime` database predates glTF.
+const staticAssetOptions = {
+  maxAge: '7d',
+  setHeaders(res, filePath) {
+    if (filePath.endsWith('.glb')) res.setHeader('Content-Type', 'model/gltf-binary');
+    else if (filePath.endsWith('.gltf')) res.setHeader('Content-Type', 'model/gltf+json');
+  }
+};
+app.use('/assets', express.static(path.join(ROOT_DIR, 'public', 'assets'), staticAssetOptions));
 app.use(express.static(path.join(ROOT_DIR, 'public')));
 app.use('/shared', express.static(path.join(ROOT_DIR, 'shared')));
 app.use('/vendor/three', express.static(path.join(ROOT_DIR, 'node_modules/three/build')));
+// GLTFLoader & friends (examples/jsm). The import map in index.html maps `three` to /vendor/three/three.module.js
+// (same URL as the game's own import, so there is ONE three.js instance) and `three/addons/` to this folder.
+app.use('/vendor/three-examples', express.static(path.join(ROOT_DIR, 'node_modules/three/examples/jsm'), { maxAge: '7d' }));
 
 const roomManager = new RoomManager(io);
-const HOST_ONLY_MESSAGE = 'Chỉ chủ phòng mới có thể đổi map hoặc số bot.';
+const HOST_ONLY_MESSAGE = 'Chỉ chủ phòng mới có thể đổi map.';
 
 // Render.com Health Check Endpoint
 app.get('/healthz', (_req, res) => {
@@ -108,7 +121,6 @@ io.on('connection', (socket) => {
         isPublic: room.isPublic,
         mapId: room.mapId,
         mapName: mapCfg.name,
-        botCount: room.desiredBots,
         killLimit: MATCH_CONFIG.KILL_LIMIT,
         timeRemaining,
         player: {
@@ -212,23 +224,6 @@ io.on('connection', (socket) => {
         alive: player.alive
       });
     }
-  });
-
-  on('setBots', (payload) => {
-    if (!currentRoomCode) return;
-    const room = roomManager.rooms.get(currentRoomCode);
-    if (!room) return;
-    const player = room.players.get(socket.id);
-    if (!player) return;
-    const result = roomManager.handleSetBots(room, player, payload);
-    if (!result.ok) {
-      socket.emit('actionDenied', { action: 'setBots', reason: result.error, message: HOST_ONLY_MESSAGE });
-      return;
-    }
-    io.to(room.code).emit('botsUpdated', {
-      botCount: result.botCount,
-      players: result.players
-    });
   });
 
   on('changeMap', (payload) => {

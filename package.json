@@ -1,13 +1,13 @@
 {
   "name": "polystrike-3d-fps",
   "version": "1.0.0",
-  "description": "3D Web First-Person Shooter Deathmatch with Shareable Room Links & Bot AI",
+  "description": "3D Web First-Person Shooter Deathmatch with Shareable Room Links",
   "type": "module",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "test": "node --test tests/game.test.mjs tests/server-authority.test.mjs tests/socket-guard.test.mjs tests/combat-rules.test.mjs tests/movement.test.mjs tests/netcode-prediction.test.mjs tests/hitboxes.test.mjs tests/snapshot-interpolation.test.mjs tests/shot-in-command.test.mjs tests/self-state.test.mjs",
+    "test": "node --test tests/game.test.mjs tests/server-authority.test.mjs tests/socket-guard.test.mjs tests/combat-rules.test.mjs tests/movement.test.mjs tests/netcode-prediction.test.mjs tests/hitboxes.test.mjs tests/snapshot-interpolation.test.mjs tests/shot-in-command.test.mjs tests/self-state.test.mjs tests/graphics-quality.test.mjs tests/network-client.test.mjs",
     "test:ci": "node scripts/verify-ci.mjs"
   },
   "dependencies": {

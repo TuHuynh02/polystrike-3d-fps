@@ -75,7 +75,7 @@ function createServer() {
 }
 
 function join(rm, id, roomCode) {
-  const res = rm.addHumanPlayer({ id }, { name: id, roomCode, mode: 'private', botCount: 0, mapId: MAP_ID });
+  const res = rm.addHumanPlayer({ id }, { name: id, roomCode, mode: 'private', mapId: MAP_ID });
   assert.ok(!res.error, `join failed: ${res.error}`);
   res.player.invulnerableUntil = 0;
   return res;
@@ -479,7 +479,7 @@ describe('(g) clock offset', () => {
 describe('(h) lag-compensation parity: what the shooter sees == what the server rewinds to', () => {
   it('rewind constants: INTERP_DELAY_MS is the single source, history covers the maximum rewind', () => {
     assert.equal(INTERP_DELAY_MS, 100);
-    assert.equal(resolveShotRewindMs({ id: 's', isBot: false, rttMs: 120 }), 120 / 2 + INTERP_DELAY_MS);
+    assert.equal(resolveShotRewindMs({ id: 's', rttMs: 120 }), 120 / 2 + INTERP_DELAY_MS);
     assert.equal(new SnapshotInterpolator().interpDelayMs, INTERP_DELAY_MS);
     assert.ok(LAG_COMP_HISTORY_MS >= LAG_COMP_MAX_REWIND_MS + TICK_MS, 'history window covers the max rewind plus one tick');
     assert.ok(INTERP_DELAY_MS >= 2 * TICK_MS, 'render delay spans >= 2 snapshots');
@@ -587,12 +587,12 @@ describe('(i) headless Game3D draws remote players by snapshot interpolation', (
     const players = (T, over = {}) => [
       { id: 'me', name: 'Me', x: 0, y: 0, z: 0, yaw: 0, pitch: 0, alive: true, hp: 100, grenades: 1 },
       {
-        id: 'r1', name: 'R1', isBot: false, color: 0xef4444,
+        id: 'r1', name: 'R1', color: 0xef4444,
         x: pathX(T), y: 0, z: -12, vx: SPEED, vy: 0, vz: 0, yaw: yawAt(T), pitch: 0.1,
         crouching: false, prone: false, lean: 0, weapon: 'rifle', hp: 100, alive: true, ...over
       },
       {
-        id: 'b1', name: 'BOT', isBot: true, color: 0xf97316,
+        id: 'b1', name: 'STANDER', color: 0xf97316,
         x: -30, y: 0, z: 25, vx: 0, vy: 0, vz: 0, yaw: 1, pitch: 0,
         crouching: false, prone: false, lean: 0, weapon: 'smg', hp: 100, alive: true
       }
@@ -632,7 +632,7 @@ describe('(i) headless Game3D draws remote players by snapshot interpolation', (
     assert.ok(angDist(rp.group.rotation.y, yawAt(expectedT)) < 0.03, 'yaw interpolated');
     assert.ok(rp.smoothedSpeed > 4 && rp.smoothedSpeed < 8, `animation speed derived from interpolated motion: ${rp.smoothedSpeed}`);
     assert.ok(rp.group.position.x < pathX(lastSync), 'drawn behind the newest server snapshot (interpolation delay)');
-    assert.equal(game.remotePlayers.get('b1').smoothedSpeed, 0, 'standing bot has no walk animation');
+    assert.equal(game.remotePlayers.get('b1').smoothedSpeed, 0, 'standing remote player has no walk animation');
     assert.ok(!('serverPos' in rp), 'dead-reckoning state is gone');
 
     // Hitbox proxies follow the interpolated rig pose (matrices are updated like attemptShoot does before its raycast)
