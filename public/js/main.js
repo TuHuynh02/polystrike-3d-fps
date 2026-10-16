@@ -9,9 +9,23 @@ import {
 } from '../shared/constants.js';
 import { SoundEffects } from './audio.js';
 import { Game3D } from './game3d.js';
-import { createNetworkClient } from './networkAdapter.js';
+import { createNetworkClient, SERVER_UNREACHABLE_MESSAGE } from './networkAdapter.js';
 
-const netClient = await createNetworkClient();
+let netClient;
+let netInitFailed = false;
+try {
+  netClient = await createNetworkClient();
+} catch {
+  // Dedicated server unreachable (Socket.IO client missing): inert client so the lobby can show an error.
+  netInitFailed = true;
+  netClient = {
+    mode: 'offline',
+    socket: { connected: false, emit() {}, on() {}, volatile: { emit() {} } },
+    fetchRooms: async () => {
+      throw new Error(SERVER_UNREACHABLE_MESSAGE);
+    }
+  };
+}
 const socket = netClient.socket;
 const sfx = new SoundEffects();
 const hasDedicatedHeadshotDink = typeof SoundEffects.prototype.playHeadshotDink === 'function';
@@ -338,6 +352,8 @@ let lastLocalKillAt = 0;
 const MULTI_KILL_WINDOW_MS = 6500;
 let localGrenades = 1;
 let lastGrenadeThrowAt = 0;
+let currentPingMs = 0;
+let lastRoomBotCount = null;
 
 const hudCache = {
   hp: -1,
@@ -357,12 +373,14 @@ const hudCache = {
 
 // Initialize 3D Engine
 const game = new Game3D(canvasContainer, {
-  onMoveUpdate: (movePayload) => {
-    socket.emit('playerMove', movePayload);
+  // Client-side prediction: input commands (never positions) go to the server; it answers with `moveAck`
+  onInputBatch: (batch) => {
+    socket.emit('inputBatch', batch);
   },
-  onShoot: (shootPayload) => {
-    sfx.playShot(shootPayload.weapon, 0.92);
-    socket.emit('shoot', shootPayload);
+  // The shot itself travels inside the input commands (FIRE bit + shot sequence, see Game3D.advanceFixedPhysics): there is no
+  // `shoot` socket event. This callback only plays the local gunshot sound.
+  onLocalShot: (shot) => {
+    sfx.playShot(shot.weapon, 0.92);
   },
   onDryFire: () => {
     sfx.playDryFire();
@@ -372,11 +390,9 @@ const game = new Game3D(canvasContainer, {
     reloadIndicator.classList.remove('hidden');
     if (reloadText) {
       if (mode === 'shell') {
-        reloadText.textContent = `NẠP ĐẠN SHOTGUN (${ currentAmmo }/${ cfg.magSize } • DỰ TRỮ ${ reserveAmmo })...`;
-      } else if (mode === 'tactical') {
-        reloadText.textContent = 'NẠP ĐẠN CHIẾN THUẬT (NHANH)...';
+        reloadText.textContent = `NẠP ĐẠN (${ currentAmmo }/${ cfg.magSize })`;
       } else {
-        reloadText.textContent = 'NẠP ĐẠN TOÀN BỘ (LÊN ĐẠN)...';
+        reloadText.textContent = 'ĐANG NẠP ĐẠN...';
       }
     }
     if (reloadBarFill) {
@@ -395,7 +411,7 @@ const game = new Game3D(canvasContainer, {
     sfx.playShellInsert(isFull);
     updateWeaponHud(weaponId, currentAmmo, reserveAmmo);
     if (reloadText && !isFull) {
-      reloadText.textContent = `NẠP ĐẠN SHOTGUN (${ currentAmmo }/${ cfg.magSize } • DỰ TRỮ ${ reserveAmmo })...`;
+      reloadText.textContent = `NẠP ĐẠN (${ currentAmmo }/${ cfg.magSize })`;
     }
   },
   onReloadCancel: (weaponId, currentAmmo, reserveAmmo) => {
@@ -407,8 +423,25 @@ const game = new Game3D(canvasContainer, {
     updateWeaponHud(weaponId, currentAmmo, reserveAmmo);
   },
   onWeaponChanged: (weaponId, currentAmmo, reserveAmmo) => {
-    reloadIndicator.classList.add('hidden');
+    if (!game.reloadingUntil || game.reloadingUntil <= performance.now()) {
+      reloadIndicator.classList.add('hidden');
+    }
     updateWeaponHud(weaponId, currentAmmo, reserveAmmo);
+  },
+  onSelfState: (state) => {
+    if (!game.inMatch || !state) return;
+    if (typeof state.hp === 'number') {
+      updateHpHud(state.hp);
+    }
+    if (typeof state.grenades === 'number') {
+      const isThrowInFlight = state.grenades > localGrenades && (performance.now() - lastGrenadeThrowAt) < 350;
+      if (!isThrowInFlight) {
+        updateGrenadeHud(state.grenades);
+      }
+    }
+    if (!state.reloading && (!game.reloadingUntil || game.reloadingUntil <= performance.now())) {
+      reloadIndicator.classList.add('hidden');
+    }
   },
   onNearbyWeaponChange: (dropItem, remSec) => {
     if (!weaponPickupPrompt) return;
@@ -419,7 +452,7 @@ const game = new Game3D(canvasContainer, {
     const wCfg = WEAPONS[dropItem.weapon];
     const wName = wCfg ? wCfg.name : dropItem.weapon.toUpperCase();
     if (weaponPickupText) {
-      weaponPickupText.textContent = `Vứt súng chính & nhặt ${ wName } (${ dropItem.ammo }/${ dropItem.reserveAmmo })`;
+      weaponPickupText.textContent = `Nhặt ${ wName } (${ dropItem.ammo }/${ dropItem.reserveAmmo })`;
     }
     if (weaponPickupTimer) {
       weaponPickupTimer.textContent = `${ remSec.toFixed(1) }s`;
@@ -749,7 +782,7 @@ function triggerAdrenalineHealFeedback(healAmount = 25, serverHp = null) {
     : Math.min(100, (hudCache.hp > 0 ? hudCache.hp : 100) + cleanHeal);
   updateHpHud(nextHp);
 
-  const label = `+${ cleanHeal } HP ADRENALINE`;
+  const label = `+${ cleanHeal } HP`;
   if (hudAdrenalinePop) {
     hudAdrenalinePop.textContent = `⚡ ${ label }`;
     hudAdrenalinePop.classList.remove('hidden');
@@ -779,7 +812,7 @@ function showMultiKillBanner(multiKillCount = 1, victimName = 'Enemy', isHeadsho
   const clampedTier = Math.max(1, Math.min(5, Math.floor(Number(multiKillCount) || 1)));
   const tier = MULTI_KILL_TIERS[clampedTier] || MULTI_KILL_TIERS[1];
   const cleanVictim = (victimName || 'ENEMY').toUpperCase();
-  const hsPrefix = isHeadshot ? '🎯 HEADSHOT • ' : '';
+  const hsPrefix = isHeadshot ? '🎯 HS • ' : '';
 
   if (multikillBanner) {
     multikillBanner.classList.remove('hidden', 'mk-tier-1', 'mk-tier-2', 'mk-tier-3', 'mk-tier-4', 'mk-tier-5');
@@ -788,15 +821,13 @@ function showMultiKillBanner(multiKillCount = 1, victimName = 'Enemy', isHeadsho
     if (multikillMedal) multikillMedal.textContent = tier.medal;
     if (multikillTitle) multikillTitle.textContent = tier.title;
     if (multikillSubtitle) {
-      multikillSubtitle.textContent = `${ hsPrefix }HẠ GỤC ${ cleanVictim } • +${ healAmount } HP ADRENALINE`;
+      multikillSubtitle.textContent = `${ hsPrefix }${ cleanVictim } • +${ healAmount } HP`;
     }
     if (multikillBannerTimer) clearTimeout(multikillBannerTimer);
     multikillBannerTimer = setTimeout(() => {
       multikillBanner.classList.add('hidden');
     }, 2400);
   }
-
-  showCenterBanner(`${ tier.medal } ${ tier.title } • ${ hsPrefix }HẠ GỤC ${ cleanVictim } (+${ healAmount } HP ADRENALINE)`);
 }
 
 // Helper: [G] Frag Grenade HUD & KeyG Throw Action
@@ -838,7 +869,7 @@ function handleThrowGrenadeRequest(customPayload = null) {
   if (localGrenades <= 0) {
     lastGrenadeThrowAt = now;
     sfx.playDryFire?.();
-    showCenterBanner('💣 HẾT LỰU ĐẠN FRAG [0/1] — HỒI LẠI KHI HỒI SINH!');
+    showCenterBanner('💣 HẾT LỰU ĐẠN');
     return;
   }
 
@@ -882,12 +913,11 @@ async function copyInviteLinkToClipboard() {
   const shareUrl = getShareableRoomUrl(activeRoomCode);
   try {
     await navigator.clipboard.writeText(shareUrl);
-    showToast(`🔗 Đã sao chép link mời phòng #${ activeRoomCode }!`);
-    showCenterBanner(`ĐÃ COPY LINK PHÒNG #${ activeRoomCode }`);
+    showToast(`🔗 Đã copy link #${ activeRoomCode }`);
   } catch {
     pauseInviteUrl.select();
     document.execCommand('copy');
-    showToast(`🔗 Đã sao chép link mời: ${ shareUrl }`);
+    showToast(`🔗 Đã copy link #${ activeRoomCode }`);
   }
 }
 
@@ -971,7 +1001,7 @@ function syncHotbarSlotsHud() {
 function updateWeaponHud(weaponId, currentAmmo, reserveAmmo) {
   const cfg = WEAPONS[weaponId] || WEAPONS.rifle;
   hudWeaponName.textContent = cfg.name;
-  hudWeaponRole.textContent = cfg.role;
+  hudWeaponRole.textContent = cfg.category || cfg.categoryLabel || '';
 
   const ammoBlock = hudAmmoCurrent.closest('.weapon-ammo-block');
   if (cfg.isMelee || cfg.infiniteAmmo) {
@@ -999,7 +1029,7 @@ function updateWeaponHud(weaponId, currentAmmo, reserveAmmo) {
   });
 }
 
-// Render [B] Loadout Selection Modal Cards with Stat Bars
+// Render [B] Loadout Selection Modal Cards with Compact Spec Bars
 function renderLoadoutModal() {
   if (!loadoutPrimaryGrid || !loadoutSecondaryGrid) return;
 
@@ -1007,17 +1037,18 @@ function renderLoadoutModal() {
     const w = WEAPONS[wId];
     if (!w) return '';
     const st = w.stats || { damage: 70, fireRate: 70, recoilControl: 70, mobility: 70 };
-    const ammoTag = w.magSize > 1 ? `${ w.magSize }/${ w.reserveAmmo ?? w.magSize * 3 } VIÊN` : 'CẬN CHIẾN';
+    const ammoTag = w.magSize > 1 ? `${ w.magSize }/${ w.reserveAmmo ?? w.magSize * 3 }` : 'MELEE';
     return `
       <button type="button" class="weapon-option ${ isSelected ? 'active' : '' }" data-loadout-weapon="${ w.id }" data-loadout-slot="${ w.slot }">
-        <span class="weapon-key">[${ slotTag || w.category }] • ${ ammoTag }</span>
+        <div class="weapon-opt-top">
+          <span class="weapon-key">${ slotTag || w.category }</span>
+          <span class="weapon-dmg-pill">${ w.damage } DMG • ${ ammoTag }</span>
+        </div>
         <span class="weapon-name">${ w.name }</span>
-        <span class="weapon-desc">${ w.role }</span>
-        <div class="weapon-stat-bars">
-          <div class="weapon-stat-line"><span>DMG ${ w.damage }</span><div class="weapon-stat-track"><div class="weapon-stat-fill" style="width:${ st.damage }%"></div></div></div>
-          <div class="weapon-stat-line"><span>TỐC BẮN</span><div class="weapon-stat-track"><div class="weapon-stat-fill" style="width:${ st.fireRate }%"></div></div></div>
-          <div class="weapon-stat-line"><span>ỔN ĐỊNH</span><div class="weapon-stat-track"><div class="weapon-stat-fill" style="width:${ st.recoilControl }%"></div></div></div>
-          <div class="weapon-stat-line"><span>CƠ ĐỘNG</span><div class="weapon-stat-track"><div class="weapon-stat-fill" style="width:${ st.mobility }%"></div></div></div>
+        <div class="weapon-spec-bars" aria-hidden="true">
+          <span class="spec-chip"><i>DMG</i><b style="--pct:${ st.damage }%"></b></span>
+          <span class="spec-chip"><i>ROF</i><b style="--pct:${ st.fireRate }%"></b></span>
+          <span class="spec-chip"><i>CTL</i><b style="--pct:${ st.recoilControl }%"></b></span>
         </div>
       </button>
     `;
@@ -1117,7 +1148,7 @@ if (btnSaveLoadout) {
   btnSaveLoadout.addEventListener('click', () => {
     applySelectedLoadoutAndNotify();
     toggleLoadoutModal(false);
-    showToast(`🎒 Đã lưu Loadout (áp dụng khi hồi sinh): [1] ${ WEAPONS[selectedLoadout.primary].name } • [2] ${ WEAPONS[selectedLoadout.secondary].name }`);
+    showToast(`🎒 ${ WEAPONS[selectedLoadout.primary].name } + ${ WEAPONS[selectedLoadout.secondary].name }`);
   });
 }
 
@@ -1221,6 +1252,11 @@ function formatTime(sec) {
 // Join Room Action
 function requestJoinRoom({ mode = 'public', roomCode = '' }) {
   lobbyError.classList.add('hidden');
+  if (!socket.connected) {
+    lobbyError.textContent = `${ SERVER_UNREACHABLE_MESSAGE }. Vui lòng đợi hoặc tải lại trang.`;
+    lobbyError.classList.remove('hidden');
+    return;
+  }
   const rawName = playerNameInput.value.trim();
   const name = (rawName.replace(/[<>&"'`]/g, '').trim().slice(0, 16)) || userPrefs.playerName || 'Striker';
   const botCount = Number(lobbyBotCount.value);
@@ -1386,7 +1422,7 @@ btnCreatePrivate.addEventListener('click', () => {
 btnJoinCode.addEventListener('click', () => {
   const code = roomCodeInput.value.trim().toUpperCase();
   if (!code) {
-    lobbyError.textContent = 'Vui lòng nhập mã phòng gồm 6 ký tự (VD: A9F2K1).';
+    lobbyError.textContent = 'Nhập mã phòng 6 ký tự.';
     lobbyError.classList.remove('hidden');
     return;
   }
@@ -1469,7 +1505,7 @@ async function fetchActiveRooms() {
     const rooms = await netClient.fetchRooms();
 
     if (rooms.length === 0) {
-      activeRoomsList.innerHTML = `<div class="rooms-empty">Chưa có phòng nào đang mở — Hãy bấm "Vào Nhanh" hoặc "Tạo Phòng Riêng"!</div>`;
+      activeRoomsList.innerHTML = `<div class="rooms-empty">Chưa có phòng đang mở.</div>`;
       return;
     }
 
@@ -1479,9 +1515,9 @@ async function fetchActiveRooms() {
         <div class="room-item">
           <div>
             <span class="room-item-code">#${ r.code }</span>
-            <span> • ${ r.mapName || 'CYBER CITADEL' } • ${ r.humans } người + ${ r.bots } Bot (${ r.total }/${ r.maxPlayers })</span>
+            <span> • ${ r.mapName || 'CYBER CITADEL' } (${ r.total }/${ r.maxPlayers })</span>
           </div>
-          <button class="room-item-join" data-code="${ r.code }">Vào ngay</button>
+          <button class="room-item-join" data-code="${ r.code }">VÀO</button>
         </div>
       `
       )
@@ -1515,7 +1551,7 @@ function renderScoreboard(players) {
         <tr class="${ isMe ? 'sb-row-me' : '' }">
           <td>${ i + 1 }</td>
           <td>${ p.name } ${ isMe ? '(Bạn)' : '' }</td>
-          <td>${ p.isBot ? '🤖 Bot AI' : '👤 Người chơi' }</td>
+          <td>${ p.isBot ? '🤖 Bot' : '👤 Player' }</td>
           <td>${ p.kills }</td>
           <td>${ p.deaths }</td>
           <td>${ kd }</td>
@@ -1570,6 +1606,25 @@ function addKillFeedItem({ killerId, killerName, victimId, victimName, weapon, w
 
 // ======================== SOCKET.IO EVENT HANDLERS ========================
 
+let serverErrorShown = false;
+const showServerUnreachable = () => {
+  serverErrorShown = true;
+  lobbyError.textContent = `${ SERVER_UNREACHABLE_MESSAGE }. Đang thử kết nối lại...`;
+  lobbyError.classList.remove('hidden');
+};
+if (netInitFailed) showServerUnreachable();
+socket.on('connect_error', showServerUnreachable);
+socket.on('disconnect', () => {
+  if (!game.inMatch) showServerUnreachable();
+});
+socket.on('connect', () => {
+  if (serverErrorShown) {
+    serverErrorShown = false;
+    lobbyError.classList.add('hidden');
+  }
+  fetchActiveRooms();
+});
+
 socket.on('joinError', ({ message }) => {
   lobbyError.textContent = message;
   lobbyError.classList.remove('hidden');
@@ -1586,7 +1641,7 @@ socket.on('roomJoined', (data) => {
   game.loadMap(roomMapId);
   updateMapHud(roomMapId);
 
-  // Update browser URL with ?room=CODE so copying URL directly from address bar works (relative for GitHub Pages subpaths)
+  // Update browser URL with ?room=CODE so copying URL directly from address bar works
   const shareUrl = getShareableRoomUrl(activeRoomCode);
   window.history.replaceState(null, '', `?room=${ activeRoomCode }`);
 
@@ -1594,6 +1649,7 @@ socket.on('roomJoined', (data) => {
   sbRoomCode.textContent = `#${ activeRoomCode }`;
   pauseInviteUrl.value = shareUrl;
   pauseBotSelect.value = String(data.botCount ?? 4);
+  lastRoomBotCount = data.botCount ?? 4;
   hudKillLimit.textContent = String(data.killLimit || 20);
   hudTimer.textContent = formatTime(data.timeRemaining || 300);
 
@@ -1608,6 +1664,7 @@ socket.on('roomJoined', (data) => {
     selectedLoadout.primary = data.player.weapon || selectedStartingWeapon;
   }
   game.setLoadout(selectedLoadout, selectedLoadout.primary);
+  game.resetNetcode(data.player.moveEpoch); // fresh command sequence for the new server-side player
   game.spawnLocalPlayer(data.player);
   localMultiKillCount = 0;
   lastLocalKillAt = 0;
@@ -1638,11 +1695,15 @@ socket.on('roomJoined', (data) => {
   hudScreen.classList.remove('hidden');
 
   game.requestPointerLock();
-  showToast(`🎯 Đã vào Phòng #${ activeRoomCode } (${ getMapConfig(roomMapId).name })! Bấm [B] đổi kho súng, [L] Copy Link.`);
+  showToast(`🎯 Phòng #${ activeRoomCode } • ${ getMapConfig(roomMapId).name }`);
 });
 
 socket.on('loadoutUpdated', (data) => {
   if (!game.inMatch) return;
+  if (data?.loadout?.pending) {
+    // Mid-life loadout swaps are applied on the next respawn (prefs below keep the pending pick)
+    showToast('🎒 Trang bị mới sẽ có hiệu lực khi hồi sinh');
+  }
   if (data?.loadout) {
     selectedLoadout = {
       primary: data.loadout.primary || selectedLoadout.primary,
@@ -1654,15 +1715,15 @@ socket.on('loadoutUpdated', (data) => {
     syncLobbyWeaponSelectionUi(selectedStartingWeapon);
     syncHotbarSlotsHud();
     saveUserPrefs({
-      primaryWeapon: selectedLoadout.primary,
-      secondaryWeapon: selectedLoadout.secondary
+      primaryWeapon: data.loadout.pending?.primary || selectedLoadout.primary,
+      secondaryWeapon: data.loadout.pending?.secondary || selectedLoadout.secondary
     });
   }
 });
 
 socket.on('playerJoined', (data) => {
   if (!game.inMatch || !data?.name) return;
-  showToast(`👤 Chiến binh ${ data.name } đã tham gia phòng #${ activeRoomCode }!`);
+  showToast(`👤 ${ data.name } đã vào phòng`);
 });
 
 socket.on('mapChanged', (data) => {
@@ -1691,8 +1752,87 @@ socket.on('mapChanged', (data) => {
     updateGrenadeHud(me.grenades ?? me.grenadeCount ?? 1);
     triggerSpawnProtectionHud(MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500);
   }
-  showToast(`🗺️ Đã chuyển sang bản đồ: ${ data.mapName || getMapConfig(newMapId).name }`);
-  showCenterBanner(`🗺️ BẢN ĐỒ MỚI: ${ data.mapName || getMapConfig(newMapId).name }`);
+  showToast(`🗺️ ${ data.mapName || getMapConfig(newMapId).name }`);
+});
+
+// Server RTT probe: echo straight back so the server can measure round-trip time itself
+socket.on('latencyProbe', (t, cb) => cb?.(t));
+
+// Server ended our spawn protection early (we fired / threw a grenade)
+socket.on('spawnProtectionEnded', (data) => {
+  if (data?.playerId && data.playerId === game.localId) clearSpawnProtectionHud();
+});
+
+socket.on('botsUpdated', (data) => {
+  if (!game.inMatch || !Array.isArray(data?.players)) return;
+  if (typeof data.botCount === 'number') {
+    lastRoomBotCount = data.botCount;
+    pauseBotSelect.value = String(data.botCount);
+  }
+  latestPlayers = data.players;
+  game.syncPlayersState(latestPlayers);
+});
+
+// Server rejected a host-only action (map / bot count): tell the player and restore the controls
+socket.on('actionDenied', (data) => {
+  if (!game.inMatch) return;
+  showToast(`⛔ ${ data?.message || 'Hành động không được phép.' }`);
+  if (data?.action === 'changeMap') {
+    updateMapHud(game.currentMapConfig?.id || selectedMapId);
+  } else if (data?.action === 'setBots' && lastRoomBotCount !== null) {
+    pauseBotSelect.value = String(lastRoomBotCount);
+  }
+});
+
+socket.on('hostChanged', (data) => {
+  if (!game.inMatch || !data?.name) return;
+  showToast(`👑 ${ data.name } là chủ phòng mới`);
+});
+
+// Authoritative movement state for the commands the server has simulated (sent to this player only):
+// reconciles the client-side prediction (epoch change = server teleport/respawn => snap)
+socket.on('moveAck', (ack) => {
+  game.applyMoveAck(ack);
+});
+
+// Owner-only secret of the deterministic weapon spread for the new life (the server sends it right before the
+// `playerRespawned` broadcast; the first one arrives inside `roomJoined.player.spreadSeed`)
+socket.on('selfSeed', (data) => {
+  game.setSpreadSeed(data?.spreadSeed);
+});
+
+let lastShotRejectToastAt = 0;
+const SHOT_REJECT_MESSAGES = {
+  ammo: 'Hết đạn — đã đồng bộ lại băng đạn',
+  reload: 'Đang nạp đạn — phát bắn bị huỷ',
+  rate: 'Nhịp bắn chưa hồi — đã hoàn trả đạn',
+  weapon: 'Lệch vũ khí — đã đồng bộ lại',
+  seq: 'Lệch thứ tự phát bắn — đã đồng bộ lại',
+  dead: 'Đã hạ gục — phát bắn không hợp lệ'
+};
+
+// Owner-only shot rejection: refund predicted ammo for `ss`, cancel ghost tracer/recoil, and show a non-spammy warning
+socket.on('shotRejected', (data) => {
+  if (!game.inMatch || !data) return;
+  game.applyShotRejected(data);
+  const now = performance.now();
+  if (now - lastShotRejectToastAt >= 1800) {
+    lastShotRejectToastAt = now;
+    const msg = SHOT_REJECT_MESSAGES[data.reason] || 'Phát bắn bị từ chối — đã đồng bộ lại đạn';
+    showToast(`⚠️ ${ msg }`);
+  }
+});
+
+// Owner-only combat/ammo/reload state reconciliation (~8Hz + on state change)
+socket.on('selfState', (state) => {
+  if (!game.inMatch || !state) return;
+  game.applySelfState(state);
+});
+
+socket.on('playerLeft', (data) => {
+  if (!game.inMatch || !data?.playerId) return;
+  latestPlayers = latestPlayers.filter((p) => p.id !== data.playerId);
+  game.syncPlayersState(latestPlayers);
 });
 
 socket.on('stateUpdate', (snapshot) => {
@@ -1703,7 +1843,11 @@ socket.on('stateUpdate', (snapshot) => {
     hudTimer.textContent = formatTime(remSec);
   }
   latestPlayers = snapshot.players || [];
-  game.syncPlayersState(latestPlayers);
+  // `snapshot.t` = server timestamp (ms) of this tick: remote players are drawn by snapshot interpolation
+  game.syncPlayersState(latestPlayers, snapshot.t);
+  if (Array.isArray(snapshot.pickups)) {
+    game.syncPickups(snapshot.pickups);
+  }
   if (Array.isArray(snapshot.droppedWeapons)) {
     game.syncDroppedWeapons(snapshot.droppedWeapons);
   }
@@ -1742,7 +1886,7 @@ socket.on('stateUpdate', (snapshot) => {
   }
 
   if (topPlayer) {
-    const nextLeaderText = `Dẫn đầu: ${ topPlayer.name } (${ topPlayer.kills }/${ hudKillLimit.textContent } Kills)`;
+    const nextLeaderText = `👑 ${ topPlayer.name } (${ topPlayer.kills }/${ hudKillLimit.textContent })`;
     if (hudCache.leaderText !== nextLeaderText) {
       hudCache.leaderText = nextLeaderText;
       hudLeader.textContent = nextLeaderText;
@@ -1776,6 +1920,14 @@ socket.on('shotFired', (data) => {
 
 socket.on('damageDealt', (data) => {
   if (!game.inMatch) return;
+
+  if (data.targetId && data.targetId !== game.localId && typeof data.hp === 'number') {
+    const rp = game.remotePlayers?.get(data.targetId);
+    if (rp) {
+      rp.hp = data.hp;
+      rp.labelInfo?.updateLabel(data.hp);
+    }
+  }
 
   // We hit an enemy -> Show Distinct Body/Headshot/Kill Hitmarker + Floating 3D/HUD Damage Popup
   if (data.attackerId === game.localId && data.targetId !== game.localId) {
@@ -1833,13 +1985,23 @@ socket.on('damageDealt', (data) => {
 socket.on('spawnProtectedHit', (data) => {
   if (!game.inMatch) return;
   if (data.attackerId === game.localId) {
-    showCenterBanner('🛡️ MỤC TIÊU ĐANG BẤT TỬ HỒI SINH (1.5s)!');
+    showCenterBanner('🛡️ MỤC TIÊU BẤT TỬ');
   }
 });
 
 socket.on('killEvent', (data) => {
   if (!game.inMatch) return;
   addKillFeedItem(data);
+
+  if (data.victimId && data.victimId !== game.localId) {
+    const victimRp = game.remotePlayers?.get(data.victimId);
+    if (victimRp) {
+      victimRp.alive = false;
+      if (victimRp.group) victimRp.group.visible = false;
+      if (victimRp.labelInfo?.sprite) victimRp.labelInfo.sprite.visible = false;
+      game.rebuildHitboxList?.();
+    }
+  }
 
   if (data.killerId === game.localId && data.victimId !== game.localId) {
     const now = performance.now();
@@ -1916,6 +2078,23 @@ socket.on('killEvent', (data) => {
 
 socket.on('playerRespawned', (data) => {
   if (!game.inMatch) return;
+  if (data.playerId && data.playerId !== game.localId) {
+    const rp = game.remotePlayers?.get(data.playerId);
+    if (rp) {
+      rp.alive = true;
+      rp.hp = typeof data.hp === 'number' ? data.hp : 100;
+      rp.labelInfo?.updateLabel(rp.hp);
+      if (rp.labelInfo?.sprite) rp.labelInfo.sprite.visible = true;
+      if (rp.group) {
+        rp.group.position.set(data.x || 0, data.y || 0, data.z || 0);
+        rp.group.rotation.y = data.yaw || 0;
+        rp.group.visible = true;
+      }
+      // Respawn: drop the snapshot history of this entity (no interpolation streak from the death position)
+      game.resetRemoteInterpolation?.(data.playerId, data.x || 0, data.y || 0, data.z || 0, data.yaw || 0);
+      game.rebuildHitboxList?.();
+    }
+  }
   if (data.playerId === game.localId) {
     if (respawnInterval) clearInterval(respawnInterval);
     deathOverlay.classList.add('hidden');
@@ -1935,7 +2114,6 @@ socket.on('playerRespawned', (data) => {
     updateHpHud(data.hp);
     updateGrenadeHud(data.grenades ?? data.grenadeCount ?? 1);
     triggerSpawnProtectionHud(data.spawnProtectionMs || MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500);
-    showCenterBanner('🛡️ BẤT TỬ HỒI SINH (1.5s)');
   }
 });
 
@@ -1980,10 +2158,18 @@ socket.on('pickupState', (data) => {
   if (!game.inMatch) return;
   game.updatePickupSingle(data.pickupId, data.active);
 
+  if (data.pickerId && data.pickerId !== game.localId && typeof data.newHp === 'number') {
+    const rp = game.remotePlayers?.get(data.pickerId);
+    if (rp) {
+      rp.hp = data.newHp;
+      rp.labelInfo?.updateLabel(data.newHp);
+    }
+  }
+
   if (data.pickerId === game.localId && !data.active) {
     sfx.playPickup();
     updateHpHud(data.newHp);
-    showCenterBanner('💚 +50 HP ĐÃ HỒI MÁU!');
+    showCenterBanner('💚 +50 HP');
   }
 });
 
@@ -2007,7 +2193,7 @@ socket.on('weaponSwapped', (data) => {
     game.applySwappedWeapon(data);
     sfx.playWeaponDrop?.();
     const wCfg = WEAPONS[data.weapon];
-    showCenterBanner(`🔫 ĐÃ NHẶT ${ wCfg ? wCfg.name : data.weapon } (${ data.ammo }/${ data.reserveAmmo })`);
+    showCenterBanner(`🔫 ${ wCfg ? wCfg.name : data.weapon } (${ data.ammo }/${ data.reserveAmmo })`);
   }
 });
 
@@ -2083,7 +2269,7 @@ socket.on('matchStarted', (data) => {
     updateGrenadeHud(me.grenades ?? me.grenadeCount ?? 1);
     triggerSpawnProtectionHud(MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500);
   }
-  showCenterBanner('🔥 VÁN ĐẤU MỚI BẮT ĐẦU! (🛡️ 1.5s BẤT TỬ)');
+  showCenterBanner('🔥 BẮT ĐẦU');
   game.requestPointerLock();
 });
 
@@ -2093,6 +2279,8 @@ setInterval(() => {
   const start = performance.now();
   socket.emit('pingCheck', start, () => {
     const rtt = Math.round(performance.now() - start);
+    currentPingMs = rtt;
     hudPing.textContent = String(rtt);
+    game.setNetworkRtt?.(rtt); // render clock: adds the one-way latency back into the server-time estimate
   });
 }, 2500);

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import {
   DEFAULT_MAP_ID,
   MAPS,
@@ -8,7 +9,10 @@ import {
   getEffectiveFireRateMs,
   getMapConfig,
   hasLineOfSight,
-  isPointClearOfObstacles
+  isPointClearOfObstacles,
+  isPointInsideInflatedBoxes,
+  rayIntersectsAABB,
+  stepGrenade
 } from '../shared/constants.js';
 import {
   KILL_ADRENALINE_HEAL,
@@ -19,7 +23,32 @@ import {
   restoreRewoundPlayers,
   rewindRoomPlayersForShot
 } from '../shared/lagCompensation.js';
+import { PART_PADDING } from '../shared/hitboxes.js';
+import { FIXED_DT, createMovementState } from '../shared/movement.js';
+import {
+  BTN,
+  MAX_SHOT_SEQ_GAP,
+  commandTimeMs,
+  createMoveAck,
+  isFireIntervalOk,
+  movementStateFromAck,
+  sanitizeInputCommand,
+  stepCommand
+} from '../shared/netcode.js';
+import { computeShotOrigin, createShotState, planShot, resetShotState } from '../shared/spread.js';
 import { createBotEntity, updateRoomBots } from './botAI.js';
+
+const TICK_INTERVAL_MS = 40; // 25Hz server simulation / state broadcast
+
+// ---- Input-command netcode (client-side prediction + server reconciliation) ----
+// A command always costs exactly FIXED_DT of simulated player time. The server only simulates as much player time as
+// real time has passed (time-credit bucket), so neither a burst of commands nor a fast client clock can speed-hack.
+export const INPUT_QUEUE_MAX = 64; // queued, not yet simulated commands per player
+export const INPUT_BATCH_MAX_CMDS = 32; // commands read from one `inputBatch`
+export const INPUT_CREDIT_CAP_S = 0.25; // largest real-time credit a player may bank (= max catch-up burst)
+export const INPUT_GAP_WAIT_MS = 100; // wait this long for a missing seq (reordering / lost batch) before skipping it
+export const INPUT_SEQ_AHEAD_MAX = 3600; // reject seqs further than this (1 minute) beyond the last processed one
+export const STALE_EPOCH_ACK_INTERVAL_MS = 100; // throttle of the resync ack sent in reply to stale-epoch batches
 
 function round1(val) {
   return Number.isFinite(val) ? (Math.round(val * 10) / 10) + 0 : 0;
@@ -81,6 +110,65 @@ export function sanitizeLoadout(raw = {}, fallbackPrimary = 'rifle') {
   };
 }
 
+// ---- Server-side movement / shot validation limits (client is never trusted for these) ----
+// Movement uses a "distance budget" that refills with server time, so neither one big teleport
+// nor a flood of small packets can move a player faster than MOVE_MAX_SPEED on average.
+export const MOVE_MAX_SPEED = (MATCH_CONFIG.SLIDE_INITIAL_SPEED || 11.2) * 1.25; // m/s horizontal
+export const MOVE_BUDGET_CAP_XZ = MOVE_MAX_SPEED * 1.2 + 1.5;
+export const MOVE_UP_SPEED = (MATCH_CONFIG.JUMP_FORCE || 8) * 1.5; // m/s upward (jump, step-up)
+export const MOVE_DOWN_SPEED = 35; // m/s downward (terminal fall speed is clamped to 30)
+export const MOVE_BUDGET_CAP_UP = MOVE_UP_SPEED * 0.6 + 1.0; // ~8 m: jump apex is ~1.5 m, so a big climb needs real time
+export const MOVE_BUDGET_CAP_DOWN = MOVE_DOWN_SPEED * 1.2 + 1.5;
+export const MOVE_CORRECTION_INTERVAL_MS = 250;
+
+/** Reason codes of `player.lastShotReject = { ss, reason }` (a fire command the server did not simulate). */
+export const SHOT_REJECT = Object.freeze({
+  SEQ: 'seq', // `ss` not strictly increasing, or an implausible jump
+  WEAPON: 'weapon', // command weapon is not the equipped / allowed one
+  RATE: 'rate', // fired faster than the weapon allows (measured in command sim time)
+  RELOAD: 'reload', // reloading
+  AMMO: 'ammo', // empty magazine
+  DEAD: 'dead', // shooter is dead
+  STATE: 'state' // match not running
+});
+
+/** Interval (ms) of periodic owner-only `selfState` reconciliation (~8.3 Hz). */
+export const SELF_STATE_INTERVAL_MS = 120;
+
+function randomSpreadSeed() {
+  return randomBytes(4).readUInt32BE(0);
+}
+
+const roundTo = (v, k) => Math.round(v * k) / k;
+
+const mapCeilingCache = new WeakMap();
+
+function getMapCeilingY(mapCfg) {
+  if (!mapCfg) return 4;
+  let ceiling = mapCeilingCache.get(mapCfg);
+  if (ceiling === undefined) {
+    let top = 0;
+    for (const box of mapCfg.obstacles || []) {
+      const t = box.maxY !== undefined ? box.maxY : box.y + box.h * 0.5;
+      if (t > top) top = t;
+    }
+    ceiling = top + 2.0; // standing on the tallest surface + jump apex headroom
+    mapCeilingCache.set(mapCfg, ceiling);
+  }
+  return ceiling;
+}
+
+function isFiniteVec(v) {
+  return Boolean(v) && Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z);
+}
+
+function normalizeDir(v) {
+  if (!isFiniteVec(v)) return null;
+  const len = Math.hypot(v.x, v.y, v.z);
+  if (!(len > 1e-6)) return null;
+  return { x: v.x / len, y: v.y / len, z: v.z / len };
+}
+
 export function generateRoomCode(existingRooms) {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   for (let attempt = 0; attempt < 50; attempt++) {
@@ -98,9 +186,147 @@ export class RoomManager {
     this.io = io;
     this.rooms = new Map();
     this.lastTickAt = Date.now();
+    this.latencyProbes = new Map(); // socketId -> interval timer of the server-side RTT probe
 
-    // 25Hz simulation and state broadcast loop
-    this.tickInterval = setInterval(() => this.tick(), 40);
+    // 25Hz simulation and state broadcast loop: drift-corrected self-scheduling timer (see startTickLoop)
+    this._tickTimer = null;
+    this._tickStopped = true;
+    this.startTickLoop();
+  }
+
+  /**
+   * `tickInterval` is the handle of the pending tick timer. It is always a real (unref'd) Timeout, so
+   * `clearInterval(rm.tickInterval)` / `clearTimeout(rm.tickInterval)` stop the loop (the next slot is only scheduled
+   * from inside the timer callback), and assigning `null` stops it too. `rm.stop()` is the explicit API.
+   */
+  get tickInterval() {
+    return this._tickTimer;
+  }
+
+  set tickInterval(timer) {
+    if (timer === null || timer === undefined) {
+      this.stopTickLoop();
+      return;
+    }
+    this._tickTimer = timer;
+  }
+
+  /**
+   * Starts the drift-corrected simulation loop. Instead of `setInterval` (which accumulates drift and bursts
+   * catch-up ticks after a stall), every run targets the next absolute slot `slotAt0 + n * TICK_INTERVAL_MS`
+   * measured with performance.now(); slots that were already missed during a long tick/GC pause are skipped.
+   * The timer is unref'd so it never keeps the process alive.
+   */
+  startTickLoop() {
+    this.stopTickLoop();
+    this._tickStopped = false;
+    this._nextTickSlotAt = performance.now() + TICK_INTERVAL_MS;
+    this._scheduleNextTick();
+    return this._tickTimer;
+  }
+
+  stopTickLoop() {
+    this._tickStopped = true;
+    if (this._tickTimer) {
+      clearTimeout(this._tickTimer);
+      this._tickTimer = null;
+    }
+  }
+
+  stop() {
+    this.stopTickLoop();
+  }
+
+  _scheduleNextTick() {
+    if (this._tickStopped) return;
+    const nowPerf = performance.now();
+    const delay = Math.max(0, this._nextTickSlotAt - nowPerf);
+    const timer = setTimeout(() => this._onTickSlot(), delay);
+    if (typeof timer.unref === 'function') timer.unref();
+    this._tickTimer = timer;
+  }
+
+  _onTickSlot() {
+    this._tickTimer = null;
+    if (this._tickStopped) return;
+    try {
+      this.tick();
+    } finally {
+      // Advance to the next absolute slot strictly in the future, skipping any slots missed while ticking
+      const afterPerf = performance.now();
+      let nextSlot = this._nextTickSlotAt + TICK_INTERVAL_MS;
+      if (nextSlot <= afterPerf) {
+        const missed = Math.floor((afterPerf - nextSlot) / TICK_INTERVAL_MS) + 1;
+        nextSlot += missed * TICK_INTERVAL_MS;
+      }
+      this._nextTickSlotAt = nextSlot;
+      this._scheduleNextTick();
+    }
+  }
+
+  /**
+   * Feeds one server-measured round-trip sample into `player.rttMs` (exponential moving average,
+   * clamped to 0..MAX_RTT_MS). Client-reported ping/latency values are never used for lag compensation.
+   */
+  recordRtt(player, rttMs) {
+    if (!player || typeof rttMs !== 'number' || !Number.isFinite(rttMs)) return null;
+    const maxRtt = MATCH_CONFIG.MAX_RTT_MS || 1000;
+    const sample = Math.max(0, Math.min(maxRtt, rttMs));
+    const alpha = MATCH_CONFIG.LATENCY_EMA_ALPHA || 0.3;
+    const prev = player.rttMs;
+    player.rttMs = (typeof prev === 'number' && Number.isFinite(prev) && player.rttSamples > 0)
+      ? Math.max(0, Math.min(maxRtt, prev + (sample - prev) * alpha))
+      : sample;
+    player.rttSamples = (player.rttSamples || 0) + 1;
+    return player.rttMs;
+  }
+
+  /**
+   * Starts (or restarts) the periodic server -> client latency probe for a human player.
+   * Emits `latencyProbe(serverTime, ack)`; the client replies by calling the ack, and the RTT is measured
+   * with the server's own monotonic clock. The timer is cleared by `stopLatencyProbe` / `removePlayer`.
+   */
+  startLatencyProbe(socket, player) {
+    if (!socket || !player || player.isBot || typeof socket.emit !== 'function') return null;
+    this.stopLatencyProbe(socket.id);
+
+    const intervalMs = MATCH_CONFIG.LATENCY_PROBE_INTERVAL_MS || 2000;
+    const sendProbe = () => {
+      if (socket.disconnected) {
+        this.stopLatencyProbe(socket.id);
+        return;
+      }
+      const sentAt = performance.now();
+      socket.emit('latencyProbe', Date.now(), () => {
+        this.recordRtt(player, performance.now() - sentAt);
+      });
+    };
+
+    const timer = setInterval(sendProbe, intervalMs);
+    if (typeof timer.unref === 'function') timer.unref();
+    this.latencyProbes.set(socket.id, timer);
+    sendProbe();
+    return timer;
+  }
+
+  stopLatencyProbe(socketId) {
+    const timer = this.latencyProbes.get(socketId);
+    if (timer) {
+      clearInterval(timer);
+      this.latencyProbes.delete(socketId);
+    }
+  }
+
+  /**
+   * Ends a player's spawn protection early (fired a shot / threw a grenade / dealt damage) and tells the room.
+   */
+  endSpawnProtection(room, player, now = Date.now()) {
+    if (!player || !(player.invulnerableUntil > now)) return false;
+    player.invulnerableUntil = 0;
+    if (room?.code) {
+      this.io.to(room.code).emit('spawnProtectionEnded', { playerId: player.id });
+    }
+    return true;
   }
 
   createPickupsForMap(mapId) {
@@ -133,7 +359,8 @@ export class RoomManager {
       pickups: this.createPickupsForMap(cleanMapId),
       droppedWeapons: [],
       grenades: [],
-      recentSpawns: []
+      recentSpawns: [],
+      hostId: null // first human in the room; only the host may change map / bot count
     };
 
     this.rooms.set(roomCode, room);
@@ -504,6 +731,12 @@ export class RoomManager {
       invulnerableUntil: now + protectionMs,
       lastDeathX: null,
       lastDeathZ: null,
+      // Shots in the command stream (see processFireCommand): `ss` bookkeeping + the owner-only spread seed
+      lastShotSeq: 0,
+      lastFireCmdTimeMs: -Infinity,
+      lastShotReject: null,
+      spreadSeed: 0,
+      shotState: createShotState(),
       _staticMeta: {
         id: socket.id,
         name: cleanName,
@@ -512,17 +745,102 @@ export class RoomManager {
       }
     };
 
+    // Input-command netcode state (epoch 1 = the spawn); `moveEpoch` is sent to the client in `roomJoined`
+    player.moveEpoch = 0;
+    player.lastProcessedSeq = 0;
+    this.resetPlayerMovement(player, now);
+    this.resetShotSession(player);
     recordPlayerSnapshot(player, now);
     room.players.set(socket.id, player);
+    this.ensureRoomHost(room);
     this.syncRoomBots(room);
     recordRoomSnapshots(room, now);
 
     return { room, player };
   }
 
+  /**
+   * Keeps `room.hostId` pointing at a live human (the earliest one still in the room).
+   * Returns true when the host changed.
+   */
+  ensureRoomHost(room) {
+    if (!room) return false;
+    const current = room.hostId ? room.players.get(room.hostId) : null;
+    if (current && !current.isBot) return false;
+    let next = null;
+    for (const p of room.players.values()) {
+      if (!p.isBot) {
+        next = p.id;
+        break;
+      }
+    }
+    const changed = next !== room.hostId;
+    room.hostId = next;
+    return changed && next !== null;
+  }
+
+  /**
+   * Starts a fresh shooting session for a human (join, respawn, new match): a new random 32-bit `spreadSeed` and a clean
+   * bloom / spray state. The seed is secret to its owner and is delivered ONLY to that socket (`roomJoined.player` and the
+   * owner-only `selfSeed` event), never in a room broadcast. `lastShotSeq` is deliberately kept: the client's `ss` counter
+   * keeps counting across lives (it is reset together with the player object on join).
+   */
+  resetShotSession(player) {
+    if (!player || player.isBot) return null;
+    player.spreadSeed = randomSpreadSeed();
+    player.shotState = player.shotState ? resetShotState(player.shotState) : createShotState();
+    player.lastFireCmdTimeMs = -Infinity;
+    return player.spreadSeed;
+  }
+
+  isRoomHost(room, playerId) {
+    return Boolean(room && playerId && room.hostId === playerId);
+  }
+
+  /** Host-only: change the number of bots. Returns { ok, error?, botCount?, players? }. */
+  handleSetBots(room, player, payload = {}) {
+    if (!room || !player || player.isBot) return { ok: false, error: 'invalid' };
+    if (!this.isRoomHost(room, player.id)) return { ok: false, error: 'not_host' };
+    const count = Math.max(0, Math.min(MATCH_CONFIG.MAX_BOTS, Math.floor(Number(payload?.botCount) || 0)));
+    room.desiredBots = count;
+    this.syncRoomBots(room);
+    return { ok: true, botCount: room.desiredBots, players: this.serializePlayers(room) };
+  }
+
+  /** Host-only: switch the room's map (emits `mapChanged` itself). Returns { ok, error? }. */
+  handleChangeMap(room, player, payload = {}) {
+    if (!room || !player || player.isBot) return { ok: false, error: 'invalid' };
+    if (!this.isRoomHost(room, player.id)) return { ok: false, error: 'not_host' };
+    this.changeRoomMap(room, payload?.mapId);
+    return { ok: true };
+  }
+
+  /**
+   * A human may only use weapons from their server-side loadout (primary / secondary / melee).
+   * Bots are exempt (they are server-controlled).
+   */
+  isWeaponAllowed(player, weaponId) {
+    if (!WEAPONS[weaponId]) return false;
+    if (!player || player.isBot) return true;
+    const lo = player.loadout;
+    return weaponId === lo?.primary || weaponId === lo?.secondary || weaponId === (lo?.melee || 'knife');
+  }
+
   handleUpdateLoadout(room, player, payload = {}) {
     if (!room || !player || player.isBot) return null;
     const nextLoadout = sanitizeLoadout(payload, player.loadout?.primary || 'rifle');
+
+    // Changing loadout mid-life used to refill ammo and unlock any weapon for free. Now a live player
+    // can only swap while dead or inside the spawn-protection window; otherwise it applies on respawn.
+    const now = Date.now();
+    const canApplyNow = !player.alive || (player.invulnerableUntil && now < player.invulnerableUntil);
+    if (!canApplyNow) {
+      player.pendingLoadout = nextLoadout;
+      player.savedLoadoutPrimary = nextLoadout.primary;
+      return { ...player.loadout, pending: nextLoadout };
+    }
+
+    player.pendingLoadout = null;
     player.loadout = nextLoadout;
     player.savedLoadoutPrimary = nextLoadout.primary;
 
@@ -599,6 +917,7 @@ export class RoomManager {
   }
 
   removePlayer(socketId) {
+    this.stopLatencyProbe(socketId);
     for (const [code, room] of this.rooms.entries()) {
       if (room.players.has(socketId)) {
         const leaving = room.players.get(socketId);
@@ -612,17 +931,22 @@ export class RoomManager {
 
         if (this.getHumanCount(room) === 0) {
           this.rooms.delete(code);
+        } else if (this.ensureRoomHost(room)) {
+          const host = room.players.get(room.hostId);
+          this.io.to(code).emit('hostChanged', { hostId: room.hostId, name: host?.name || 'Player' });
         }
         return;
       }
     }
   }
 
-  syncPlayerReloadState(player, now = Date.now()) {
+  syncPlayerReloadState(player, now = Date.now(), emitIfChanged = true) {
     if (!player || !player.reloadingUntil) return;
 
     const wId = player.reloadWeapon || player.weapon;
     const cfg = WEAPONS[wId] || WEAPONS.rifle;
+    const prevAmmo = player.ammoByWeapon?.[wId] ?? player.ammo ?? 0;
+    const prevReloading = player.reloadingUntil;
 
     if (cfg.shellByShell) {
       // Advance shell-by-shell insertion for shotgun, consuming from reserveAmmo
@@ -685,8 +1009,76 @@ export class RoomManager {
         }
       }
     }
+
+    const postAmmo = player.ammoByWeapon?.[wId] ?? player.ammo ?? 0;
+    if (emitIfChanged && !player.isBot && (postAmmo !== prevAmmo || player.reloadingUntil !== prevReloading)) {
+      this.sendSelfState(player, now, true);
+    }
   }
 
+  /**
+   * LEGACY (internal compatibility API, no longer wired to any socket event): the client-authoritative position path
+   * of the old `playerMove` packet. Live movement now goes through input commands (`handleInputBatch` +
+   * `processPlayerInputs`); this and `handlePlayerMove` are kept only because the unit tests drive them directly.
+   *
+   * Validates the position claimed by a move packet against per-player distance budgets that refill
+   * with server time (horizontal MOVE_MAX_SPEED, upward MOVE_UP_SPEED, downward MOVE_DOWN_SPEED).
+   * Accepted: position is applied (clamped to arena/map ceiling). Rejected: position is kept and the
+   * client is told to snap back via `positionCorrection` (rate limited).
+   * Returns true when the claimed position (if any) was accepted.
+   */
+  applyMovePosition(room, player, payload, mapCfg, now) {
+    const hasX = typeof payload.x === 'number' && Number.isFinite(payload.x);
+    const hasY = typeof payload.y === 'number' && Number.isFinite(payload.y);
+    const hasZ = typeof payload.z === 'number' && Number.isFinite(payload.z);
+    if (!hasX && !hasY && !hasZ) return true;
+
+    const limit = (mapCfg.arenaHalfSize || MATCH_CONFIG.ARENA_HALF_SIZE) - 0.4;
+    const ceiling = getMapCeilingY(mapCfg);
+    const nx = hasX ? Math.max(-limit, Math.min(limit, payload.x)) : player.x;
+    const ny = hasY ? Math.max(-2, Math.min(ceiling, payload.y)) : player.y;
+    const nz = hasZ ? Math.max(-limit, Math.min(limit, payload.z)) : player.z;
+
+    const elapsed = player.lastPosAt === undefined
+      ? 0
+      : Math.max(0, Math.min(1.5, (now - player.lastPosAt) / 1000));
+    player.lastPosAt = now;
+    player.moveBudgetXZ = Math.min(MOVE_BUDGET_CAP_XZ, (player.moveBudgetXZ ?? MOVE_BUDGET_CAP_XZ) + MOVE_MAX_SPEED * elapsed);
+    player.moveBudgetUp = Math.min(MOVE_BUDGET_CAP_UP, (player.moveBudgetUp ?? MOVE_BUDGET_CAP_UP) + MOVE_UP_SPEED * elapsed);
+    player.moveBudgetDown = Math.min(MOVE_BUDGET_CAP_DOWN, (player.moveBudgetDown ?? MOVE_BUDGET_CAP_DOWN) + MOVE_DOWN_SPEED * elapsed);
+
+    const distXZ = Math.hypot(nx - player.x, nz - player.z);
+    const dy = ny - player.y;
+    const withinXZ = distXZ <= player.moveBudgetXZ;
+    const withinY = dy >= 0 ? dy <= player.moveBudgetUp : -dy <= player.moveBudgetDown;
+
+    if (withinXZ && withinY) {
+      player.moveBudgetXZ -= distXZ;
+      if (dy >= 0) player.moveBudgetUp -= dy;
+      else player.moveBudgetDown += dy;
+      player.x = nx;
+      player.y = ny;
+      player.z = nz;
+      return true;
+    }
+
+    if (!player.isBot && now - (player.lastCorrectionAt || 0) >= MOVE_CORRECTION_INTERVAL_MS) {
+      player.lastCorrectionAt = now;
+      this.io.to(room.code).emit('positionCorrection', {
+        playerId: player.id,
+        x: round2(player.x),
+        y: round2(player.y),
+        z: round2(player.z)
+      });
+    }
+    return false;
+  }
+
+  /**
+   * LEGACY (internal compatibility API): applies a client-claimed position packet. server/index.js no longer has a
+   * `playerMove` socket handler, so nothing in production calls this; it only exists for the unit tests that exercise
+   * the distance-budget validation directly. Real clients send `inputBatch` commands (see `handleInputBatch`).
+   */
   handlePlayerMove(room, player, payload) {
     if (!room || !player || !player.alive || room.state !== 'PLAYING' || !payload) return;
 
@@ -702,24 +1094,15 @@ export class RoomManager {
     this.syncPlayerReloadState(player, now);
 
     const mapCfg = getMapConfig(room.mapId);
-    const limit = (mapCfg.arenaHalfSize || MATCH_CONFIG.ARENA_HALF_SIZE) - 0.4;
-    if (typeof payload.x === 'number' && Number.isFinite(payload.x)) {
-      player.x = Math.max(-limit, Math.min(limit, payload.x));
-    }
-    if (typeof payload.y === 'number' && Number.isFinite(payload.y)) {
-      player.y = Math.max(-2, Math.min(18, payload.y));
-    }
-    if (typeof payload.z === 'number' && Number.isFinite(payload.z)) {
-      player.z = Math.max(-limit, Math.min(limit, payload.z));
-    }
+    const positionAccepted = this.applyMovePosition(room, player, payload, mapCfg, now);
     const maxSpeed = (MATCH_CONFIG.SLIDE_INITIAL_SPEED || 11.2) * 1.35;
-    if (typeof payload.vx === 'number' && Number.isFinite(payload.vx)) {
+    if (positionAccepted && typeof payload.vx === 'number' && Number.isFinite(payload.vx)) {
       player.vx = Math.max(-maxSpeed, Math.min(maxSpeed, payload.vx));
     }
-    if (typeof payload.vy === 'number' && Number.isFinite(payload.vy)) {
+    if (positionAccepted && typeof payload.vy === 'number' && Number.isFinite(payload.vy)) {
       player.vy = Math.max(-30, Math.min(25, payload.vy));
     }
-    if (typeof payload.vz === 'number' && Number.isFinite(payload.vz)) {
+    if (positionAccepted && typeof payload.vz === 'number' && Number.isFinite(payload.vz)) {
       player.vz = Math.max(-maxSpeed, Math.min(maxSpeed, payload.vz));
     }
     if (typeof payload.yaw === 'number' && Number.isFinite(payload.yaw)) {
@@ -743,30 +1126,316 @@ export class RoomManager {
     if (typeof payload.lean === 'number' && Number.isFinite(payload.lean)) {
       player.lean = Math.max(-1, Math.min(1, payload.lean));
     }
-    if (typeof payload.weapon === 'string' && WEAPONS[payload.weapon] && payload.weapon !== player.weapon) {
-      // Cancel incomplete reload without granting free full magazine
-      player.weapon = payload.weapon;
-      player.reloadingUntil = 0;
-      player.reloadWeapon = null;
-      player.nextShellAt = 0;
-      player.ammo = player.ammoByWeapon?.[payload.weapon] ?? WEAPONS[payload.weapon].magSize;
-      player.reserveAmmo = player.reserveAmmoByWeapon?.[payload.weapon] ?? (WEAPONS[payload.weapon].reserveAmmo ?? 0);
+    if (
+      typeof payload.weapon === 'string' &&
+      this.isWeaponAllowed(player, payload.weapon) &&
+      payload.weapon !== player.weapon
+    ) {
+      this.switchPlayerWeapon(player, payload.weapon);
     }
-
-    const snapTs = typeof payload.timestamp === 'number' && Number.isFinite(payload.timestamp)
-      ? payload.timestamp
-      : now;
-    recordPlayerSnapshot(player, snapTs);
+    // Latency is measured by the server (see startLatencyProbe); client-reported pingMs is ignored.
+    // History is stamped with the server clock: client clocks must never enter the lag-comp ring buffer.
+    recordPlayerSnapshot(player, now);
+    this.updateHealthPacks(room, now);
   }
 
-  handleReload(room, player, weaponId) {
+  /** Equips an (already validated) weapon: cancels an incomplete reload without granting a free full magazine. */
+  switchPlayerWeapon(player, weaponId) {
+    player.weapon = weaponId;
+    player.reloadingUntil = 0;
+    player.reloadWeapon = null;
+    player.nextShellAt = 0;
+    player.ammo = player.ammoByWeapon?.[weaponId] ?? WEAPONS[weaponId].magSize;
+    player.reserveAmmo = player.reserveAmmoByWeapon?.[weaponId] ?? (WEAPONS[weaponId].reserveAmmo ?? 0);
+  }
+
+  // ======================================================================================================
+  // Input-command netcode: the server is authoritative for human movement. Clients send input commands (never
+  // positions); the server simulates them with the shared movement module and acks the result to the owner.
+  // ======================================================================================================
+
+  /**
+   * (Re)starts a human's movement timeline at their current `player.x/y/z` (spawn, respawn, map change, new match, or
+   * any other server-side teleport): bumps `moveEpoch`, voids queued commands and rebuilds the authoritative
+   * MovementState. The caller sends the resync ack (`sendMoveAck(player, true)`) when the owner's socket is ready.
+   */
+  resetPlayerMovement(player, now = Date.now()) {
+    if (!player || player.isBot) return;
+    player.moveEpoch = (player.moveEpoch || 0) + 1;
+    player.lastProcessedSeq = player.lastProcessedSeq || 0;
+    player.cmdQueue = [];
+    player.cmdFresh = true; // first command of the new epoch defines the sequence start (the client skipped seqs)
+    player.cmdGapSince = null;
+    player.moveCredit = 0;
+    player.lastCreditAt = now;
+    // Round-trip through the ack encoding so the server and the client start from bit-identical states
+    const raw = createMovementState({
+      x: player.x, y: player.y, z: player.z, vx: 0, vy: 0, vz: 0, onGround: true
+    });
+    const ack = createMoveAck(raw, player.lastProcessedSeq, player.moveEpoch);
+    player.moveState = movementStateFromAck(ack);
+    player.x = ack.x;
+    player.y = ack.y;
+    player.z = ack.z;
+    player.vx = 0;
+    player.vy = 0;
+    player.vz = 0;
+    this._markMoveSynced(player);
+  }
+
+  _markMoveSynced(player) {
+    player._mx = player.x;
+    player._my = player.y;
+    player._mz = player.z;
+  }
+
+  /** Sends the owner (and only the owner: every socket auto-joins a room named by its id) the authoritative state. */
+  sendMoveAck(player, reliable = false) {
+    if (!player || player.isBot || !player.moveState) return null;
+    const ack = createMoveAck(player.moveState, player.lastProcessedSeq || 0, player.moveEpoch);
+    const target = this.io.to(player.id);
+    (reliable ? target : (target.volatile || target)).emit('moveAck', ack);
+    return ack;
+  }
+
+  /** Emits an owner-only `shotRejected { ss, reason }` and records `player.lastShotReject`. */
+  emitShotRejected(player, ss, reason) {
+    if (!player || player.isBot) return null;
+    const payload = { ss: Number.isSafeInteger(ss) ? ss : 0, reason };
+    player.lastShotReject = payload;
+    this.io.to(player.id).emit('shotRejected', payload);
+    return payload;
+  }
+
+  /** Builds the owner-only `selfState` payload for a human player. */
+  buildSelfState(player, now = Date.now()) {
+    if (!player || player.isBot) return null;
+    this.syncPlayerReloadState(player, now, false);
+    const weapon = player.weapon;
+    const wCfg = WEAPONS[weapon] || WEAPONS.rifle;
+    const ammo = Number.isFinite(player.ammoByWeapon?.[weapon])
+      ? player.ammoByWeapon[weapon]
+      : (Number.isFinite(player.ammo) ? player.ammo : wCfg.magSize);
+    const reserveAmmo = Number.isFinite(player.reserveAmmoByWeapon?.[weapon])
+      ? player.reserveAmmoByWeapon[weapon]
+      : (Number.isFinite(player.reserveAmmo) ? player.reserveAmmo : (wCfg.reserveAmmo ?? 0));
+    const reloading = (player.alive && player.reloadingUntil && player.reloadingUntil > now)
+      ? {
+          weapon: player.reloadWeapon || weapon,
+          remainingMs: Math.max(0, Math.round(player.reloadingUntil - now))
+        }
+      : null;
+    return {
+      seq: player.lastProcessedSeq || 0,
+      lastShotSeq: player.lastShotSeq || 0,
+      hp: Number.isFinite(player.hp) ? player.hp : 0,
+      alive: Boolean(player.alive),
+      weapon,
+      ammo,
+      reserveAmmo,
+      ammoByWeapon: { ...(player.ammoByWeapon || {}) },
+      reserveAmmoByWeapon: { ...(player.reserveAmmoByWeapon || {}) },
+      reloading,
+      grenades: Number.isFinite(player.grenades) ? player.grenades : 1
+    };
+  }
+
+  _selfStateSignature(player) {
+    if (!player) return '';
+    const w = player.weapon;
+    const ammo = player.ammoByWeapon?.[w] ?? player.ammo ?? 0;
+    const res = player.reserveAmmoByWeapon?.[w] ?? player.reserveAmmo ?? 0;
+    const rel = player.alive && player.reloadingUntil ? `${player.reloadWeapon || w}/${player.reloadingUntil | 0}` : '0';
+    return `${player.hp}:${player.alive ? 1 : 0}:${w}:${ammo}:${res}:${rel}:${player.grenades ?? 1}`;
+  }
+
+  /** Sends the owner-only `selfState` snapshot to `player.id` (never broadcast to the room). */
+  sendSelfState(player, now = Date.now(), reliable = false) {
+    if (!player || player.isBot) return null;
+    const state = this.buildSelfState(player, now);
+    if (!state) return null;
+    player.lastSelfStateAt = now;
+    player._selfStateSig = this._selfStateSignature(player);
+    const target = this.io.to(player.id);
+    (reliable ? target : (target.volatile || target)).emit('selfState', state);
+    return state;
+  }
+
+  sendSelfStateIfChanged(player, now = Date.now(), reliable = false) {
+    if (!player || player.isBot) return null;
+    this.syncPlayerReloadState(player, now, false);
+    if (this._selfStateSignature(player) !== player._selfStateSig) {
+      return this.sendSelfState(player, now, reliable);
+    }
+    return null;
+  }
+
+  /**
+   * Handles an `inputBatch` ({ e: epoch, cmds: [...] }). Commands are validated and queued; they are simulated by
+   * `processPlayerInputs` on the next tick. Old / duplicate seqs, malformed numbers and absurd seq jumps are dropped, a
+   * batch tagged with a stale epoch (teleport happened) is discarded and answered with a throttled resync ack.
+   * Returns { accepted, stale }.
+   */
+  handleInputBatch(room, player, payload, now = Date.now()) {
+    const result = { accepted: 0, stale: false };
+    if (!room || !player || player.isBot || !player.moveState || !payload) return result;
+
+    if (payload.e !== player.moveEpoch) {
+      result.stale = true;
+      if (now - (player.lastStaleAckAt || 0) >= STALE_EPOCH_ACK_INTERVAL_MS) {
+        player.lastStaleAckAt = now;
+        this.sendMoveAck(player, true);
+      }
+      return result;
+    }
+
+    const cmds = payload.cmds;
+    if (!Array.isArray(cmds)) return result;
+    const queue = player.cmdQueue;
+    const limit = Math.min(cmds.length, INPUT_BATCH_MAX_CMDS);
+    for (let i = 0; i < limit; i++) {
+      const cmd = sanitizeInputCommand(cmds[i]);
+      if (!cmd) continue;
+      if (cmd.seq <= player.lastProcessedSeq) continue; // already simulated (redundant resend)
+      if (cmd.seq > player.lastProcessedSeq + INPUT_SEQ_AHEAD_MAX) continue;
+      if (queue.length >= INPUT_QUEUE_MAX) break; // flood: surplus commands are dropped
+
+      // Sorted insert (almost always an append); duplicates are ignored
+      let at = queue.length;
+      while (at > 0 && queue[at - 1].seq > cmd.seq) at--;
+      if (at > 0 && queue[at - 1].seq === cmd.seq) continue;
+      queue.splice(at, 0, cmd);
+      result.accepted++;
+    }
+    return result;
+  }
+
+  /**
+   * Simulates a human's queued commands in seq order. Every command costs exactly FIXED_DT of the player's time-credit
+   * bucket, which refills with real elapsed seconds (capped at INPUT_CREDIT_CAP_S): a client cannot move faster than real
+   * time however many commands it sends and whatever time it claims. Dead players only have their queue acknowledged.
+   * Afterwards the owner gets a `moveAck`. Returns the number of commands simulated.
+   */
+  processPlayerInputs(room, player, now = Date.now()) {
+    if (!room || !player || player.isBot || !player.moveState) return 0;
+
+    // Anything other than this method moved the player (test setup, new server-side feature): that is a teleport
+    if (player.x !== player._mx || player.y !== player._my || player.z !== player._mz) {
+      this.resetPlayerMovement(player, now);
+      this.sendMoveAck(player, true);
+    }
+
+    const credit = Math.max(0, Math.min(1, (now - player.lastCreditAt) / 1000));
+    player.lastCreditAt = now;
+    player.moveCredit = Math.min(INPUT_CREDIT_CAP_S, player.moveCredit + credit);
+
+    const queue = player.cmdQueue;
+    if (queue.length === 0) return 0;
+
+    let simulated = 0;
+    let drainedDead = false;
+    let shotAccepted = false;
+    const mapCfg = getMapConfig(room.mapId);
+    this.syncPlayerReloadState(player, now);
+    if (!player._selfStateSig) {
+      player._selfStateSig = this._selfStateSignature(player);
+    }
+
+    while (queue.length > 0) {
+      const cmd = queue[0];
+      if (cmd.seq <= player.lastProcessedSeq) {
+        queue.shift();
+        continue;
+      }
+      if (!player.alive) {
+        // Dead: ignore the input, reject any queued fire commands with DEAD, and ack so client pending buffer does not stall
+        for (let i = 0; i < queue.length; i++) {
+          const deadCmd = queue[i];
+          if (deadCmd.seq > player.lastProcessedSeq && (deadCmd.btn & BTN.FIRE) !== 0) {
+            if (
+              Number.isSafeInteger(deadCmd.ss) &&
+              deadCmd.ss > player.lastShotSeq &&
+              deadCmd.ss - player.lastShotSeq <= MAX_SHOT_SEQ_GAP
+            ) {
+              player.lastShotSeq = deadCmd.ss;
+            }
+            this.emitShotRejected(player, deadCmd.ss, SHOT_REJECT.DEAD);
+          }
+        }
+        player.lastProcessedSeq = queue[queue.length - 1].seq;
+        queue.length = 0;
+        drainedDead = true;
+        break;
+      }
+      if (!player.cmdFresh && cmd.seq !== player.lastProcessedSeq + 1) {
+        // Hole in the sequence: give a late / reordered command a moment to show up, then skip the hole
+        if (player.cmdGapSince === null) player.cmdGapSince = now;
+        if (now - player.cmdGapSince < INPUT_GAP_WAIT_MS) break;
+      }
+      if (player.moveCredit < FIXED_DT - 1e-9) break; // out of simulated time: the rest waits for more real time
+      player.moveCredit -= FIXED_DT;
+      queue.shift();
+      this.applyInputCommand(player, cmd, mapCfg);
+      player.lastProcessedSeq = cmd.seq;
+      player.cmdFresh = false;
+      player.cmdGapSince = null;
+      simulated++;
+      // A shot is part of the command: resolved right after the movement step, from the authoritative pose
+      if ((cmd.btn & BTN.FIRE) !== 0) {
+        const res = this.processFireCommand(room, player, cmd, now);
+        if (res) shotAccepted = true;
+      }
+    }
+
+    if (simulated > 0) {
+      player.lastMoveAt = now;
+      // History is stamped with the server clock: client clocks must never enter the lag-comp ring buffer.
+      recordPlayerSnapshot(player, now);
+    }
+    if (simulated > 0 || drainedDead) {
+      this.sendMoveAck(player);
+    }
+    if (shotAccepted) {
+      this.sendSelfState(player, now, true);
+    } else if (simulated > 0) {
+      this.sendSelfStateIfChanged(player, now, true);
+    }
+    return simulated;
+  }
+
+  /** Simulates one validated command and mirrors the result into the fields the rest of the server reads. */
+  applyInputCommand(player, cmd, mapCfg) {
+    const state = player.moveState;
+    if (cmd.w && cmd.w !== player.weapon && this.isWeaponAllowed(player, cmd.w)) {
+      this.switchPlayerWeapon(player, cmd.w);
+    }
+    // Movement speed follows the weapon the server knows about, not whatever the command names
+    const stepCmd = cmd.w === player.weapon ? cmd : { ...cmd, w: player.weapon };
+    const result = stepCommand(state, stepCmd, mapCfg, this._cmdScratchInput || (this._cmdScratchInput = {}));
+
+    player.x = state.x;
+    player.y = state.y;
+    player.z = state.z;
+    player.vx = state.vx;
+    player.vy = state.vy;
+    player.vz = state.vz;
+    player.crouching = state.crouching;
+    player.prone = state.prone;
+    player.yaw = cmd.yaw;
+    player.pitch = cmd.pitch;
+    player.lean = cmd.lean;
+    player.isAiming = (cmd.btn & BTN.AIM) !== 0 && !result.aimCancelled;
+    this._markMoveSynced(player);
+  }
+
+  handleReload(room, player, weaponId, customNow = null, emitSelfState = true) {
     if (!room || !player || !player.alive || room.state !== 'PLAYING') return;
-    const wId = WEAPONS[weaponId] ? weaponId : player.weapon;
+    const wId = this.isWeaponAllowed(player, weaponId) ? weaponId : player.weapon;
     const cfg = WEAPONS[wId];
     if (!cfg || cfg.isMelee || cfg.infiniteAmmo) return;
-    const now = Date.now();
+    const now = typeof customNow === 'number' && Number.isFinite(customNow) ? customNow : Date.now();
 
-    this.syncPlayerReloadState(player, now);
+    this.syncPlayerReloadState(player, now, emitSelfState);
     if (player.reloadingUntil > now) return;
 
     const currentAmmo = player.ammoByWeapon?.[wId] ?? player.ammo ?? 0;
@@ -788,227 +1457,296 @@ export class RoomManager {
       player.nextShellAt = 0;
       player.reloadingUntil = now + reloadDuration;
     }
+
+    if (emitSelfState && !player.isBot) {
+      this.sendSelfState(player, now, true);
+    }
   }
 
-  handleShoot(room, shooter, payload) {
-    if (!room || !shooter || !shooter.alive || room.state !== 'PLAYING') return;
+  // ======================================================================================================================
+  // Shots. A human's shot is part of the input command (BTN.FIRE + `ss`): the SERVER builds the pellet rays from the
+  // authoritative pose, the command's yaw / pitch and the deterministic spread (shared/spread.js), then ray-casts them
+  // against map obstacles and player part boxes (resolveShot). Nothing about direction, spread, hit lists, hit points or
+  // headshot flags is read from the client. Bots keep their server-side claim path (handleBotShot).
+  // ======================================================================================================================
 
-    const now = Date.now();
+  /**
+   * Validates and simulates the FIRE bit of one command. Called by processPlayerInputs right after the movement step of
+   * that command, so the pose is the authoritative post-step pose. Rejected commands are not simulated at all; the reason
+   * is stored in `player.lastShotReject = { ss, reason }` (SHOT_REJECT codes) and sent to the owner via `shotRejected`.
+   * Returns the resolveShot result, or null when the shot was rejected.
+   */
+  processFireCommand(room, shooter, cmd, now = Date.now()) {
+    const ss = cmd.ss;
+    const reject = (reason) => {
+      this.emitShotRejected(shooter, ss, reason);
+      return null;
+    };
+    if (!room || !shooter || shooter.isBot || !shooter.moveState) return null;
+    if (!shooter.alive) return reject(SHOT_REJECT.DEAD);
+    if (room.state !== 'PLAYING') return reject(SHOT_REJECT.STATE);
+
+    // 1. Shot sequence: strictly increasing, no implausible jumps (a hole is only left by lost fire commands)
+    if (!Number.isSafeInteger(ss) || ss <= shooter.lastShotSeq || ss - shooter.lastShotSeq > MAX_SHOT_SEQ_GAP) {
+      return reject(SHOT_REJECT.SEQ);
+    }
+    shooter.lastShotSeq = ss;
+
     this.syncPlayerReloadState(shooter, now);
 
-    const weaponId = WEAPONS[payload?.weapon] ? payload.weapon : shooter.weapon;
+    // 2. Weapon: the command's weapon must be the allowed, equipped one (applyInputCommand already switched to it if allowed)
+    const weaponId = cmd.w;
+    if (!weaponId || weaponId !== shooter.weapon || !this.isWeaponAllowed(shooter, weaponId)) {
+      return reject(SHOT_REJECT.WEAPON);
+    }
     const weaponCfg = WEAPONS[weaponId];
-    if (weaponId !== shooter.weapon) {
-      shooter.weapon = weaponId;
-      shooter.reloadingUntil = 0;
-      shooter.reloadWeapon = null;
-      shooter.nextShellAt = 0;
-      shooter.ammo = shooter.ammoByWeapon?.[weaponId] ?? weaponCfg.magSize;
-      shooter.reserveAmmo = shooter.reserveAmmoByWeapon?.[weaponId] ?? (weaponCfg.reserveAmmo ?? 0);
+
+    // 3. Fire rate in COMMAND SIM time: a catch-up burst of correctly spaced buffered commands is fine, commands spaced
+    //    faster than the weapon allows are not, whatever the wall clock says.
+    const cmdTimeMs = commandTimeMs(cmd.seq);
+    const isAiming = Boolean(shooter.isAiming);
+    if (!isFireIntervalOk(cmdTimeMs, shooter.lastFireCmdTimeMs, getEffectiveFireRateMs(weaponCfg, isAiming))) {
+      return reject(SHOT_REJECT.RATE);
     }
 
-    if (typeof payload?.isAiming === 'boolean') {
-      shooter.isAiming = payload.isAiming;
-    }
-    const isAiming = Boolean(payload?.isAiming ?? shooter.isAiming);
-    const effectiveFireRateMs = getEffectiveFireRateMs(weaponCfg, isAiming);
+    // 4. Reload (wall-clock sync with the existing tolerance) and ammo
+    const ammoReject = this.consumeShotAmmo(room, shooter, weaponId, weaponCfg, now);
+    if (ammoReject) return reject(ammoReject);
 
-    // Rate limit check (allow 18% network jitter tolerance)
-    if (now - shooter.lastShotAt < effectiveFireRateMs * 0.82) {
-      return;
-    }
+    shooter.lastFireCmdTimeMs = cmdTimeMs;
+    shooter.lastShotAt = now;
+    // Firing ends spawn protection
+    this.endSpawnProtection(room, shooter, now);
 
-    if (!weaponCfg.isMelee && !weaponCfg.infiniteAmmo) {
-      // Handle active reload state
-      if (shooter.reloadingUntil > now) {
-        if (weaponCfg.shellByShell && shooter.ammo > 0) {
-          // Interrupt shotgun shell-by-shell reload to fire immediately with loaded shells
-          shooter.reloadingUntil = 0;
-          shooter.reloadWeapon = null;
-          shooter.nextShellAt = 0;
-        } else {
-          return;
-        }
-      }
+    const st = shooter.moveState;
+    const plan = planShot(
+      shooter.shotState,
+      weaponId,
+      weaponCfg,
+      cmdTimeMs,
+      {
+        x: st.x,
+        y: st.y,
+        z: st.z,
+        vx: st.vx,
+        vz: st.vz,
+        onGround: st.onGround,
+        crouching: st.crouching,
+        isSliding: st.isSliding,
+        prone: st.prone,
+        lean: cmd.lean,
+        aiming: isAiming
+      },
+      cmd.yaw,
+      cmd.pitch,
+      shooter.spreadSeed,
+      ss
+    );
+    return this.resolveShot(room, shooter, { weaponId, origin: plan.origin, dirs: plan.dirs, now });
+  }
 
-      if (shooter.ammo <= 0) {
-        const curRes = shooter.reserveAmmoByWeapon?.[weaponId] ?? shooter.reserveAmmo ?? 0;
-        if (curRes > 0) {
-          this.handleReload(room, shooter, weaponId);
-        }
-        return;
-      }
-
-      shooter.ammo = Math.max(0, shooter.ammo - 1);
-      if (shooter.ammoByWeapon) {
-        shooter.ammoByWeapon[weaponId] = shooter.ammo;
-      }
-      shooter.reserveAmmo = shooter.reserveAmmoByWeapon?.[weaponId] ?? shooter.reserveAmmo ?? 0;
-    } else {
+  /**
+   * Reload / magazine rules shared by every shot path. Returns null when a round was consumed (or the weapon needs none),
+   * otherwise a SHOT_REJECT code. Active reloads get a 350 ms tolerance for humans (the client may have finished first);
+   * firing a shell-by-shell weapon with a loaded shell interrupts the reload.
+   */
+  consumeShotAmmo(room, shooter, weaponId, weaponCfg, now) {
+    if (weaponCfg.isMelee || weaponCfg.infiniteAmmo) {
       shooter.ammo = 1;
       shooter.reserveAmmo = 0;
+      return null;
     }
 
-    shooter.lastShotAt = now;
+    if (shooter.reloadingUntil > now) {
+      if (!shooter.isBot && now >= shooter.reloadingUntil - 350) {
+        this.syncPlayerReloadState(shooter, shooter.reloadingUntil, false);
+      }
+    }
+    if (shooter.reloadingUntil > now) {
+      if (weaponCfg.shellByShell && shooter.ammo > 0) {
+        shooter.reloadingUntil = 0;
+        shooter.reloadWeapon = null;
+        shooter.nextShellAt = 0;
+      } else {
+        return SHOT_REJECT.RELOAD;
+      }
+    }
 
-    const origin = payload?.origin && typeof payload.origin.x === 'number'
-      ? payload.origin
-      : { x: shooter.x, y: shooter.y + 1.5, z: shooter.z };
+    if (shooter.ammo <= 0) {
+      const curRes = shooter.reserveAmmoByWeapon?.[weaponId] ?? shooter.reserveAmmo ?? 0;
+      if (curRes > 0) {
+        this.handleReload(room, shooter, weaponId, now, false);
+      }
+      return SHOT_REJECT.AMMO;
+    }
 
-    const dir = payload?.dir && typeof payload.dir.x === 'number'
-      ? payload.dir
-      : {
-          x: -Math.sin(shooter.yaw) * Math.cos(shooter.pitch),
-          y: Math.sin(shooter.pitch),
-          z: -Math.cos(shooter.yaw) * Math.cos(shooter.pitch)
-        };
+    shooter.ammo = Math.max(0, shooter.ammo - 1);
+    if (shooter.ammoByWeapon) {
+      shooter.ammoByWeapon[weaponId] = shooter.ammo;
+    }
+    shooter.reserveAmmo = shooter.reserveAmmoByWeapon?.[weaponId] ?? shooter.reserveAmmo ?? 0;
+    return null;
+  }
 
-    // Broadcast visual/audio shot event to everyone in the room
-    this.io.to(room.code).emit('shotFired', {
-      shooterId: shooter.id,
-      weapon: weaponId,
+  /**
+   * Ray vs one player in exactly two poses: the pose rewound by the shooter's server-measured latency (the target currently
+   * holds it) and, when that misses, the live pose (shooters whose view was not, or only barely, behind the server).
+   * Only PART_PADDING of tolerance: lag is covered by the rewind, not by fat boxes.
+   */
+  raycastPlayerPoses(origin, dir, candidate, maxRange, savedStates) {
+    const hit = raycastPlayerHitbox(origin, dir, candidate, maxRange, PART_PADDING);
+    if (hit || savedStates.length === 0) return hit;
+    let live = null;
+    for (let i = 0; i < savedStates.length; i++) {
+      if (savedStates[i].id === candidate.id) {
+        live = savedStates[i];
+        break;
+      }
+    }
+    if (!live) return null;
+    return raycastPlayerHitbox(
       origin,
       dir,
-      hitPoint: payload?.hitPoint || null
-    });
+      {
+        alive: true,
+        x: live.x,
+        y: live.y,
+        z: live.z,
+        yaw: candidate.yaw,
+        pitch: candidate.pitch,
+        lean: candidate.lean,
+        crouching: Boolean(live.crouch),
+        crouch: Boolean(live.crouch),
+        prone: Boolean(live.prone),
+        sliding: candidate.sliding,
+        isSliding: candidate.isSliding
+      },
+      maxRange,
+      PART_PADDING
+    );
+  }
 
-    const mapCfg = getMapConfig(room.mapId);
-    const obstacles = mapCfg.obstacles;
+  /**
+   * THE shot resolver for humans (also reachable through the handleShoot test adapter). Every pellet ray is tested against
+   * the map obstacles and the players' per-part boxes (rewound by the shooter's server-measured latency); the NEAREST of
+   * {obstacle, player part} wins, so a wall or crate in front of a player absorbs the pellet (true hitscan occlusion) and
+   * a low crate does not block a ray that passes above it. Damage = weapon damage x distance falloff (ray distance) x zone
+   * multiplier of the SERVER part (head = headshotMult, leg = 0.78, body = 1), spawn protection blocks, kills / drops via
+   * the usual events. Emits `shotFired` with the server's origin, direction(s) and first hit point.
+   *
+   * @param {{weaponId:string, origin:{x:number,y:number,z:number}, dirs:Array<{x:number,y:number,z:number}>, now?:number}} shot
+   * @returns {{origin, dirs, hitPoint, hits:Array<{pellet:number,targetId:string,zone:string,distance:number,point:object}>,
+   *            damage:Map<string,{totalDamage:number,anyHeadshot:boolean}>}|null}
+   */
+  resolveShot(room, shooter, shot) {
+    const weaponId = shot?.weaponId;
+    const weaponCfg = WEAPONS[weaponId];
+    const origin = shot?.origin;
+    const dirs = shot?.dirs;
+    if (!room || !shooter || !weaponCfg || !isFiniteVec(origin) || !Array.isArray(dirs) || dirs.length === 0) return null;
+    const now = typeof shot.now === 'number' && Number.isFinite(shot.now) ? shot.now : Date.now();
+
+    const obstacles = getMapConfig(room.mapId).obstacles || [];
     const maxRange = weaponCfg.isMelee ? weaponCfg.range * 1.45 : weaponCfg.range * 1.15;
 
-    // Rewind enemy hitboxes for lag compensation (clamped to max 250ms) and guarantee restoration
-    const rewindMs = resolveShotRewindMs(shooter, payload, now);
+    // Rewind enemy hitboxes: rttMs/2 + interpolation delay (server-measured RTT only, clamped to LAG_COMP_MAX_REWIND_MS)
+    const rewindMs = resolveShotRewindMs(shooter, null, now);
     const savedStates = rewindRoomPlayersForShot(room, shooter.id, rewindMs, now);
 
-    const damageMap = new Map();
-    const blockedShieldTargets = new Set();
-
+    const hits = [];
+    let firstEnd = null;
     try {
-      // Support single hit (`targetId`), multi-pellet hits (`hits: [...]`), or server-side raycast when no hit claims array is given
-      let hitClaims = Array.isArray(payload?.hits)
-        ? payload.hits.slice(0, weaponCfg.pellets)
-        : payload?.targetId
-          ? [{
-              targetId: payload.targetId,
-              isHeadshot: Boolean(payload.isHeadshot),
-              isLegshot: Boolean(payload.isLegshot)
-            }]
-          : [];
+      for (let p = 0; p < dirs.length; p++) {
+        const dir = normalizeDir(dirs[p]);
+        if (!dir) continue;
 
-      if (
-        hitClaims.length === 0 &&
-        !shooter.isBot &&
-        payload?.dir &&
-        typeof payload.dir.x === 'number' &&
-        (rewindMs > 0 || (!Array.isArray(payload?.hits) && payload?.targetId === undefined))
-      ) {
+        // Nearest obstacle along this ray
+        let wallDist = Infinity;
+        for (let i = 0; i < obstacles.length; i++) {
+          const t = rayIntersectsAABB(origin, dir, maxRange, obstacles[i]);
+          if (t !== null && t < wallDist) wallDist = t;
+        }
+
+        // Nearest player part in front of that obstacle
+        const reach = Math.min(maxRange, wallDist);
         let bestTarget = null;
         let bestHit = null;
         for (const candidate of room.players.values()) {
           if (!candidate || !candidate.alive || candidate.id === shooter.id) continue;
-          const hit = raycastPlayerHitbox(origin, dir, candidate, maxRange, 0.25);
+          const hit = this.raycastPlayerPoses(origin, dir, candidate, reach, savedStates);
           if (hit && (!bestHit || hit.distance < bestHit.distance)) {
             bestTarget = candidate;
             bestHit = hit;
           }
         }
-        if (bestTarget && bestHit) {
-          hitClaims = [{
+
+        if (bestHit) {
+          hits.push({
+            pellet: p,
             targetId: bestTarget.id,
-            isHeadshot: Boolean(payload?.isHeadshot ?? bestHit.isHeadshot),
-            isLegshot: Boolean(payload?.isLegshot ?? bestHit.isLegshot)
-          }];
+            zone: bestHit.zone,
+            distance: bestHit.distance,
+            point: bestHit.hitPoint
+          });
         }
-      }
-
-      for (const claim of hitClaims) {
-        if (!claim || !claim.targetId || claim.targetId === shooter.id) continue;
-        const target = room.players.get(claim.targetId);
-        if (!target || !target.alive) continue;
-
-        // Block damage if target has active 1.5s spawn protection
-        if (target.invulnerableUntil && now < target.invulnerableUntil) {
-          blockedShieldTargets.add(target.id);
-          continue;
-        }
-
-        const dist = Math.hypot(target.x - shooter.x, target.y - shooter.y, target.z - shooter.z);
-        if (dist > maxRange) continue;
-
-        // If explicit ray direction is provided, verify target's (rewound) hitbox is within spread/hitbox cone of the ray
-        if (
-          !shooter.isBot &&
-          !weaponCfg.isMelee &&
-          payload?.dir &&
-          typeof payload.dir.x === 'number'
-        ) {
-          const rayPad = Math.max(1.35, dist * (weaponCfg.pellets > 1 ? 0.28 : 0.18));
-          let rayHit = raycastPlayerHitbox(origin, dir, target, maxRange, rayPad);
-          if (!rayHit && (target.crouching || target.crouch || target.prone) && Math.abs(dir.y || 0) < 0.08) {
-            rayHit = raycastPlayerHitbox(
-              origin,
-              dir,
-              { ...target, crouching: false, crouch: false, prone: false },
-              maxRange,
-              rayPad
-            );
-          }
-          if (!rayHit) continue;
-        }
-
-        // Verify line of sight against active map obstacles (supports prone/crouch/slide eye height and Q/E lean peek tolerance)
-        const eyeH = shooter.prone ? 0.46 : shooter.crouching ? 1.0 : 1.55;
-        const leanVal = (shooter.lean || 0) * (MATCH_CONFIG.LEAN_OFFSET || 0.42);
-        const rightX = Math.cos(shooter.yaw || 0);
-        const rightZ = -Math.sin(shooter.yaw || 0);
-        const shooterEye = {
-          x: shooter.x + rightX * leanVal,
-          y: shooter.y + eyeH,
-          z: shooter.z + rightZ * leanVal
-        };
-        const targetEyeH = target.prone ? 0.46 : target.crouching ? 1.0 : 1.55;
-        const targetPoint = {
-          x: target.x,
-          y: target.y + (claim.isHeadshot ? targetEyeH : target.prone ? 0.32 : 1.05),
-          z: target.z
-        };
-        let losOk = hasLineOfSight(shooterEye, targetPoint, obstacles);
-        if (!losOk && payload?.origin && typeof payload.origin.x === 'number') {
-          const originOffset = Math.hypot(
-            payload.origin.x - shooter.x,
-            payload.origin.y - (shooter.y + eyeH),
-            payload.origin.z - shooter.z
-          );
-          if (originOffset <= 1.65) {
-            losOk = hasLineOfSight(payload.origin, targetPoint, obstacles);
+        if (p === 0) {
+          if (bestHit) firstEnd = bestHit.hitPoint;
+          else if (wallDist <= maxRange) {
+            firstEnd = { x: origin.x + dir.x * wallDist, y: origin.y + dir.y * wallDist, z: origin.z + dir.z * wallDist };
           }
         }
-        if (!losOk && dist > 4.0) {
-          continue;
-        }
-
-        // Apply per-weapon distance damage falloff (SMGs & Shotguns drop sharply at mid/long range while ARs/Snipers hold power)
-        const falloffMult = computeDistanceFalloff(weaponCfg, dist);
-
-        const hitZoneMult = claim.isHeadshot
-          ? weaponCfg.headshotMult
-          : claim.isLegshot
-            ? 0.78
-            : 1.0;
-
-        const pelletDmg = Math.max(
-          1,
-          Math.round(weaponCfg.damage * falloffMult * hitZoneMult)
-        );
-        const prev = damageMap.get(target.id) || { totalDamage: 0, anyHeadshot: false };
-        prev.totalDamage += pelletDmg;
-        prev.anyHeadshot = prev.anyHeadshot || Boolean(claim.isHeadshot);
-        damageMap.set(target.id, prev);
       }
     } finally {
       restoreRewoundPlayers(savedStates);
     }
 
+    // Melee swings that hit nothing still show a short stab line at the weapon's reach (like the old client did)
+    const dir0 = normalizeDir(dirs[0]);
+    if (!firstEnd && weaponCfg.isMelee && dir0) {
+      firstEnd = {
+        x: origin.x + dir0.x * weaponCfg.range,
+        y: origin.y + dir0.y * weaponCfg.range,
+        z: origin.z + dir0.z * weaponCfg.range
+      };
+    }
+
+    const roundVec = (v, k) => (v ? { x: roundTo(v.x, k), y: roundTo(v.y, k), z: roundTo(v.z, k) } : null);
+    const shotEvent = {
+      shooterId: shooter.id,
+      weapon: weaponId,
+      origin: roundVec(origin, 1000),
+      dir: roundVec(dir0 || dirs[0], 10000),
+      hitPoint: roundVec(firstEnd, 1000)
+    };
+    if (dirs.length > 1) shotEvent.dirs = dirs.map((d) => roundVec(d, 10000));
+    this.io.to(room.code).emit('shotFired', shotEvent);
+
+    // Damage per target
+    const damageMap = new Map();
+    const blockedShieldTargets = new Set();
+    for (const hit of hits) {
+      const target = room.players.get(hit.targetId);
+      if (!target || !target.alive) continue;
+      // Block damage if target has active spawn protection
+      if (target.invulnerableUntil && now < target.invulnerableUntil) {
+        blockedShieldTargets.add(target.id);
+        continue;
+      }
+      const falloffMult = computeDistanceFalloff(weaponCfg, hit.distance);
+      const hitZoneMult = hit.zone === 'head' ? weaponCfg.headshotMult : hit.zone === 'leg' ? 0.78 : 1.0;
+      const pelletDmg = Math.max(1, Math.round(weaponCfg.damage * falloffMult * hitZoneMult));
+      const prev = damageMap.get(target.id) || { totalDamage: 0, anyHeadshot: false };
+      prev.totalDamage += pelletDmg;
+      prev.anyHeadshot = prev.anyHeadshot || hit.zone === 'head';
+      damageMap.set(target.id, prev);
+    }
+
+    this.applyShotDamage(room, shooter, weaponId, damageMap, blockedShieldTargets, now);
+    return { origin, dirs, hitPoint: firstEnd, hits, damage: damageMap };
+  }
+
+  /** Spawn-protection notices, HP loss, `damageDealt` and kills for the per-target damage of one shot. */
+  applyShotDamage(room, shooter, weaponId, damageMap, blockedShieldTargets, now) {
     if (damageMap.size === 0 && blockedShieldTargets.size === 0) return;
 
     for (const protectedTargetId of blockedShieldTargets) {
@@ -1041,6 +1779,218 @@ export class RoomManager {
         this.handlePlayerKilled(room, shooter, target, weaponId, info.anyHeadshot);
       }
     }
+  }
+
+  /**
+   * TEST / LEGACY ADAPTER - NOT a production entry point for humans (there is no `shoot` socket event any more; human shots
+   * arrive as FIRE commands and go through processFireCommand). It keeps the old unit-test call shape alive:
+   * for a human, `payload.dir` is treated as the exact aim direction with NO spread, the origin is always the server's eye
+   * (stance + lean), and the same resolveShot runs. `hits`, `targetId`, `isHeadshot`, `isLegshot`, `hitPoint`, `origin`
+   * and every latency / timestamp field of the payload are ignored (`isAiming` only selects the fire interval of the old
+   * wall-clock rate limit, 0.82 x interval). Bots are routed to handleBotShot.
+   */
+  handleShoot(room, shooter, payload, customNow = null) {
+    if (!room || !shooter || !shooter.alive || room.state !== 'PLAYING') return;
+
+    const now = typeof customNow === 'number' && Number.isFinite(customNow) ? customNow : Date.now();
+    if (shooter.isBot) {
+      this.handleBotShot(room, shooter, payload, now);
+      return;
+    }
+
+    this.syncPlayerReloadState(shooter, now);
+
+    // Firing (or dealing damage) ends spawn protection
+    this.endSpawnProtection(room, shooter, now);
+
+    const aimDir = normalizeDir(payload?.dir);
+    if (!aimDir) return;
+
+    // Humans can only fire weapons from their server-side loadout (anything else falls back to the equipped one)
+    const weaponId = this.isWeaponAllowed(shooter, payload?.weapon) ? payload.weapon : shooter.weapon;
+    const weaponCfg = WEAPONS[weaponId];
+    if (weaponId !== shooter.weapon) {
+      this.switchPlayerWeapon(shooter, weaponId);
+    }
+
+    // (adapter only) the ADS flag selects the fire interval of the old wall-clock rate limit; it has no effect on aim / spread
+    if (typeof payload?.isAiming === 'boolean') shooter.isAiming = payload.isAiming;
+    const effectiveFireRateMs = getEffectiveFireRateMs(weaponCfg, Boolean(shooter.isAiming));
+    if (now - shooter.lastShotAt < effectiveFireRateMs * 0.82) return;
+    if (this.consumeShotAmmo(room, shooter, weaponId, weaponCfg, now)) return;
+    shooter.lastShotAt = now;
+
+    const origin = computeShotOrigin({
+      x: shooter.x,
+      y: shooter.y,
+      z: shooter.z,
+      yaw: shooter.yaw,
+      lean: shooter.lean,
+      prone: shooter.prone,
+      isSliding: shooter.moveState?.isSliding,
+      crouching: shooter.crouching
+    });
+    const dirs = new Array(Math.max(1, weaponCfg.pellets || 1)).fill(aimDir);
+    this.resolveShot(room, shooter, { weaponId, origin, dirs, now });
+  }
+
+  /**
+   * Bot shots: bots are server-controlled (server/botAI.js), so their `targetId` / `isHeadshot` / `hitPoint` hit decision
+   * (random accuracy roll) is trusted. This is the only remaining claim-based path; it is never reachable from a socket.
+   */
+  handleBotShot(room, shooter, payload, now) {
+    this.syncPlayerReloadState(shooter, now);
+    this.endSpawnProtection(room, shooter, now);
+
+    const weaponId = this.isWeaponAllowed(shooter, payload?.weapon) ? payload.weapon : shooter.weapon;
+    const weaponCfg = WEAPONS[weaponId];
+    if (weaponId !== shooter.weapon) {
+      shooter.weapon = weaponId;
+      shooter.reloadingUntil = 0;
+      shooter.reloadWeapon = null;
+      shooter.nextShellAt = 0;
+      shooter.ammo = shooter.ammoByWeapon?.[weaponId] ?? weaponCfg.magSize;
+      shooter.reserveAmmo = shooter.reserveAmmoByWeapon?.[weaponId] ?? (weaponCfg.reserveAmmo ?? 0);
+    }
+
+    const isAiming = Boolean(payload?.isAiming ?? shooter.isAiming);
+    const effectiveFireRateMs = getEffectiveFireRateMs(weaponCfg, isAiming);
+    if (now - shooter.lastShotAt < effectiveFireRateMs * 0.82) return;
+    if (this.consumeShotAmmo(room, shooter, weaponId, weaponCfg, now)) return;
+    shooter.lastShotAt = now;
+
+    const obstacles = getMapConfig(room.mapId).obstacles;
+    const shooterEye = computeShotOrigin({
+      x: shooter.x,
+      y: shooter.y,
+      z: shooter.z,
+      yaw: shooter.yaw,
+      lean: shooter.lean,
+      prone: shooter.prone,
+      crouching: shooter.crouching
+    });
+    const origin = isFiniteVec(payload?.origin) ? payload.origin : shooterEye;
+    const dir = normalizeDir(payload?.dir) || {
+      x: -Math.sin(shooter.yaw) * Math.cos(shooter.pitch),
+      y: Math.sin(shooter.pitch),
+      z: -Math.cos(shooter.yaw) * Math.cos(shooter.pitch)
+    };
+
+    this.io.to(room.code).emit('shotFired', {
+      shooterId: shooter.id,
+      weapon: weaponId,
+      origin,
+      dir,
+      hitPoint: isFiniteVec(payload?.hitPoint) ? payload.hitPoint : null
+    });
+
+    const maxRange = weaponCfg.isMelee ? weaponCfg.range * 1.45 : weaponCfg.range * 1.15;
+    const damageMap = new Map();
+    const blockedShieldTargets = new Set();
+
+    let hitClaims = payload?.targetId
+      ? [{
+          targetId: payload.targetId,
+          isHeadshot: Boolean(payload.isHeadshot),
+          isLegshot: Boolean(payload.isLegshot)
+        }]
+      : [];
+
+    if (weaponCfg.pellets > 1 && hitClaims.length === 1) {
+      const botTarget = room.players.get(hitClaims[0].targetId);
+      if (botTarget && botTarget.alive) {
+        const d = Math.hypot(botTarget.x - shooter.x, botTarget.y - shooter.y, botTarget.z - shooter.z);
+        const distRatio = Math.max(0, Math.min(1, d / Math.max(1, weaponCfg.range)));
+        const expectedPellets = Math.max(
+          2,
+          Math.min(weaponCfg.pellets, Math.round(weaponCfg.pellets * (1 - distRatio * 0.65)))
+        );
+        while (hitClaims.length < expectedPellets) {
+          hitClaims.push({
+            targetId: botTarget.id,
+            isHeadshot: Boolean(hitClaims[0].isHeadshot),
+            isLegshot: Boolean(hitClaims[0].isLegshot)
+          });
+        }
+      }
+    }
+
+    for (const claim of hitClaims) {
+      if (!claim || !claim.targetId || claim.targetId === shooter.id) continue;
+      const target = room.players.get(claim.targetId);
+      if (!target || !target.alive) continue;
+
+      if (target.invulnerableUntil && now < target.invulnerableUntil) {
+        blockedShieldTargets.add(target.id);
+        continue;
+      }
+
+      const dist = Math.min(
+        Math.hypot(target.x - shooter.x, target.y - shooter.y, target.z - shooter.z),
+        Math.hypot(target.x - origin.x, target.y - origin.y, target.z - origin.z)
+      );
+      if (dist > maxRange) continue;
+
+      // Line of sight against map obstacles across multi-point anatomical zones (bots hugging cover corners etc.)
+      const checkMultiPointLos = (tBase) => {
+        const tFootY = Number(tBase.y) || 0;
+        const tProne = Boolean(tBase.prone);
+        const tCrouch = Boolean(tBase.crouching ?? tBase.crouch);
+        const helmetTopH = tProne ? 0.65 : tCrouch ? 1.34 : 1.94;
+        const headH = tProne ? 0.52 : tCrouch ? 1.18 : 1.76;
+        const chestH = tProne ? 0.36 : tCrouch ? 0.85 : 1.35;
+        const pelvisH = tProne ? 0.22 : tCrouch ? 0.52 : 0.78;
+        const primaryH = claim.isHeadshot ? headH : chestH;
+
+        const toTargetX = tBase.x - shooterEye.x;
+        const toTargetZ = tBase.z - shooterEye.z;
+        const horizLen = Math.hypot(toTargetX, toTargetZ) || 1;
+        const perpX = (-toTargetZ / horizLen) * 0.38;
+        const perpZ = (toTargetX / horizLen) * 0.38;
+
+        const samplePoints = [
+          { x: tBase.x, y: tFootY + primaryH, z: tBase.z },
+          { x: tBase.x, y: tFootY + headH, z: tBase.z },
+          { x: tBase.x, y: tFootY + helmetTopH, z: tBase.z },
+          { x: tBase.x, y: tFootY + chestH, z: tBase.z },
+          { x: tBase.x, y: tFootY + pelvisH, z: tBase.z },
+          { x: tBase.x + perpX, y: tFootY + chestH, z: tBase.z + perpZ },
+          { x: tBase.x - perpX, y: tFootY + chestH, z: tBase.z - perpZ },
+          { x: tBase.x + perpX, y: tFootY + headH, z: tBase.z + perpZ },
+          { x: tBase.x - perpX, y: tFootY + headH, z: tBase.z - perpZ }
+        ];
+
+        for (let s = 0; s < samplePoints.length; s++) {
+          const pt = samplePoints[s];
+          if (hasLineOfSight(shooterEye, pt, obstacles)) return true;
+          if (origin !== shooterEye && hasLineOfSight(origin, pt, obstacles)) return true;
+        }
+        return false;
+      };
+
+      let losOk = checkMultiPointLos(target);
+      if (!losOk && target.isBot && Array.isArray(target.positionHistory)) {
+        for (let i = target.positionHistory.length - 1; i >= 0; i--) {
+          const snap = target.positionHistory[i];
+          if (!snap || now - snap.timestamp > 220) continue;
+          if (checkMultiPointLos(snap)) {
+            losOk = true;
+            break;
+          }
+        }
+      }
+      if (!losOk && dist > 1.5) continue;
+
+      const falloffMult = computeDistanceFalloff(weaponCfg, dist);
+      const hitZoneMult = claim.isHeadshot ? weaponCfg.headshotMult : claim.isLegshot ? 0.78 : 1.0;
+      const pelletDmg = Math.max(1, Math.round(weaponCfg.damage * falloffMult * hitZoneMult));
+      const prev = damageMap.get(target.id) || { totalDamage: 0, anyHeadshot: false };
+      prev.totalDamage += pelletDmg;
+      prev.anyHeadshot = prev.anyHeadshot || Boolean(claim.isHeadshot);
+      damageMap.set(target.id, prev);
+    }
+
+    this.applyShotDamage(room, shooter, weaponId, damageMap, blockedShieldTargets, now);
   }
 
   spawnDroppedWeapon(room, dropData = {}, broadcast = true) {
@@ -1190,6 +2140,7 @@ export class RoomManager {
 
     player.grenades = Math.max(0, (player.grenades ?? 1) - 1);
     player.lastGrenadeAt = now;
+    this.endSpawnProtection(room, player, now);
 
     if (!Array.isArray(room.grenades)) {
       room.grenades = [];
@@ -1260,23 +2211,7 @@ export class RoomManager {
       obstacles
     );
     if (!blockedAtStart) {
-      for (let j = 0; j < obstacles.length; j++) {
-        const box = obstacles[j];
-        const minX = (box.minX !== undefined ? box.minX : box.x - box.w * 0.5) - radius;
-        const maxX = (box.maxX !== undefined ? box.maxX : box.x + box.w * 0.5) + radius;
-        const minY = (box.minY !== undefined ? box.minY : box.y - box.h * 0.5) - radius;
-        const maxY = (box.maxY !== undefined ? box.maxY : box.y + box.h * 0.5) + radius;
-        const minZ = (box.minZ !== undefined ? box.minZ : box.z - box.d * 0.5) - radius;
-        const maxZ = (box.maxZ !== undefined ? box.maxZ : box.z + box.d * 0.5) + radius;
-        if (
-          startX >= minX && startX <= maxX &&
-          startY >= minY && startY <= maxY &&
-          startZ >= minZ && startZ <= maxZ
-        ) {
-          blockedAtStart = true;
-          break;
-        }
-      }
+      blockedAtStart = isPointInsideInflatedBoxes(startX, startY, startZ, radius, obstacles);
     }
     if (blockedAtStart) {
       startX = eyeX;
@@ -1325,16 +2260,7 @@ export class RoomManager {
     if (!room || !Array.isArray(room.grenades) || room.grenades.length === 0) return;
 
     const mapCfg = getMapConfig(room.mapId);
-    const obstacles = mapCfg.obstacles || [];
-    const arenaLimit = (mapCfg.arenaHalfSize || MATCH_CONFIG.ARENA_HALF_SIZE) - 0.25;
-    const gravity = MATCH_CONFIG.GRAVITY || 22.0;
-    const restitution = 0.45;
-    const floorY = 0.18;
-    const radius = 0.18;
-
     const totalDt = Math.min(3.0, Math.max(0, Number(dt) || 0));
-    const steps = Math.max(1, Math.min(60, Math.ceil(totalDt / 0.02)));
-    const stepDt = totalDt / steps;
 
     const remaining = [];
     const toDetonate = [];
@@ -1343,132 +2269,8 @@ export class RoomManager {
       const g = room.grenades[i];
       if (!g) continue;
 
-      for (let s = 0; s < steps; s++) {
-        const prevX = g.x;
-        const prevY = g.y;
-        const prevZ = g.z;
-        g.vy -= gravity * stepDt;
-        g.x += g.vx * stepDt;
-        g.y += g.vy * stepDt;
-        g.z += g.vz * stepDt;
-
-        // Arena outer wall bounce
-        if (g.x > arenaLimit) {
-          g.x = arenaLimit;
-          g.vx = -Math.abs(g.vx) * restitution;
-          g.vz *= 0.85;
-        } else if (g.x < -arenaLimit) {
-          g.x = -arenaLimit;
-          g.vx = Math.abs(g.vx) * restitution;
-          g.vz *= 0.85;
-        }
-
-        if (g.z > arenaLimit) {
-          g.z = arenaLimit;
-          g.vz = -Math.abs(g.vz) * restitution;
-          g.vx *= 0.85;
-        } else if (g.z < -arenaLimit) {
-          g.z = -arenaLimit;
-          g.vz = Math.abs(g.vz) * restitution;
-          g.vx *= 0.85;
-        }
-
-        // Obstacle AABB bounce with damping (restitution ~0.45)
-        for (let j = 0; j < obstacles.length; j++) {
-          const box = obstacles[j];
-          const minX = (box.minX !== undefined ? box.minX : box.x - box.w * 0.5) - radius;
-          const maxX = (box.maxX !== undefined ? box.maxX : box.x + box.w * 0.5) + radius;
-          if (g.x < minX || g.x > maxX) continue;
-
-          const minZ = (box.minZ !== undefined ? box.minZ : box.z - box.d * 0.5) - radius;
-          const maxZ = (box.maxZ !== undefined ? box.maxZ : box.z + box.d * 0.5) + radius;
-          if (g.z < minZ || g.z > maxZ) continue;
-
-          const minY = (box.minY !== undefined ? box.minY : box.y - box.h * 0.5) - radius;
-          const maxY = (box.maxY !== undefined ? box.maxY : box.y + box.h * 0.5) + radius;
-          if (g.y < minY || g.y > maxY) continue;
-
-          const wasHorizInside =
-            prevX > minX + 0.02 && prevX < maxX - 0.02 &&
-            prevZ > minZ + 0.02 && prevZ < maxZ - 0.02;
-
-          if (wasHorizInside && prevY >= maxY - 0.06 && g.vy <= 0) {
-            g.y = maxY;
-            if (g.vy < -1.1) {
-              g.vy = -g.vy * restitution;
-              g.vx *= 0.78;
-              g.vz *= 0.78;
-            } else {
-              g.vy = 0;
-              const topFriction = Math.max(0, 1 - 5.5 * stepDt);
-              g.vx *= topFriction;
-              g.vz *= topFriction;
-            }
-          } else if (wasHorizInside && prevY <= minY + 0.06 && g.vy > 0) {
-            g.y = minY;
-            g.vy = -Math.abs(g.vy) * restitution;
-          } else if (prevX <= minX + 0.03 && g.vx > 0) {
-            g.x = minX;
-            g.vx = -Math.abs(g.vx) * restitution;
-            g.vz *= 0.82;
-          } else if (prevX >= maxX - 0.03 && g.vx < 0) {
-            g.x = maxX;
-            g.vx = Math.abs(g.vx) * restitution;
-            g.vz *= 0.82;
-          } else if (prevZ <= minZ + 0.03 && g.vz > 0) {
-            g.z = minZ;
-            g.vz = -Math.abs(g.vz) * restitution;
-            g.vx *= 0.82;
-          } else if (prevZ >= maxZ - 0.03 && g.vz < 0) {
-            g.z = maxZ;
-            g.vz = Math.abs(g.vz) * restitution;
-            g.vx *= 0.82;
-          } else {
-            const penLeft = Math.abs(g.x - minX);
-            const penRight = Math.abs(maxX - g.x);
-            const penFront = Math.abs(g.z - minZ);
-            const penBack = Math.abs(maxZ - g.z);
-            const minPen = Math.min(penLeft, penRight, penFront, penBack);
-
-            if (minPen === penLeft) {
-              g.x = minX;
-              g.vx = -Math.abs(g.vx) * restitution;
-              g.vz *= 0.82;
-            } else if (minPen === penRight) {
-              g.x = maxX;
-              g.vx = Math.abs(g.vx) * restitution;
-              g.vz *= 0.82;
-            } else if (minPen === penFront) {
-              g.z = minZ;
-              g.vz = -Math.abs(g.vz) * restitution;
-              g.vx *= 0.82;
-            } else {
-              g.z = maxZ;
-              g.vz = Math.abs(g.vz) * restitution;
-              g.vx *= 0.82;
-            }
-          }
-        }
-
-        // Floor bounce (y = 0.18) & rolling friction
-        if (g.y <= floorY) {
-          g.y = floorY;
-          if (g.vy < -1.1) {
-            g.vy = -g.vy * restitution;
-            g.vx *= 0.78;
-            g.vz *= 0.78;
-          } else {
-            g.vy = 0;
-            const groundFriction = Math.max(0, 1 - 6.5 * stepDt);
-            g.vx *= groundFriction;
-            g.vz *= groundFriction;
-            if (Math.hypot(g.vx, g.vz) < 0.08) {
-              g.vx = 0;
-              g.vz = 0;
-            }
-          }
-        }
-      }
+      // Shared deterministic integration + bounce (sub-stepped), identical to the client projectile loop
+      stepGrenade(g, totalDt, mapCfg);
 
       g.x = round2(g.x);
       g.y = round2(g.y);
@@ -1651,37 +2453,49 @@ export class RoomManager {
       ? 'FRAG GRENADE'
       : (WEAPONS[weaponId]?.name || String(weaponId || 'rifle').toUpperCase());
 
-    this.io.to(room.code).emit('killEvent', {
-      killerId: killer ? killer.id : null,
-      killerName: killer ? killer.name : 'Arena',
-      killerColor: killer ? killer.color : 0xffffff,
-      victimId: victim.id,
-      victimName: victim.name,
-      victimColor: victim.color,
-      weapon: isGrenadeKill ? 'grenade' : resolvedWeaponName,
-      weaponName: resolvedWeaponName,
-      weaponId,
-      isHeadshot: Boolean(isHeadshot),
-      killerStreak: killer ? killer.streak : 0,
-      killerHp: killer ? killer.hp : 0,
-      newKillerHp: killer ? killer.hp : 0,
-      adrenalineHeal,
-      healedHp: adrenalineHeal,
-      healAmount: adrenalineHeal > 0 ? adrenalineHeal : (KILL_ADRENALINE_HEAL || 25),
-      droppedWeapon
-    });
+      this.io.to(room.code).emit('killEvent', {
+        killerId: killer ? killer.id : null,
+        killerName: killer ? killer.name : 'Arena',
+        killerColor: killer ? killer.color : 0xffffff,
+        victimId: victim.id,
+        victimName: victim.name,
+        victimColor: victim.color,
+        weapon: isGrenadeKill ? 'grenade' : resolvedWeaponName,
+        weaponName: resolvedWeaponName,
+        weaponId,
+        isHeadshot: Boolean(isHeadshot),
+        killerStreak: killer ? killer.streak : 0,
+        killerHp: killer ? killer.hp : 0,
+        newKillerHp: killer ? killer.hp : 0,
+        adrenalineHeal,
+        healedHp: adrenalineHeal,
+        healAmount: adrenalineHeal > 0 ? adrenalineHeal : (KILL_ADRENALINE_HEAL || 25),
+        droppedWeapon
+      });
 
-    // Check win condition (20 kills)
-    if (killer && killer.kills >= MATCH_CONFIG.KILL_LIMIT && room.state === 'PLAYING') {
-      this.endMatch(room, killer);
+      if (victim && !victim.isBot) {
+        this.sendSelfState(victim, Date.now(), true);
+      }
+      if (killer && !killer.isBot && killer.id !== victim.id && adrenalineHeal > 0) {
+        this.sendSelfState(killer, Date.now(), true);
+      }
+
+      // Check win condition (20 kills)
+      if (killer && killer.kills >= MATCH_CONFIG.KILL_LIMIT && room.state === 'PLAYING') {
+        this.endMatch(room, killer);
+      }
     }
-  }
 
   respawnPlayer(room, player) {
     const now = Date.now();
     const protectionMs = MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500;
     const sp = this.pickSafeSpawnPoint(room, player.id);
     if (!player.isBot) {
+      if (player.pendingLoadout) {
+        player.loadout = player.pendingLoadout;
+        player.savedLoadoutPrimary = player.pendingLoadout.primary;
+        player.pendingLoadout = null;
+      }
       const basePrimary = player.savedLoadoutPrimary || player.loadout?.primary || 'rifle';
       if (player.loadout && WEAPONS[basePrimary]?.slot === 1) {
         player.loadout.primary = basePrimary;
@@ -1715,8 +2529,23 @@ export class RoomManager {
     player.ammo = wCfg.magSize;
     player.reserveAmmo = wCfg.infiniteAmmo ? 0 : (wCfg.reserveAmmo ?? wCfg.magSize * 3);
     player.grenades = 1;
+    player.lastShotReject = null;
     player.positionHistory = [];
+    // Server moved the player: restart movement budgets from the new spawn
+    player.moveBudgetXZ = undefined;
+    player.moveBudgetUp = undefined;
+    player.moveBudgetDown = undefined;
+    player.lastPosAt = undefined;
+    // Server teleported the player: new movement epoch, queued commands of the old one are void
+    this.resetPlayerMovement(player, now);
     recordPlayerSnapshot(player, now);
+
+    // New life = new secret spread seed. It goes to the owner ONLY (every socket auto-joins a room named by its id, so
+    // `io.to(player.id)` reaches exactly that socket) and BEFORE the `playerRespawned` room broadcast, which stays seed-free.
+    const spreadSeed = this.resetShotSession(player);
+    if (spreadSeed !== null) {
+      this.io.to(player.id).emit('selfSeed', { spreadSeed });
+    }
 
     this.io.to(room.code).emit('playerRespawned', {
       playerId: player.id,
@@ -1736,9 +2565,12 @@ export class RoomManager {
       invulnerableUntil: player.invulnerableUntil,
       spawnProtectionMs: protectionMs
     });
+    this.sendMoveAck(player, true); // owner learns the new epoch + authoritative spawn state
+    this.sendSelfState(player, now, true);
   }
 
   updateHealthPacks(room, now) {
+    if (!room || !Array.isArray(room.pickups)) return;
     for (const pack of room.pickups) {
       if (!pack.active) {
         if (now >= pack.respawnAt) {
@@ -1755,7 +2587,7 @@ export class RoomManager {
       for (const player of room.players.values()) {
         if (!player.alive || player.hp >= MATCH_CONFIG.MAX_HP) continue;
         const dist = Math.hypot(player.x - pack.x, player.z - pack.z);
-        if (dist <= 1.85 && Math.abs(player.y - pack.y) <= 1.85) {
+        if (dist <= 2.35 && Math.abs((player.y || 0) - (pack.y || 0)) <= 2.4) {
           pack.active = false;
           pack.respawnAt = now + MATCH_CONFIG.HEALTH_PACK_RESPAWN_MS;
           player.hp = Math.min(MATCH_CONFIG.MAX_HP, player.hp + MATCH_CONFIG.HEALTH_PACK_HEAL);
@@ -1766,6 +2598,9 @@ export class RoomManager {
             pickerId: player.id,
             newHp: player.hp
           });
+          if (!player.isBot) {
+            this.sendSelfState(player, now, true);
+          }
           break;
         }
       }
@@ -1942,6 +2777,14 @@ export class RoomManager {
       : Math.min(0.1, (now - this.lastTickAt) / 1000);
     this.lastTickAt = now;
 
+    // Server timestamp (ms) stamped on every stateUpdate of this tick (same value for all rooms/players in it).
+    // Clock choice: Date.now() captured ONCE at the start of the tick - the very same value used as the lag-compensation
+    // history timestamp (recordRoomSnapshots(room, now)), so client interpolation time and server rewind time share one
+    // epoch. Date.now() can step backwards (NTP), so the stamp is forced strictly increasing across ticks.
+    const prevStamp = this._lastStateStampMs;
+    const stateStampMs = (typeof prevStamp === 'number' && now <= prevStamp) ? prevStamp + 1 : now;
+    this._lastStateStampMs = stateStampMs;
+
     for (const room of this.rooms.values()) {
       // Skip idle rooms with zero human players to save 100% CPU when no match is active
       if (this.getHumanCount(room) === 0) continue;
@@ -1968,13 +2811,15 @@ export class RoomManager {
           } else if (p.alive && p.reloadingUntil) {
             this.syncPlayerReloadState(p, now);
           }
+          // Authoritative movement: simulate the player's queued input commands (time-credit limited) and ack them
+          this.processPlayerInputs(room, p, now);
         }
       }
 
       if (!room._botCallbacks) {
         room._botCallbacks = {
           onRespawnPlayer: (bot) => this.respawnPlayer(room, bot),
-          onBotShoot: (bot, shotPayload) => this.handleShoot(room, bot, shotPayload)
+          onBotShoot: (bot, shotPayload, tickNow) => this.handleShoot(room, bot, shotPayload, tickNow)
         };
       }
 
@@ -1991,13 +2836,27 @@ export class RoomManager {
       this.updateHealthPacks(room, now);
       this.updateDroppedWeapons(room, now);
 
+      // Owner-only `selfState` reconciliation: immediate on state change, or periodic (~8.3 Hz)
+      for (const p of room.players.values()) {
+        if (!p.isBot) {
+          if (
+            this._selfStateSignature(p) !== p._selfStateSig ||
+            now - (p.lastSelfStateAt || 0) >= SELF_STATE_INTERVAL_MS
+          ) {
+            this.sendSelfState(p, now, false);
+          }
+        }
+      }
+
       // Broadcast compact state snapshot (use volatile on Socket.IO to prevent TCP bufferbloat)
       room.stateSeq = ((room.stateSeq || 0) + 1) | 0;
       const roomTarget = this.io.to(room.code);
       const emitter = roomTarget.volatile || roomTarget;
       emitter.emit('stateUpdate', {
         seq: room.stateSeq,
+        t: stateStampMs,
         timeRemaining,
+        pickups: room.pickups,
         droppedWeapons: room.droppedWeapons,
         activeGrenades: this.serializeGrenades(room),
         players: this.serializePlayers(room)

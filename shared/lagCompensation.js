@@ -1,12 +1,16 @@
 // Server-Side Lag Compensation (Hitbox Rewind & Interpolation) Helper Module
 // Maintains a compact ~350ms ring buffer of player position/posture snapshots
-// and provides up to 250ms hitbox rewind + restoration during server shot validation.
+// and provides up to 200ms hitbox rewind + restoration during server shot validation.
 
-import { MATCH_CONFIG } from './config.js';
-import { rayIntersectsAABB } from './physics.js';
+import { INTERP_DELAY_MS, MATCH_CONFIG } from './config.js';
+import { PART_PADDING, raycastPlayerParts } from './hitboxes.js';
 
+// History must cover the largest possible rewind (200 ms) plus the 40 ms tick period and scheduling slack (110 ms margin)
 export const LAG_COMP_HISTORY_MS = 350;
-export const LAG_COMP_MAX_REWIND_MS = 250;
+export const LAG_COMP_MAX_REWIND_MS = 200;
+// Client entity interpolation delay (added on top of one-way latency = rttMs / 2). Alias of the shared
+// INTERP_DELAY_MS (shared/config.js) so the client render delay and the server rewind can never drift apart.
+export const LAG_COMP_INTERP_ALLOWANCE_MS = INTERP_DELAY_MS;
 export const LAG_COMP_MAX_SNAPSHOTS = 32;
 export const KILL_ADRENALINE_HEAL = 25;
 
@@ -95,7 +99,7 @@ export function recordRoomSnapshots(room, timestamp = Date.now()) {
 
 /**
  * Interpolates a player's historical `(x, y, z, crouch, prone)` at `targetTimestamp`,
- * clamped to at most `LAG_COMP_MAX_REWIND_MS` (250ms) prior to the reference current time.
+ * clamped to at most `LAG_COMP_MAX_REWIND_MS` (200ms) prior to the reference current time.
  */
 export function getRewoundPlayerPosition(player, targetTimestamp, now = Date.now()) {
   if (!player || typeof player !== 'object') return null;
@@ -220,36 +224,25 @@ export function getRewoundPlayerPosition(player, targetTimestamp, now = Date.now
 }
 
 /**
- * Resolves the effective rewind duration (0..250ms) for a shot payload and shooter.
+ * Resolves the effective rewind duration (0..LAG_COMP_MAX_REWIND_MS) for a shooter.
+ * Only the SERVER-measured `shooter.rttMs` is trusted: every client-supplied latency/timestamp field
+ * in `payload` (rewindMs, latencyMs, pingMs, rttMs, shotTimestamp, clientTimestamp) is ignored.
+ * rewind = clamp(rttMs / 2 + INTERP_DELAY_MS, 0, LAG_COMP_MAX_REWIND_MS). Bots never rewind.
+ * The client draws remote players at (estimated TRUE server time - INTERP_DELAY_MS) (public/js/snapshotBuffer.js adds the
+ * one-way latency back into its clock estimate), so a shot fired at local time L arrives at L + rtt/2 and is rewound to
+ * L + rtt/2 - (rtt/2 + INTERP_DELAY_MS) = L - INTERP_DELAY_MS: exactly the pose the shooter saw on screen.
  */
-export function resolveShotRewindMs(shooter, payload = {}, now = Date.now()) {
-  let rawMs = 0;
-
-  if (typeof payload?.rewindMs === 'number' && Number.isFinite(payload.rewindMs)) {
-    rawMs = payload.rewindMs;
-  } else if (typeof payload?.latencyMs === 'number' && Number.isFinite(payload.latencyMs)) {
-    rawMs = payload.latencyMs;
-  } else if (typeof payload?.shotTimestamp === 'number' && Number.isFinite(payload.shotTimestamp)) {
-    rawMs = now - payload.shotTimestamp;
-  } else if (typeof payload?.clientTimestamp === 'number' && Number.isFinite(payload.clientTimestamp)) {
-    rawMs = now - payload.clientTimestamp;
-  } else if (typeof payload?.pingMs === 'number' && Number.isFinite(payload.pingMs)) {
-    rawMs = payload.pingMs * 0.5;
-  } else if (typeof payload?.rttMs === 'number' && Number.isFinite(payload.rttMs)) {
-    rawMs = payload.rttMs * 0.5;
-  } else if (typeof shooter?.latencyMs === 'number' && Number.isFinite(shooter.latencyMs)) {
-    rawMs = shooter.latencyMs;
-  } else if (typeof shooter?.pingMs === 'number' && Number.isFinite(shooter.pingMs)) {
-    rawMs = shooter.pingMs * 0.5;
-  } else if (typeof shooter?.rttMs === 'number' && Number.isFinite(shooter.rttMs)) {
-    rawMs = shooter.rttMs * 0.5;
-  }
-
+export function resolveShotRewindMs(shooter, _payload = {}, _now = Date.now()) {
+  if (!shooter || shooter.isBot) return 0;
+  const rtt = typeof shooter.rttMs === 'number' && Number.isFinite(shooter.rttMs)
+    ? Math.max(0, shooter.rttMs)
+    : 0;
+  const rawMs = rtt * 0.5 + INTERP_DELAY_MS;
   return Math.max(0, Math.min(LAG_COMP_MAX_REWIND_MS, rawMs));
 }
 
 /**
- * Temporarily rewinds all alive enemy players in `room` by `rewindMs` (clamped to max 250ms)
+ * Temporarily rewinds all alive enemy players in `room` by `rewindMs` (clamped to LAG_COMP_MAX_REWIND_MS)
  * and returns `savedStates` so `restoreRewoundPlayers(savedStates)` can restore live positions after hit detection.
  */
 export function rewindRoomPlayersForShot(room, shooterId, rewindMs = undefined, now = Date.now()) {
@@ -326,55 +319,26 @@ export function restoreRewoundPlayers(savedStates) {
 }
 
 /**
- * Raycasts `(origin, dir)` against a single player's posture-aware 3D AABB hitbox.
- * Returns `{ distance, hitPoint, isHeadshot, isLegshot }` or `null`.
+ * Raycasts `(origin, dir)` against a single player's per-part hitboxes (shared/hitboxes.js: head, torso, pelvis,
+ * thighs, shins - the same boxes the client's invisible proxy meshes use), nearest part wins.
+ * `radiusPadding` is extra inflation of every part box in metres (default PART_PADDING, the only tolerance;
+ * lag is handled by rewinding the target, wide values are only for shotgun spread).
+ * Returns `{ distance, hitPoint, isHeadshot, isLegshot, zone, partId }` or `null`.
  */
-export function raycastPlayerHitbox(origin, dir, player, maxRange = 200, radiusPadding = 0.2) {
+export function raycastPlayerHitbox(origin, dir, player, maxRange = 200, radiusPadding = PART_PADDING) {
   if (!origin || !dir || !player || !player.alive) return null;
 
-  const baseRadius = (MATCH_CONFIG.PLAYER_RADIUS || 0.45) + radiusPadding;
-  const isProne = Boolean(player.prone);
-  const isCrouching = Boolean(player.crouching ?? player.crouch);
-  const height = isProne
-    ? (MATCH_CONFIG.PLAYER_PRONE_HEIGHT || 0.58)
-    : isCrouching
-      ? (MATCH_CONFIG.PLAYER_CROUCH_HEIGHT || 1.1)
-      : (MATCH_CONFIG.PLAYER_HEIGHT || 1.75);
-
-  const footY = Number(player.y) || 0;
-  const box = {
-    minX: player.x - baseRadius,
-    maxX: player.x + baseRadius,
-    minY: footY - 0.08,
-    maxY: footY + height + 0.08,
-    minZ: player.z - baseRadius,
-    maxZ: player.z + baseRadius
-  };
-
-  const len = Math.hypot(dir.x || 0, dir.y || 0, dir.z || 0);
-  if (len < 1e-6) return null;
-  const normDir = {
-    x: dir.x / len,
-    y: dir.y / len,
-    z: dir.z / len
-  };
-
-  const t = rayIntersectsAABB(origin, normDir, maxRange, box);
-  if (t === null || t < 0 || t > maxRange) return null;
-
-  const hitPoint = {
-    x: origin.x + normDir.x * t,
-    y: origin.y + normDir.y * t,
-    z: origin.z + normDir.z * t
-  };
-  const relY = hitPoint.y - footY;
-  const isHeadshot = relY >= height * 0.72;
-  const isLegshot = !isHeadshot && relY <= height * 0.35;
+  const hit = raycastPlayerParts(origin, dir, player, maxRange, {
+    padding: Math.max(0, Number.isFinite(radiusPadding) ? radiusPadding : PART_PADDING)
+  });
+  if (!hit) return null;
 
   return {
-    distance: t,
-    hitPoint,
-    isHeadshot,
-    isLegshot
+    distance: hit.distance,
+    hitPoint: hit.point,
+    isHeadshot: hit.zone === 'head',
+    isLegshot: hit.zone === 'leg',
+    zone: hit.zone,
+    partId: hit.partId
   };
 }

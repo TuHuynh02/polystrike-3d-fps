@@ -7,7 +7,10 @@ export const MATCH_CONFIG = {
   KILL_LIMIT: 20,
   MATCH_DURATION_SEC: 300, // 5 minutes
   RESPAWN_DELAY_MS: 3000,  // 3 seconds
-  SPAWN_PROTECTION_MS: 1500, // 1.5 seconds of invincibility after spawn/respawn
+  SPAWN_PROTECTION_MS: 1500, // 1.5 seconds of invincibility after spawn/respawn (ends early when the player fires/throws)
+  LATENCY_PROBE_INTERVAL_MS: 2000, // Server -> client RTT probe period (server-measured latency for lag compensation)
+  LATENCY_EMA_ALPHA: 0.3, // Weight of the newest RTT sample in the exponential moving average
+  MAX_RTT_MS: 1000, // RTT samples are clamped to 0..MAX_RTT_MS
   SPAWN_MIN_CLEARANCE: 6.0,  // Minimum distance from other players to avoid overlapping spawns
   SPAWN_DENSITY_RADIUS: 36.0, // Radius used to evaluate low-player-density zones
   SPAWN_RECENT_COOLDOWN_MS: 4500, // Cooldown before reusing a recently used spawn point
@@ -45,6 +48,12 @@ export const MATCH_CONFIG = {
   JUMP_BUFFER_MS: 120,
   BOT_MOVE_SPEED: 4.8
 };
+
+// Snapshot-interpolation render delay (ms). SINGLE source of truth shared by the client (remote players are drawn at
+// "estimated server time - INTERP_DELAY_MS", public/js/snapshotBuffer.js) and the server (lag-compensation rewind
+// = shooter one-way latency + INTERP_DELAY_MS, shared/lagCompensation.js). Must stay >= 2 stateUpdate periods (80 ms
+// at 25 Hz) so a lost/late snapshot still leaves two to interpolate between.
+export const INTERP_DELAY_MS = 100;
 
 export const PLAYER_COLORS = [
   0x38bdf8, // Cyan

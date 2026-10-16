@@ -11,3 +11,8 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # Optional: comma-separated browser origins allowed to connect from other
+      # sites (the ?server=<this-url> flow). Leave unset for same-origin only.
+      # Add it in the Render dashboard (Environment) or uncomment:
+      # - key: CORS_ORIGINS
+      #   value: https://your-frontend.example.com

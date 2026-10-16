@@ -1142,43 +1142,33 @@ kbd {
   justify-content: center;
   background: radial-gradient(
     circle at 50% 50%,
-    transparent 34%,
-    rgba(4, 8, 15, 0.18) 72%,
-    rgba(2, 5, 10, 0.42) 100%
+    transparent 42%,
+    rgba(4, 8, 15, 0.14) 76%,
+    rgba(2, 5, 10, 0.34) 100%
   );
 }
 
 .optic-lens-window {
   position: relative;
-  width: 176px;
-  height: 132px;
-  border-radius: 18px;
+  width: 46vh;
+  height: 46vh;
+  border-radius: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: radial-gradient(
-    circle at 50% 50%,
-    rgba(56, 189, 248, 0.055) 0%,
-    rgba(14, 165, 233, 0.02) 68%,
-    transparent 100%
-  );
+  background: transparent;
+  border: none;
+  box-shadow: none;
 }
 
 .optic-scope.optic-reddot .optic-lens-window {
-  width: 152px;
-  height: 142px;
+  width: 44vh;
+  height: 44vh;
   border-radius: 50%;
 }
 
 .optic-holo-ring {
-  position: relative;
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  border: 1.6px solid rgba(239, 68, 68, 0.92);
-  box-shadow:
-    0 0 8px rgba(239, 68, 68, 0.7),
-    inset 0 0 6px rgba(239, 68, 68, 0.35);
+  display: none;
 }
 
 .optic-scope.optic-reddot .optic-holo-ring {
@@ -1186,9 +1176,7 @@ kbd {
 }
 
 .optic-holo-tick {
-  position: absolute;
-  background: #ef4444;
-  box-shadow: 0 0 5px rgba(239, 68, 68, 0.85);
+  display: none;
 }
 
 .oht-top {
@@ -1224,33 +1212,16 @@ kbd {
 }
 
 .optic-center-dot {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: #ff3b30;
-  box-shadow:
-    0 0 8px #ef4444,
-    0 0 14px rgba(239, 68, 68, 0.85),
-    0 0 2px #ffffff;
-  transform: translate(-50%, -50%);
+  display: none;
 }
 
 .optic-scope.optic-reddot .optic-center-dot {
-  width: 5px;
-  height: 5px;
-  background: #ff2d20;
-  box-shadow:
-    0 0 10px #ef4444,
-    0 0 18px rgba(239, 68, 68, 0.9),
-    0 0 2px #ffffff;
+  display: none;
 }
 
 .optic-telemetry {
   position: absolute;
-  bottom: -26px;
+  bottom: -30px;
   left: 50%;
   transform: translateX(-50%);
   white-space: nowrap;
@@ -2480,3 +2451,56 @@ kbd {
   font-family: var(--font-mono);
   font-size: 0.82rem;
 }
+
+/* ======================== MINIMAL / DECLUTTERED UI OVERRIDES ======================== */
+.brand-subtitle,
+.header-meta-pills,
+.card-subtag,
+.field-hint,
+.weapon-desc,
+.map-desc,
+.showcase-tag,
+.showcase-drag-hint,
+.btn small,
+.rooms-table-head,
+.scope-telemetry,
+.optic-telemetry,
+.hud-goal,
+.minimap-header,
+.minimap-legend,
+.speed-badge,
+.pause-subtitle,
+#hud-grenade-state-text {
+  display: none !important;
+}
+
+.lobby-header {
+  padding: 10px 18px;
+  margin-bottom: 12px;
+}
+
+.header-brand-group {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+}
+
+.pause-card,
+.victory-card,
+.scoreboard-card {
+  max-height: 92vh;
+  overflow-y: auto;
+}
+
+.controls-guide {
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px 8px;
+}
+
+@media (max-width: 520px) {
+  .controls-guide {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+

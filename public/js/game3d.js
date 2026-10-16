@@ -5,10 +5,16 @@ import {
   WEAPONS,
   WEAPON_ORDER,
   getEffectiveFireRateMs,
-  getMapConfig
+  getMapConfig,
+  stepGrenade
 } from '../shared/constants.js';
+import { FIXED_DT, createMovementState } from '../shared/movement.js';
+import { BTN, commandTimeMs, isFireIntervalOk, isValidMoveAck, stepCommand } from '../shared/netcode.js';
+import { computeSpreadAmount, createShotState, planShot, resetShotState } from '../shared/spread.js';
+import { ClientPrediction, INPUT_BATCH_INTERVAL_MS } from './prediction.js';
+import { SnapshotInterpolator } from './snapshotBuffer.js';
 import { buildSkyAndAtmosphere, buildArena } from './arenaBuilder.js';
-import { createWeaponMesh } from './weaponModels.js';
+import { createWeaponMesh, setWeaponAdsCulling } from './weaponModels.js';
 import {
   createPlayerNameSprite,
   createRemotePlayerMesh,
@@ -33,8 +39,8 @@ export class Game3D {
     this.camera = new THREE.PerspectiveCamera(
       68,
       window.innerWidth / window.innerHeight,
-      0.08,
-      420
+      0.04,
+      360
     );
     this.scene.add(this.camera);
 
@@ -122,6 +128,10 @@ export class Game3D {
     this.hitboxMeshes = [];
     this.rayTargets = [];
     this.remotePlayers = new Map(); // id -> RemotePlayerObject
+    // Server-timestamped snapshot buffers of the remote players; they are drawn at (server time - INTERP_DELAY_MS)
+    this.snapshots = new SnapshotInterpolator();
+    this._remoteSample = {};
+    this._remoteScratch = [];
     this.pickupMeshes = new Map();  // pickupId -> { group, crossGroup, ringMesh, padMat }
     this.droppedWeaponMeshes = new Map(); // dropId -> { group, gunSpinGroup, ringMat }
     this.activeGrenadeMeshes = new Map(); // grenadeId -> active 3D projectile state
@@ -169,6 +179,49 @@ export class Game3D {
     this.nextFootstepAt = 0;
     this.sensitivity = 1.0;
 
+    // Fixed-timestep movement (shared/movement.js): the simulation advances in FIXED_DT steps, rendering interpolates
+    this.moveState = createMovementState();
+    this.physicsAccumulator = 0;
+    this.simTimeMs = 0; // simulation clock (ms) of the last simulated command: derived from its seq (commandTimeMs)
+    this.physPrev = { x: 0, y: 0.1, z: 0, stepOffsetY: 0 }; // previous fixed-step pose used for render interpolation
+    this.physTracked = { x: 0, y: 0.1, z: 0 }; // pose after the last fixed step (detects external teleports/respawns)
+    this.physAlpha = 1;
+
+    // Input-command netcode (shared/netcode.js + prediction.js): each fixed step builds ONE command that is both
+    // simulated locally and sent to the server (`inputBatch`); the server's `moveAck` is reconciled in applyMoveAck
+    this.prediction = new ClientPrediction();
+    this.cmdFields = {
+      moveForward: 0,
+      moveRight: 0,
+      yaw: 0,
+      pitch: 0,
+      lean: 0,
+      weapon: '',
+      wantsCrouch: false,
+      wantsProne: false,
+      wantsSprint: false,
+      wantsJump: false,
+      isAiming: false,
+      isAdsHeld: false
+    };
+    this.cmdScratchInput = {};
+    this.lastInputBatchAt = 0;
+
+    // Shots are part of the command stream: attemptShoot only queues a fire intent, the next eligible fixed-step command
+    // carries the FIRE bit + shot sequence `ss`, and the SERVER computes spread and hits. The seed (owner-only, from
+    // `roomJoined` / `selfSeed`) and `shotState` (bloom / spray advanced by fire commands in sim time) let this client draw the
+    // tracer along exactly the rays the server will use (shared/spread.js planShot).
+    this.spreadSeed = 0;
+    this.shotSeq = 0; // `ss` of the last fire command (strictly increasing, reset with the netcode on join)
+    this.shotState = createShotState();
+    this.pendingFire = null; // { weapon, ammoConsumed, autoReloaded } waiting for a command slot
+    this.predictedShots = []; // [{ ss, seq, weapon, ammoConsumed, autoReloaded, refunded }]
+    this._refundedShotSeqs = new Set();
+    this.lastShotRejected = null;
+    this.hp = MATCH_CONFIG.MAX_HP || 100;
+    this.lastFireCmdTimeMs = -Infinity; // sim time of the last fire command (same fire-rate rule as the server)
+    this.lastShotPlan = null; // { seq, ss, origin, dirs, spreadAmount } of the last predicted shot
+
     // Weapon, 3-Slot Loadout, Finite Reserve Ammo, Reload & Gunshot mechanics state
     this.loadout = {
       primary: 'rifle',
@@ -194,6 +247,9 @@ export class Game3D {
     this.equipUntil = 0;
     this.equipDuration = 220;
     this.isMouseDown = false;
+    this.isRightMouseDown = false;
+    this.adsPressedAt = 0;
+    this.adsToggleActive = false;
     this.isAiming = false;
 
     // Crosshair-Only Recoil & Spread state (Zero Camera Shake when shooting)
@@ -234,7 +290,6 @@ export class Game3D {
     this.lastFpsUpdate = performance.now();
     this.currentFps = 60;
     this.lastFrameTime = performance.now();
-    this.lastMoveSentAt = 0;
     this.lastHudMoveUpdateAt = 0;
 
     // Top-left Tactical Mini Map / Radar
@@ -447,7 +502,11 @@ export class Game3D {
           color: 0x22c55e,
           side: THREE.DoubleSide,
           transparent: true,
-          opacity: 0.72
+          opacity: 0.72,
+          depthWrite: false,
+          polygonOffset: true,
+          polygonOffsetFactor: -2,
+          polygonOffsetUnits: -2
         });
         const holoRing = new THREE.Mesh(holoRingGeo, holoRingMat);
         holoRing.rotation.x = -Math.PI / 2;
@@ -482,6 +541,11 @@ export class Game3D {
         this.scene.add(group);
         item = { group, crossGroup, padMat, holoRing, x: p.x, y: p.y, z: p.z, active: Boolean(p.active) };
         this.pickupMeshes.set(p.id, item);
+      } else {
+        item.x = p.x;
+        item.y = p.y;
+        item.z = p.z;
+        item.group.position.set(p.x, p.y, p.z);
       }
 
       item.active = Boolean(p.active);
@@ -549,7 +613,11 @@ export class Game3D {
       color: cfg.color || 0x38bdf8,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.85
+      opacity: 0.85,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2
     });
     const ringMesh = new THREE.Mesh(ringGeo, ringMat);
     ringMesh.rotation.x = -Math.PI / 2;
@@ -1179,6 +1247,7 @@ export class Game3D {
     this.nextShellAt = 0;
     this.pumpCycleUntil = 0;
     this.isAiming = false;
+    this.adsToggleActive = false;
     this.currentBloom = 0;
     this.recoilShotIndex = 0;
     this.crosshairRecoilKick = 0;
@@ -1193,6 +1262,7 @@ export class Game3D {
       const vm = this.viewmodelMeshes[wId];
       if (vm) {
         vm.visible = wId === weaponId;
+        setWeaponAdsCulling(vm, false);
         if (vm.userData?.magMesh && vm.userData.magMesh.userData.basePos) {
           vm.userData.magMesh.position.copy(vm.userData.magMesh.userData.basePos);
         }
@@ -1236,7 +1306,9 @@ export class Game3D {
     if (currentAmmo >= cfg.magSize || reserveAmmo <= 0) return;
 
     this.isAiming = false;
+    this.adsToggleActive = false;
     this.isSprinting = false;
+    setWeaponAdsCulling(this.viewmodelMeshes[this.currentWeapon], false);
     this.reloadStartedAt = now;
 
     if (cfg.shellByShell) {
@@ -1269,12 +1341,53 @@ export class Game3D {
     return createPlayerNameSprite(name);
   }
 
-  createRemotePlayerMesh(playerData, options = {}) {
-    return createRemotePlayerMesh(playerData, {
+  createRemotePlayerMesh(playerData = {}, options = {}) {
+    const rp = createRemotePlayerMesh(playerData, {
       scene: this.scene,
       defaultColor: this.lobbyOperatorColor || 0x38bdf8,
       ...options
     });
+    if (!options.isShowcase && !rp.labelInfo) {
+      if (typeof document !== 'undefined') {
+        const labelInfo = createPlayerNameSprite(playerData.name || 'OPERATOR');
+        if (labelInfo?.sprite) {
+          labelInfo.material.transparent = true;
+          labelInfo.material.depthTest = false;
+          labelInfo.material.depthWrite = false;
+          if (typeof playerData.hp === 'number') {
+            labelInfo.updateLabel(playerData.hp);
+          }
+          rp.labelInfo = labelInfo;
+          rp.group.add(labelInfo.sprite);
+        }
+      } else {
+        const material = new THREE.SpriteMaterial({
+          transparent: true,
+          depthTest: false,
+          depthWrite: false
+        });
+        const sprite = new THREE.Sprite(material);
+        sprite.scale.set(2.3, 0.65, 1);
+        sprite.position.set(0, 2.36, 0);
+        sprite.renderOrder = 10;
+        rp.labelInfo = {
+          sprite,
+          canvas: null,
+          texture: { dispose() {} },
+          material,
+          updateLabel() {}
+        };
+        rp.group.add(sprite);
+      }
+    }
+    if (rp?.group) {
+      rp.group.traverse((obj) => {
+        if (obj.isMesh || obj.isSprite) {
+          obj.frustumCulled = false;
+        }
+      });
+    }
+    return rp;
   }
 
   rebuildHitboxList() {
@@ -1312,17 +1425,45 @@ export class Game3D {
       this.disposeRemotePlayer(rp);
     }
     this.remotePlayers.clear();
+    this.snapshots.clear();
     this.rebuildHitboxList();
   }
 
-  syncPlayersState(playersArray = []) {
-    const now = performance.now();
+  /** Feeds the client-measured round-trip time (ms) to the render clock (adds the one-way latency back, see snapshotBuffer.js). */
+  setNetworkRtt(rttMs) {
+    this.snapshots.setRttMs(rttMs);
+  }
+
+  /** Respawn of a remote player: drop its snapshot history and show it at the spawn point (no streak from the death spot). */
+  resetRemoteInterpolation(id, x, y, z, yaw = 0) {
+    this.snapshots.reset(id);
+    const rp = this.remotePlayers.get(id);
+    if (rp?.group) {
+      rp.group.position.set(x, y, z);
+      rp.group.rotation.y = yaw;
+    }
+    if (rp) {
+      rp.smoothedSpeed = 0;
+      rp.velocity?.set(0, 0, 0);
+    }
+  }
+
+  /**
+   * Applies one player list. `serverTimeMs` (the `t` of a `stateUpdate`) marks it as a timestamped snapshot: the remote
+   * players' pose is then buffered and drawn by interpolation (updateRemotePlayers). Without it (join / botsUpdated /
+   * playerLeft re-syncs of an older list) only the entity set and the discrete state (alive, weapon, hp, ...) are applied.
+   * `localNowMs` is the local receive time (defaults to performance.now()).
+   */
+  syncPlayersState(playersArray = [], serverTimeMs = undefined, localNowMs = undefined) {
+    const now = typeof localNowMs === 'number' ? localNowMs : performance.now();
+    const stamped = typeof serverTimeMs === 'number' && Number.isFinite(serverTimeMs);
     if (!this._seenPlayerIds) {
       this._seenPlayerIds = new Set();
     }
     const seenIds = this._seenPlayerIds;
     seenIds.clear();
     let hitboxesDirty = false;
+    this._remoteScratch.length = 0;
 
     for (const p of playersArray) {
       if (p.id === this.localId) {
@@ -1342,61 +1483,48 @@ export class Game3D {
         rp = this.createRemotePlayerMesh(p);
         rp.group.position.set(p.x, p.y, p.z);
         rp.group.rotation.y = p.yaw || 0;
-        rp.serverPos = new THREE.Vector3(p.x, p.y, p.z);
-        rp.velocity = new THREE.Vector3(0, 0, 0);
-        rp.lastSyncAt = now;
+        rp.velocity = new THREE.Vector3(0, 0, 0); // interpolated motion (animation only)
         rp.smoothedSpeed = 0;
         this.remotePlayers.set(p.id, rp);
         hitboxesDirty = true;
       }
 
-      if (!rp.serverPos) rp.serverPos = new THREE.Vector3(p.x, p.y, p.z);
+      if (rp.group && rp.group.parent !== this.scene) {
+        this.scene.add(rp.group);
+      }
       if (!rp.velocity) rp.velocity = new THREE.Vector3(0, 0, 0);
 
       const nowAlive = Boolean(p.alive);
-      const snapDist = Math.hypot(p.x - rp.group.position.x, p.z - rp.group.position.z);
       if (rp.alive !== nowAlive) {
         hitboxesDirty = true;
         if (nowAlive) {
+          // (Re)spawn: forget the old snapshots and appear at the spawn point (no streak from the death position)
+          this.snapshots.reset(p.id);
           rp.group.position.set(p.x, p.y, p.z);
           rp.group.rotation.y = p.yaw || 0;
-          rp.serverPos.set(p.x, p.y, p.z);
           rp.velocity.set(0, 0, 0);
           rp.smoothedSpeed = 0;
         }
-      } else if (snapDist > 12) {
-        rp.group.position.set(p.x, p.y, p.z);
-        rp.serverPos.set(p.x, p.y, p.z);
-        rp.velocity.set(0, 0, 0);
-      } else {
-        const dtSync = rp.lastSyncAt ? (now - rp.lastSyncAt) / 1000 : 0;
-        if (typeof p.vx === 'number' && typeof p.vz === 'number') {
-          rp.velocity.set(p.vx, p.vy || 0, p.vz);
-        } else if (dtSync > 0.012 && dtSync < 0.35) {
-          const maxV = (MATCH_CONFIG.SLIDE_INITIAL_SPEED || 11.2) * 1.25;
-          const instVx = Math.max(-maxV, Math.min(maxV, (p.x - rp.serverPos.x) / dtSync));
-          const instVy = Math.max(-25, Math.min(20, (p.y - rp.serverPos.y) / dtSync));
-          const instVz = Math.max(-maxV, Math.min(maxV, (p.z - rp.serverPos.z) / dtSync));
-          rp.velocity.x = rp.velocity.x * 0.35 + instVx * 0.65;
-          rp.velocity.y = rp.velocity.y * 0.35 + instVy * 0.65;
-          rp.velocity.z = rp.velocity.z * 0.35 + instVz * 0.65;
-          if (Math.hypot(p.x - rp.serverPos.x, p.z - rp.serverPos.z) < 0.008) {
-            rp.velocity.set(0, 0, 0);
-          }
-        }
-        rp.serverPos.set(p.x, p.y, p.z);
       }
 
-      rp.lastSyncAt = now;
-      rp.targetPos.set(p.x, p.y, p.z);
-      rp.targetYaw = p.yaw || 0;
-      rp.targetPitch = p.pitch || 0;
-      rp.crouching = Boolean(p.crouching || p.crouch);
-      rp.crouch = rp.crouching;
-      rp.prone = Boolean(p.prone);
-      rp.lean = Number(p.lean || 0);
+      rp.isBot = Boolean(p.isBot);
+      rp.name = p.name || rp.name;
+      if (stamped) {
+        // Pose (position, yaw/pitch/lean, crouch/prone) comes from the snapshot buffer in updateRemotePlayers
+        this._remoteScratch.push(p);
+      } else {
+        rp.targetYaw = p.yaw || 0;
+        rp.targetPitch = p.pitch || 0;
+        rp.crouching = Boolean(p.crouching || p.crouch);
+        rp.crouch = rp.crouching;
+        rp.prone = Boolean(p.prone);
+        rp.lean = Number(p.lean || 0);
+      }
       rp.alive = nowAlive;
       rp.group.visible = nowAlive;
+      if (rp.labelInfo?.sprite) {
+        rp.labelInfo.sprite.visible = nowAlive;
+      }
 
       if (p.weapon && WEAPONS[p.weapon] && p.weapon !== rp.currentWeapon) {
         rp.currentWeapon = p.weapon;
@@ -1416,9 +1544,15 @@ export class Game3D {
       if (!seenIds.has(id)) {
         this.disposeRemotePlayer(rp);
         this.remotePlayers.delete(id);
+        this.snapshots.remove(id);
         hitboxesDirty = true;
       }
     }
+
+    if (stamped && this._remoteScratch.length > 0) {
+      this.snapshots.pushState(serverTimeMs, now, this._remoteScratch, this.localId);
+    }
+    this._remoteScratch.length = 0;
 
     if (hitboxesDirty) {
       this.rebuildHitboxList();
@@ -1428,6 +1562,14 @@ export class Game3D {
   spawnLocalPlayer(data) {
     this.position.set(data.x, data.y || 0.1, data.z);
     this.velocity.set(0, 0, 0);
+    // Same starting state the server gives a freshly (re)spawned player (RoomManager.resetPlayerMovement)
+    this.onGround = true;
+    this.wasOnGround = true;
+    this.lastGroundedAt = commandTimeMs(this.prediction.lastAckedSeq);
+    this.jumpQueuedUntil = 0;
+    this.slideUntil = 0;
+    this.slideCooldownUntil = 0;
+    this.stepOffsetY = 0;
     this.yaw = data.yaw || 0;
     this.pitch = 0;
     this.cameraRoll = 0;
@@ -1436,8 +1578,13 @@ export class Game3D {
     this.reloadingUntil = 0;
     this.nextShellAt = 0;
     this.pumpCycleUntil = 0;
+    this.isRightMouseDown = false;
+    this.adsToggleActive = false;
     this.isAiming = false;
     this.isSprinting = false;
+    for (const wId of WEAPON_ORDER) {
+      setWeaponAdsCulling(this.viewmodelMeshes[wId], false);
+    }
     this.isSliding = false;
     this.crouching = false;
     this.prone = false;
@@ -1452,6 +1599,15 @@ export class Game3D {
     this.punchRoll = 0;
     this.flinchPitch = 0;
     this.flinchRoll = 0;
+    // New life: the server restarted this player's shot session (fresh bloom, fire-rate clock, new seed)
+    this.pendingFire = null;
+    this.predictedShots.length = 0;
+    this._refundedShotSeqs.clear();
+    this.lastShotRejected = null;
+    this.hp = typeof data.hp === 'number' ? data.hp : (MATCH_CONFIG.MAX_HP || 100);
+    resetShotState(this.shotState);
+    this.lastFireCmdTimeMs = -Infinity;
+    if (Number.isInteger(data.spreadSeed)) this.setSpreadSeed(data.spreadSeed);
     this.meleeSwingUntil = 0;
     this.grenadeThrowUntil = 0;
     this.grenades = typeof data.grenades === 'number' ? data.grenades : 1;
@@ -1522,7 +1678,7 @@ export class Game3D {
     this.bulletDecals.push(decalMesh);
   }
 
-  spawnTracerEffect(origin, hitPoint, colorHex = 0xfef08a, isPlayerHit = false, hitNormal = null) {
+  spawnTracerEffect(origin, hitPoint, colorHex = 0xfef08a, isPlayerHit = false, hitNormal = null, ss = 0) {
     this.tmpVec3A.set(origin.x, origin.y, origin.z);
     this.tmpVec3B.set(hitPoint.x, hitPoint.y, hitPoint.z);
 
@@ -1575,6 +1731,7 @@ export class Game3D {
 
     this.activeEffects.push({
       type: 'tracer',
+      ss,
       line,
       spark,
       particles,
@@ -1753,33 +1910,32 @@ export class Game3D {
     this.flinchRoll = (Math.random() < 0.5 ? -1 : 1) * 0.012 * scale;
   }
 
+  /**
+   * Crosshair (HUD) spread ONLY: uses the frame-decaying `currentBloom` and the visual spray index. The spread that decides
+   * where bullets go is computed by the shared deterministic planShot() on the fire command (sim-time bloom), never from this.
+   */
   computeEffectiveSpread(cfg) {
-    const horizSpeed = Math.hypot(this.velocity.x, this.velocity.z);
-    const isStationary = horizSpeed < 0.85 && this.onGround;
-
-    // Laser-tight accuracy when stationary / crouched / prone
-    const firstShotMult = this.recoilShotIndex === 0 && this.currentBloom < 0.0015 && isStationary
-      ? (cfg.firstShotSpreadMult || 0.15)
-      : 1.0;
-    const base = (this.isAiming ? cfg.adsSpread : cfg.spread) * firstShotMult;
-    const stanceMult = this.prone
-      ? (cfg.proneSpreadMult || 0.35)
-      : (this.crouching && !this.isSliding)
-        ? (cfg.crouchSpreadMult || 0.55)
-        : 1.0;
-
-    // Heavy run-and-gun penalty: moving or jumping causes severe spread expansion & bullet deviation
-    const speedRatio = Math.min(1.65, horizSpeed / MATCH_CONFIG.WALK_SPEED);
-    const movePenalty = speedRatio > 0.12
-      ? Math.pow(speedRatio, 1.12) * (cfg.moveSpread || 0.095) * (this.isAiming ? 0.85 : 1.0)
-      : 0;
-    const airPenalty = !this.onGround ? (cfg.airSpread || 0.135) : 0;
-
-    return (base + this.currentBloom) * stanceMult + movePenalty + airPenalty;
+    return computeSpreadAmount(cfg, {
+      horizSpeed: Math.hypot(this.velocity.x, this.velocity.z),
+      onGround: this.onGround,
+      crouching: this.crouching,
+      sliding: this.isSliding,
+      prone: this.prone,
+      aiming: this.isAiming,
+      bloom: this.currentBloom,
+      shotIndex: this.recoilShotIndex
+    });
   }
 
+  /**
+   * Trigger pull. Everything the player SEES at once stays immediate (cooldown, ammo, muzzle flash, kick, bloom HUD, sound),
+   * but the shot itself is only queued as a fire intent: the next eligible fixed-step command carries the FIRE bit + shot
+   * sequence (advanceFixedPhysics) and the server computes spread and hits. The tracer is drawn when that command is built
+   * (predictFireCommand), along the exact rays the server will use. No `shoot` socket event exists any more.
+   */
   attemptShoot() {
     if (!this.inMatch || !this.alive || !this.isPointerLocked) return;
+    if (this.pendingFire) return; // the previous trigger pull has not left with a command yet (a step or two)
 
     const now = performance.now();
     const cfg = WEAPONS[this.currentWeapon];
@@ -1826,117 +1982,23 @@ export class Game3D {
       );
     }
 
-    const horizSpeed = Math.hypot(this.velocity.x, this.velocity.z);
-    const isMovingWhileShooting = horizSpeed > 0.95 || !this.onGround;
-    const spreadAmount = isMelee ? 0 : this.computeEffectiveSpread(cfg);
-
-    if (this.rayTargets.length === 0) {
-      this.rebuildHitboxList();
-    }
-    const hits = [];
-    let primaryHitPoint = null;
-
-    const eyeOrigin = {
-      x: this.camera.position.x,
-      y: this.camera.position.y,
-      z: this.camera.position.z
-    };
-
-    for (let p = 0; p < cfg.pellets; p++) {
-      this.raycaster.setFromCamera(this.screenCenter, this.camera);
-      const dir = this.raycaster.ray.direction;
-
-      if (cfg.pellets > 1) {
-        // Shotgun pellet ring pattern (widens heavily if running)
-        if (p === 0 && !isMovingWhileShooting) {
-          dir.x += (Math.random() - 0.5) * spreadAmount * 0.25;
-          dir.y += (Math.random() - 0.5) * spreadAmount * 0.25;
-          dir.z += (Math.random() - 0.5) * spreadAmount * 0.25;
-        } else {
-          const angle = ((p) / cfg.pellets) * Math.PI * 2 + (Math.random() - 0.5) * 0.35;
-          const radius = spreadAmount * (0.58 + Math.random() * 0.45);
-          dir.x += Math.cos(angle) * radius;
-          dir.y += Math.sin(angle) * radius;
-          dir.z += (Math.random() - 0.5) * spreadAmount * 0.48;
-        }
-      } else if (!isMelee) {
-        if (isMovingWhileShooting) {
-          // Moving / running while shooting: strong outer-cone radial bullet deviation off-center!
-          const angle = Math.random() * Math.PI * 2;
-          const radius = spreadAmount * (0.42 + Math.random() * 0.68);
-          dir.x += Math.cos(angle) * radius;
-          dir.y += Math.sin(angle) * radius;
-          dir.z += (Math.random() - 0.5) * spreadAmount * 0.85;
-        } else {
-          // Stationary / crouched: tight, easy-to-control center group
-          dir.x += (Math.random() - 0.5) * spreadAmount * 1.4;
-          dir.y += (Math.random() - 0.5) * spreadAmount * 1.4;
-          dir.z += (Math.random() - 0.5) * spreadAmount * 1.4;
-        }
-      }
-      dir.normalize();
-
-      this.raycaster.far = cfg.range;
-      const intersections = this.raycaster.intersectObjects(this.rayTargets, false);
-
-      let endPoint = {
-        x: eyeOrigin.x + dir.x * cfg.range,
-        y: eyeOrigin.y + dir.y * cfg.range,
-        z: eyeOrigin.z + dir.z * cfg.range
-      };
-      let isPlayerHit = false;
-      let hitNormal = null;
-
-      if (intersections.length > 0) {
-        const firstHit = intersections[0];
-        endPoint = {
-          x: firstHit.point.x,
-          y: firstHit.point.y,
-          z: firstHit.point.z
-        };
-        hitNormal = firstHit.face ? firstHit.face.normal : null;
-
-        const ud = firstHit.object.userData;
-        if (ud && ud.playerId) {
-          isPlayerHit = true;
-          hits.push({
-            targetId: ud.playerId,
-            isHeadshot: Boolean(ud.isHeadshot)
-          });
-        }
-      }
-
-      if (p === 0) {
-        primaryHitPoint = endPoint;
-      }
-
-      if (!isMelee || isPlayerHit) {
-        const barrelStart = {
-          x: eyeOrigin.x + dir.x * 0.55,
-          y: eyeOrigin.y - 0.13 + dir.y * 0.55,
-          z: eyeOrigin.z + dir.z * 0.55
-        };
-        this.spawnTracerEffect(barrelStart, endPoint, cfg.color, isPlayerHit, hitNormal);
-      }
-    }
-
-    this.raycaster.setFromCamera(this.screenCenter, this.camera);
-    const forward = this.raycaster.ray.direction;
-
-    this.callbacks.onShoot?.({
+    // Queue the shot for the next eligible command; local sound only (no network event)
+    const pendingShot = {
       weapon: this.currentWeapon,
-      origin: eyeOrigin,
-      dir: { x: forward.x, y: forward.y, z: forward.z },
-      hits,
-      hitPoint: primaryHitPoint,
-      isAiming: this.isAiming
-    });
+      ammoConsumed: !isMelee,
+      autoReloaded: false
+    };
+    this.pendingFire = pendingShot;
+    this.callbacks.onLocalShot?.({ weapon: this.currentWeapon, isAiming: this.isAiming });
 
     if (isMelee) {
       return;
     }
 
-    // Crosshair-only recoil & dynamic bloom (ZERO camera pitch/yaw/roll shake!)
+    const horizSpeed = Math.hypot(this.velocity.x, this.velocity.z);
+    const isMovingWhileShooting = horizSpeed > 0.95 || !this.onGround;
+
+    // Crosshair-only recoil & dynamic bloom HUD (ZERO camera pitch/yaw/roll shake!). The damage spread does NOT read this.
     const moveBloomMult = isMovingWhileShooting ? 1.85 : 1.0;
     this.currentBloom = Math.min(
       (cfg.bloomMax || 0.018) * moveBloomMult,
@@ -1969,31 +2031,636 @@ export class Game3D {
     this.spawnShellCasing();
 
     if (this.ammoByWeapon[this.currentWeapon] === 0 && (this.reserveAmmoByWeapon[this.currentWeapon] ?? 0) > 0) {
+      pendingShot.autoReloaded = true;
       this.startReload();
     }
   }
 
-  tryTriggerSlide(now) {
-    if (!this.onGround || this.isSliding) return false;
-    if (now < this.slideCooldownUntil) return false;
+  /**
+   * Local prediction of a fire command (called right after the command was simulated): advances the shared deterministic shot
+   * state and ray-casts the SAME pellet rays the server will compute (same planShot, same seed / `ss` / pose / yaw / pitch)
+   * against the local world + hitbox proxies, spawning the tracers / impact effects. The damage ray has no camera noise: it is
+   * exactly the command's yaw / pitch (flinch, punch and recoil accumulators never enter it).
+   */
+  predictFireCommand(cmd, res) {
+    const cfg = WEAPONS[cmd.w];
+    if (!cfg) return null;
+    const isMelee = Boolean(cfg.isMelee || cfg.infiniteAmmo);
+    const ms = this.moveState;
+    const plan = planShot(
+      this.shotState,
+      cmd.w,
+      cfg,
+      commandTimeMs(cmd.seq),
+      {
+        x: ms.x,
+        y: ms.y,
+        z: ms.z,
+        vx: ms.vx,
+        vz: ms.vz,
+        onGround: ms.onGround,
+        crouching: ms.crouching,
+        isSliding: ms.isSliding,
+        prone: ms.prone,
+        lean: cmd.lean,
+        aiming: (cmd.btn & BTN.AIM) !== 0 && !res?.aimCancelled
+      },
+      cmd.yaw,
+      cmd.pitch,
+      this.spreadSeed,
+      cmd.ss
+    );
+    this.lastShotPlan = { seq: cmd.seq, ss: cmd.ss, origin: plan.origin, dirs: plan.dirs, spreadAmount: plan.spreadAmount };
 
-    const horizSpeed = Math.hypot(this.velocity.x, this.velocity.z);
-    const minSlideSpeed = MATCH_CONFIG.SLIDE_MIN_SPEED || MATCH_CONFIG.SPRINT_SPEED * 0.82;
-    if (horizSpeed < minSlideSpeed) return false;
+    if (this.rayTargets.length === 0) {
+      this.rebuildHitboxList();
+    }
+    for (const rp of this.remotePlayers.values()) {
+      if (rp.alive && rp.group) {
+        rp.group.updateMatrixWorld(true);
+      }
+    }
 
-    this.isSliding = true;
-    this.isSprinting = false;
-    this.prone = false;
-    this.slideUntil = now + (MATCH_CONFIG.SLIDE_DURATION_MS || 620);
-    this.slideCooldownUntil = now + (MATCH_CONFIG.SLIDE_COOLDOWN_MS || 900);
+    const eyeOrigin = plan.origin;
+    for (let p = 0; p < plan.dirs.length; p++) {
+      const dir = plan.dirs[p];
+      this.raycaster.ray.origin.set(eyeOrigin.x, eyeOrigin.y, eyeOrigin.z);
+      this.raycaster.ray.direction.set(dir.x, dir.y, dir.z);
+      this.raycaster.near = 0;
+      this.raycaster.far = cfg.range;
+      const intersections = this.raycaster.intersectObjects(this.rayTargets, false);
 
-    this.slideDir.set(this.velocity.x / horizSpeed, 0, this.velocity.z / horizSpeed);
-    const burstSpeed = MATCH_CONFIG.SLIDE_INITIAL_SPEED || 10.4;
-    this.velocity.x = this.slideDir.x * burstSpeed;
-    this.velocity.z = this.slideDir.z * burstSpeed;
+      let endPoint = {
+        x: eyeOrigin.x + dir.x * cfg.range,
+        y: eyeOrigin.y + dir.y * cfg.range,
+        z: eyeOrigin.z + dir.z * cfg.range
+      };
+      let isPlayerHit = false;
+      let hitNormal = null;
 
-    this.callbacks.onSlide?.();
+      if (intersections.length > 0) {
+        const firstHit = intersections[0];
+        endPoint = {
+          x: firstHit.point.x,
+          y: firstHit.point.y,
+          z: firstHit.point.z
+        };
+        hitNormal = firstHit.face ? firstHit.face.normal : null;
+        isPlayerHit = Boolean(firstHit.object.userData?.playerId);
+      }
+
+      if (!isMelee || isPlayerHit) {
+        const barrelStart = {
+          x: eyeOrigin.x + dir.x * 0.55,
+          y: eyeOrigin.y - 0.13 + dir.y * 0.55,
+          z: eyeOrigin.z + dir.z * 0.55
+        };
+        this.spawnTracerEffect(barrelStart, endPoint, cfg.color, isPlayerHit, hitNormal, cmd.ss);
+      }
+    }
+    return plan;
+  }
+
+
+  /**
+   * Copies the authoritative Game3D movement fields into the shared movement state (so external writes such as
+   * respawn teleports, prone toggles or key handlers that clear isSliding/isSprinting are always honoured).
+   */
+  syncMoveStateIn() {
+    const ms = this.moveState;
+    ms.x = this.position.x;
+    ms.y = this.position.y;
+    ms.z = this.position.z;
+    ms.vx = this.velocity.x;
+    ms.vy = this.velocity.y;
+    ms.vz = this.velocity.z;
+    ms.onGround = this.onGround;
+    ms.wasOnGround = this.wasOnGround;
+    ms.lastGroundedAt = this.lastGroundedAt;
+    ms.jumpQueuedUntil = this.jumpQueuedUntil;
+    ms.isSliding = this.isSliding;
+    ms.slideUntil = this.slideUntil;
+    ms.slideCooldownUntil = this.slideCooldownUntil;
+    ms.slideDirX = this.slideDir.x;
+    ms.slideDirZ = this.slideDir.z;
+    ms.crouching = this.crouching;
+    ms.prone = this.prone;
+    this.isSprinting = Boolean(this.isSprinting);
+    ms.isSprinting = this.isSprinting;
+    ms.stepOffsetY = this.stepOffsetY || 0;
+  }
+
+  syncMoveStateOut() {
+    const ms = this.moveState;
+    this.position.set(ms.x, ms.y, ms.z);
+    this.velocity.set(ms.vx, ms.vy, ms.vz);
+    this.onGround = ms.onGround;
+    this.wasOnGround = ms.wasOnGround;
+    this.lastGroundedAt = ms.lastGroundedAt;
+    this.jumpQueuedUntil = ms.jumpQueuedUntil;
+    this.isSliding = ms.isSliding;
+    this.slideUntil = ms.slideUntil;
+    this.slideCooldownUntil = ms.slideCooldownUntil;
+    this.slideDir.set(ms.slideDirX, 0, ms.slideDirZ);
+    this.crouching = ms.crouching;
+    this.prone = ms.prone;
+    this.isSprinting = ms.isSprinting;
+    this.stepOffsetY = ms.stepOffsetY;
+  }
+
+  /**
+   * Runs the shared movement module for the elapsed real frame time using a fixed timestep (FIXED_DT):
+   * frame time is accumulated (clamped to 0.1s, max 6 steps per frame) and consumed in whole steps; the
+   * leftover fraction becomes `physAlpha` for render interpolation between the previous and current step pose.
+   */
+  advanceFixedPhysics(frameDt) {
+    if (!this.inMatch || !this.alive) {
+      this.physicsAccumulator = 0;
+      this.physAlpha = 1;
+      return;
+    }
+
+    // A respawn / external teleport moved the player since the last step: do not interpolate across it
+    const tracked = this.physTracked;
+    if (
+      Math.abs(this.position.x - tracked.x) > 1e-5 ||
+      Math.abs(this.position.y - tracked.y) > 1e-5 ||
+      Math.abs(this.position.z - tracked.z) > 1e-5
+    ) {
+      this.physPrev.x = this.position.x;
+      this.physPrev.y = this.position.y;
+      this.physPrev.z = this.position.z;
+      this.physPrev.stepOffsetY = this.stepOffsetY || 0;
+      tracked.x = this.position.x;
+      tracked.y = this.position.y;
+      tracked.z = this.position.z;
+      this.physicsAccumulator = 0;
+    }
+
+    this.physicsAccumulator += Math.min(0.1, Math.max(0, frameDt));
+
+    const now = performance.now();
+    const f = this.cmdFields;
+    f.moveForward = 0;
+    f.moveRight = 0;
+    if (this.isPointerLocked) {
+      if (this.keys.KeyW) f.moveForward += 1;
+      if (this.keys.KeyS) f.moveForward -= 1;
+      if (this.keys.KeyD) f.moveRight += 1;
+      if (this.keys.KeyA) f.moveRight -= 1;
+    }
+    f.wantsCrouch = Boolean(this.keys.KeyC || this.keys.ControlLeft);
+    f.wantsSprint = Boolean(this.keys.ShiftLeft || this.keys.ShiftRight) &&
+      this.reloadingUntil <= now &&
+      now - this.lastShotAt > 120;
+    f.wantsJump = Boolean(this.keys.Space) && this.isPointerLocked; // jumps are neither queued nor consumed while input is disabled
+    f.isAdsHeld = this.isRightMouseDown;
+    f.weapon = this.currentWeapon;
+
+    const mapCfg = this.getMovementMapCfg();
+
+    let steps = 0;
+    while (this.physicsAccumulator >= FIXED_DT && steps < 6) {
+      this.physicsAccumulator -= FIXED_DT;
+      steps++;
+
+      this.physPrev.x = this.position.x;
+      this.physPrev.y = this.position.y;
+      this.physPrev.z = this.position.z;
+      this.physPrev.stepOffsetY = this.stepOffsetY || 0;
+
+      // One input command per fixed step: simulated here with the exact code the server runs, then sent in `inputBatch`
+      f.yaw = this.yaw;
+      f.pitch = this.pitch;
+      f.lean = this.currentLean;
+      f.wantsProne = this.prone;
+      f.isAiming = this.isAiming;
+
+      // A queued trigger pull goes out on the first step whose sim time satisfies the weapon's fire interval - the very rule
+      // the server applies to the command (isFireIntervalOk), so a legitimate client is never rejected for rate.
+      f.fire = false;
+      f.shotSeq = 0;
+      const pending = this.pendingFire;
+      if (pending) {
+        if (pending.weapon !== this.currentWeapon || !this.alive) {
+          if (pending.ammoConsumed) {
+            const wCfg = WEAPONS[pending.weapon];
+            const maxMag = wCfg ? wCfg.magSize : 30;
+            this.ammoByWeapon[pending.weapon] = Math.min(maxMag, (this.ammoByWeapon[pending.weapon] ?? 0) + 1);
+          }
+          this.pendingFire = null; // switched weapons / died before the shot could leave
+        } else if (
+          isFireIntervalOk(
+            commandTimeMs(this.prediction.nextSeq + 1),
+            this.lastFireCmdTimeMs,
+            getEffectiveFireRateMs(WEAPONS[this.currentWeapon], this.isAiming)
+          )
+        ) {
+          f.fire = true;
+          f.shotSeq = this.shotSeq + 1;
+        }
+      }
+
+      const cmd = this.prediction.buildCommand(f);
+      this.syncMoveStateIn();
+      this.simTimeMs = commandTimeMs(cmd.seq);
+      const res = stepCommand(this.moveState, cmd, mapCfg, this.cmdScratchInput);
+      this.syncMoveStateOut();
+      this.prediction.record(cmd, this.moveState);
+
+      if ((cmd.btn & BTN.FIRE) !== 0) {
+        this.shotSeq = cmd.ss;
+        this.lastFireCmdTimeMs = commandTimeMs(cmd.seq);
+        this.predictedShots.push({
+          ss: cmd.ss,
+          seq: cmd.seq,
+          weapon: cmd.w,
+          ammoConsumed: Boolean(pending?.ammoConsumed ?? (!WEAPONS[cmd.w]?.isMelee && !WEAPONS[cmd.w]?.infiniteAmmo)),
+          autoReloaded: Boolean(pending?.autoReloaded),
+          refunded: false
+        });
+        if (this.predictedShots.length > 64) {
+          this.predictedShots.shift();
+        }
+        this.pendingFire = null;
+        this.predictFireCommand(cmd, res);
+      }
+
+      tracked.x = this.position.x;
+      tracked.y = this.position.y;
+      tracked.z = this.position.z;
+
+      if (res.aimCancelled) {
+        this.isAiming = false;
+        this.adsToggleActive = false;
+        this.callbacks.onAimChange?.(false, this.currentWeapon);
+      }
+      if (res.slideStarted) this.callbacks.onSlide?.();
+      if (res.jumped) this.callbacks.onJump?.();
+      if (res.landed) {
+        this.landingDipVel = -2.2 * res.impact;
+        this.callbacks.onLand?.(res.impact);
+      }
+    }
+    // Over budget (frame hitch): drop the unsimulated remainder instead of spiralling
+    if (this.physicsAccumulator >= FIXED_DT) {
+      this.physicsAccumulator %= FIXED_DT;
+    }
+    this.physAlpha = this.physicsAccumulator / FIXED_DT;
+  }
+
+  /** Map description handed to the movement module (shared object, refreshed from the current map). */
+  getMovementMapCfg() {
+    const mapCfg = this._movementMapCfg || (this._movementMapCfg = { obstacles: [], arenaHalfSize: MATCH_CONFIG.ARENA_HALF_SIZE });
+    mapCfg.obstacles = this.currentObstacles || [];
+    mapCfg.arenaHalfSize = this.arenaHalfSize || MATCH_CONFIG.ARENA_HALF_SIZE;
+    return mapCfg;
+  }
+
+  /** Forgets all prediction history (joined a new room); `epoch` is the server's movement epoch when known. */
+  resetNetcode(epoch = 0) {
+    this.prediction.reset(Number.isFinite(epoch) ? epoch : 0);
+    this.lastInputBatchAt = 0;
+    // A new server-side player starts with lastShotSeq = 0
+    this.shotSeq = 0;
+    this.pendingFire = null;
+    this.predictedShots.length = 0;
+    this._refundedShotSeqs.clear();
+    this.lastShotRejected = null;
+    resetShotState(this.shotState);
+    this.lastFireCmdTimeMs = -Infinity;
+  }
+
+  /** Stores the owner-only 32-bit spread seed the server gave this life (`roomJoined.player.spreadSeed` / `selfSeed`). */
+  setSpreadSeed(seed) {
+    if (Number.isInteger(seed)) this.spreadSeed = seed >>> 0;
+  }
+
+  /**
+   * Handles an owner-only `shotRejected { ss, reason }` from the server: refunds the predicted round for `ss`,
+   * cancels still-visible shot effects (tracer, muzzle flash, auto-reload triggered by an empty mag) and notifies HUD.
+   */
+  applyShotRejected(data) {
+    if (!this.inMatch || !data || typeof data !== 'object') return false;
+    const ss = data.ss;
+    const reason = typeof data.reason === 'string' ? data.reason : 'unknown';
+    if (!Number.isSafeInteger(ss) || ss <= 0) return false;
+    if (this._refundedShotSeqs.has(ss)) return false;
+
+    let entry = null;
+    for (let i = this.predictedShots.length - 1; i >= 0; i--) {
+      if (this.predictedShots[i].ss === ss) {
+        entry = this.predictedShots[i];
+        break;
+      }
+    }
+    if (entry && entry.refunded) return false;
+
+    this._refundedShotSeqs.add(ss);
+    if (this._refundedShotSeqs.size > 128) {
+      const first = this._refundedShotSeqs.values().next().value;
+      this._refundedShotSeqs.delete(first);
+    }
+    if (entry) {
+      entry.refunded = true;
+    }
+
+    const wId = entry?.weapon || (typeof data.weapon === 'string' && WEAPONS[data.weapon] ? data.weapon : this.currentWeapon);
+    const cfg = WEAPONS[wId] || WEAPONS.rifle;
+    const shouldRefundAmmo = entry ? entry.ammoConsumed : Boolean(!cfg.isMelee && !cfg.infiniteAmmo);
+
+    if (shouldRefundAmmo) {
+      const cur = this.ammoByWeapon[wId] ?? 0;
+      this.ammoByWeapon[wId] = Math.min(cfg.magSize, cur + 1);
+    }
+
+    // If this rejected shot had emptied the magazine and auto-triggered a local reload, cancel that bogus reload
+    if (entry?.autoReloaded && this.reloadingUntil > 0 && wId === this.currentWeapon) {
+      this.reloadingUntil = 0;
+      this.nextShellAt = 0;
+      const activeVm = this.viewmodelMeshes?.[wId];
+      if (activeVm?.userData?.magMesh && activeVm.userData.magMesh.userData.basePos) {
+        activeVm.userData.magMesh.position.copy(activeVm.userData.magMesh.userData.basePos);
+      }
+      if (activeVm?.userData?.boltMesh && typeof activeVm.userData.boltMesh.userData.baseZ === 'number') {
+        activeVm.userData.boltMesh.position.z = activeVm.userData.boltMesh.userData.baseZ;
+      }
+      this.callbacks.onReloadCancel?.(
+        wId,
+        this.ammoByWeapon[wId],
+        this.reserveAmmoByWeapon[wId] ?? cfg.reserveAmmo ?? 0
+      );
+    }
+
+    // Cancel visual tracer / muzzle flash if still active
+    if (Array.isArray(this.activeEffects)) {
+      for (let i = this.activeEffects.length - 1; i >= 0; i--) {
+        const fx = this.activeEffects[i];
+        if (fx.type === 'tracer' && fx.ss === ss) {
+          if (fx.line) this.scene.remove(fx.line);
+          if (fx.spark) {
+            this.scene.remove(fx.spark);
+            this.sparkMeshPool?.push(fx.spark);
+          }
+          if (Array.isArray(fx.particles)) {
+            for (const p of fx.particles) {
+              this.scene.remove(p.mesh);
+              this.sparkMeshPool?.push(p.mesh);
+            }
+          }
+          fx.geo?.dispose();
+          fx.mat?.dispose();
+          fx.sparkMat?.dispose();
+          this.activeEffects.splice(i, 1);
+        }
+      }
+    }
+    if (ss === this.shotSeq) {
+      const activeVm = this.viewmodelMeshes?.[this.currentWeapon];
+      if (activeVm?.userData?.flashMesh) {
+        activeVm.userData.flashMesh.visible = false;
+      }
+      if (this.muzzleLight) {
+        this.muzzleLight.intensity = 0;
+      }
+      this.pumpCycleUntil = 0;
+      this.boltKickOffset = 0;
+      this.recoilOffset = 0;
+    }
+
+    this.lastShotRejected = { ss, reason, weapon: wId };
+    if (wId === this.currentWeapon) {
+      this.callbacks.onWeaponChanged?.(
+        wId,
+        this.ammoByWeapon[wId],
+        this.reserveAmmoByWeapon[wId] ?? cfg.reserveAmmo ?? 0
+      );
+    }
+    this.callbacks.onShotRejected?.({
+      ss,
+      reason,
+      weapon: wId,
+      ammo: this.ammoByWeapon[wId],
+      reserveAmmo: this.reserveAmmoByWeapon[wId] ?? cfg.reserveAmmo ?? 0
+    });
     return true;
+  }
+
+  /**
+   * Reconciles owner-only authoritative combat state (`selfState`) from the server:
+   * `{ seq?, lastShotSeq, hp, alive?, weapon, ammo, reserveAmmo, ammoByWeapon, reserveAmmoByWeapon, reloading, grenades }`.
+   * - If no unacknowledged FIRE commands remain in flight, server ammo / reserve / reload / HP overwrite local values.
+   * - If FIRE commands after `lastShotSeq` are still in flight, local ammo keeps the prediction by subtracting the
+   *   still-in-flight shots from the server's authoritative count at `lastShotSeq`.
+   */
+  applySelfState(state, localNowMs = undefined) {
+    if (!this.inMatch || !state || typeof state !== 'object') return false;
+    const now = typeof localNowMs === 'number' ? localNowMs : performance.now();
+    const serverShotSeq = Number.isSafeInteger(state.lastShotSeq) ? state.lastShotSeq : 0;
+    const hasServerCmdSeq = Number.isSafeInteger(state.seq);
+    const ackedCmdSeq = Math.max(
+      hasServerCmdSeq ? state.seq : 0,
+      this.prediction?.lastAckedSeq || 0
+    );
+
+    // Prune predictedShots that the server has already adjudicated (by shotSeq or by command seq)
+    let maxTrackedSs = 0;
+    for (let i = this.predictedShots.length - 1; i >= 0; i--) {
+      const entry = this.predictedShots[i];
+      if (entry.ss > maxTrackedSs) maxTrackedSs = entry.ss;
+      const settledByShotSeq = entry.ss <= serverShotSeq;
+      const settledByCmdSeq = hasServerCmdSeq && entry.seq > 0 && entry.seq <= ackedCmdSeq;
+      if (settledByShotSeq || settledByCmdSeq) {
+        this.predictedShots.splice(i, 1);
+      }
+    }
+
+    if (serverShotSeq > this.shotSeq) {
+      this.shotSeq = serverShotSeq;
+    }
+
+    // Count still-in-flight (unacknowledged, non-refunded) shots per weapon
+    const inFlightByWeapon = {};
+    let totalInFlight = 0;
+    for (let i = 0; i < this.predictedShots.length; i++) {
+      const entry = this.predictedShots[i];
+      if (!entry.refunded && entry.ss > serverShotSeq) {
+        if (entry.ammoConsumed) {
+          inFlightByWeapon[entry.weapon] = (inFlightByWeapon[entry.weapon] || 0) + 1;
+        }
+        totalInFlight += 1;
+      }
+    }
+    // Fallback for synthetic tests that bumped `this.shotSeq` directly without pushing to `predictedShots`
+    const untrackedFloor = Math.max(serverShotSeq, maxTrackedSs);
+    if (!hasServerCmdSeq && this.shotSeq > untrackedFloor) {
+      for (let ss = untrackedFloor + 1; ss <= this.shotSeq; ss++) {
+        if (!this._refundedShotSeqs.has(ss)) {
+          const w = this.currentWeapon;
+          if (!WEAPONS[w]?.isMelee && !WEAPONS[w]?.infiniteAmmo) {
+            inFlightByWeapon[w] = (inFlightByWeapon[w] || 0) + 1;
+          }
+          totalInFlight += 1;
+        }
+      }
+    }
+    if (this.pendingFire) {
+      if (this.pendingFire.ammoConsumed) {
+        const w = this.pendingFire.weapon;
+        inFlightByWeapon[w] = (inFlightByWeapon[w] || 0) + 1;
+      }
+      totalInFlight += 1;
+    }
+
+    // Reconcile HP and alive
+    if (typeof state.hp === 'number' && Number.isFinite(state.hp)) {
+      this.hp = Math.max(0, Math.min(MATCH_CONFIG.MAX_HP || 100, Math.round(state.hp)));
+    }
+    if (typeof state.alive === 'boolean') {
+      this.alive = state.alive;
+      if (!this.alive) {
+        this.pendingFire = null;
+        this.predictedShots.length = 0;
+        this.reloadingUntil = 0;
+        this.nextShellAt = 0;
+      }
+    }
+
+    // Reconcile grenades (unless a local throw is in flight)
+    if (typeof state.grenades === 'number' && Number.isFinite(state.grenades)) {
+      const isThrowInFlight = state.grenades > this.grenades && (now - (this.lastGrenadeThrowAt || 0)) < 400;
+      if (!isThrowInFlight) {
+        this.setGrenadeCount(state.grenades);
+      }
+    }
+
+    // Reconcile reserveAmmoByWeapon and ammoByWeapon
+    if (state.reserveAmmoByWeapon && typeof state.reserveAmmoByWeapon === 'object') {
+      for (const [wId, res] of Object.entries(state.reserveAmmoByWeapon)) {
+        if (WEAPONS[wId] && typeof res === 'number' && Number.isFinite(res)) {
+          this.reserveAmmoByWeapon[wId] = Math.max(0, Math.round(res));
+        }
+      }
+    }
+    if (state.weapon && WEAPONS[state.weapon] && typeof state.reserveAmmo === 'number' && Number.isFinite(state.reserveAmmo)) {
+      this.reserveAmmoByWeapon[state.weapon] = Math.max(0, Math.round(state.reserveAmmo));
+    }
+
+    if (state.ammoByWeapon && typeof state.ammoByWeapon === 'object') {
+      for (const [wId, serverAmmo] of Object.entries(state.ammoByWeapon)) {
+        if (WEAPONS[wId] && typeof serverAmmo === 'number' && Number.isFinite(serverAmmo)) {
+          const inFlight = inFlightByWeapon[wId] || 0;
+          const maxMag = WEAPONS[wId].magSize;
+          this.ammoByWeapon[wId] = Math.max(0, Math.min(maxMag, Math.round(serverAmmo) - inFlight));
+        }
+      }
+    }
+    if (state.weapon && WEAPONS[state.weapon] && typeof state.ammo === 'number' && Number.isFinite(state.ammo)) {
+      const wId = state.weapon;
+      const inFlight = inFlightByWeapon[wId] || 0;
+      const maxMag = WEAPONS[wId].magSize;
+      this.ammoByWeapon[wId] = Math.max(0, Math.min(maxMag, Math.round(state.ammo) - inFlight));
+    }
+
+    // Reconcile reload state when no FIRE commands are in flight
+    if (totalInFlight === 0) {
+      const rel = state.reloading;
+      if (rel && typeof rel === 'object' && Number(rel.remainingMs) > 0) {
+        const rWep = (typeof rel.weapon === 'string' && WEAPONS[rel.weapon]) ? rel.weapon : this.currentWeapon;
+        const rCfg = WEAPONS[rWep] || WEAPONS.rifle;
+        const remMs = Math.max(1, Number(rel.remainingMs));
+        const wasReloading = this.reloadingUntil > now;
+        this.reloadingUntil = now + remMs;
+        if (!wasReloading || !this.reloadDuration) {
+          this.reloadDuration = Math.max(remMs, rCfg.reloadMs || 1500);
+        }
+        if (rCfg.shellByShell) {
+          this.reloadMode = 'shell';
+          const shellMs = rCfg.shellReloadMs || 390;
+          const nextShellRem = ((remMs - 1) % shellMs) + 1;
+          this.nextShellAt = now + nextShellRem;
+        } else if (!this.reloadMode || this.reloadMode === 'shell') {
+          this.reloadMode = (this.ammoByWeapon[rWep] ?? 0) > 0 ? 'tactical' : 'empty';
+          this.nextShellAt = 0;
+        }
+      } else if (this.reloadingUntil > 0) {
+        // Server says not reloading (reload completed or cancelled)
+        this.reloadingUntil = 0;
+        this.nextShellAt = 0;
+        const wId = this.currentWeapon;
+        const activeVm = this.viewmodelMeshes?.[wId];
+        if (activeVm?.userData?.magMesh && activeVm.userData.magMesh.userData.basePos) {
+          activeVm.userData.magMesh.position.copy(activeVm.userData.magMesh.userData.basePos);
+        }
+        if (activeVm?.userData?.boltMesh && typeof activeVm.userData.boltMesh.userData.baseZ === 'number') {
+          activeVm.userData.boltMesh.position.z = activeVm.userData.boltMesh.userData.baseZ;
+        }
+        const wCfg = WEAPONS[wId] || WEAPONS.rifle;
+        this.callbacks.onReloadComplete?.(
+          wId,
+          this.ammoByWeapon[wId] ?? wCfg.magSize,
+          this.reserveAmmoByWeapon[wId] ?? wCfg.reserveAmmo ?? 0
+        );
+      }
+    }
+
+    const curWep = this.currentWeapon;
+    const curCfg = WEAPONS[curWep] || WEAPONS.rifle;
+    this.callbacks.onWeaponChanged?.(
+      curWep,
+      this.ammoByWeapon[curWep] ?? curCfg.magSize,
+      this.reserveAmmoByWeapon[curWep] ?? curCfg.reserveAmmo ?? 0
+    );
+    this.callbacks.onSelfState?.({
+      hp: this.hp,
+      alive: this.alive,
+      weapon: curWep,
+      ammo: this.ammoByWeapon[curWep],
+      reserveAmmo: this.reserveAmmoByWeapon[curWep],
+      reloading: this.reloadingUntil > now
+        ? { weapon: curWep, remainingMs: Math.max(0, Math.round(this.reloadingUntil - now)) }
+        : null,
+      grenades: this.grenades,
+      inFlightShots: totalInFlight
+    });
+    return true;
+  }
+
+  /**
+   * Server reconciliation for a `moveAck` (sent to us only). Epoch change => snap to the server state. Otherwise the
+   * ack is compared with what was predicted for that command; a mismatch replays the unacked commands from the server
+   * state. The camera keeps a decaying offset so small corrections are not visible; > RECONCILE_HARD_SNAP is instant.
+   * Returns the correction kind: 'ignored' | 'epoch' | 'replay' | 'hardsnap'.
+   */
+  applyMoveAck(ack) {
+    if (!this.inMatch || !isValidMoveAck(ack)) return 'ignored';
+    this.syncMoveStateIn();
+    const out = this.prediction.onAck(ack, this.getMovementMapCfg(), this.moveState);
+    if (out.kind === 'ignored') return out.kind;
+
+    const prevX = this.position.x;
+    const prevY = this.position.y;
+    const prevZ = this.position.z;
+    Object.assign(this.moveState, out.state);
+    this.syncMoveStateOut();
+
+    const prev = this.physPrev;
+    if (out.kind === 'replay') {
+      // The whole interpolation window moves with the head, so the rendered pose only changes through the visual offset
+      prev.x += this.position.x - prevX;
+      prev.y += this.position.y - prevY;
+      prev.z += this.position.z - prevZ;
+    } else {
+      prev.x = this.position.x;
+      prev.y = this.position.y;
+      prev.z = this.position.z;
+    }
+    prev.stepOffsetY = this.stepOffsetY || 0;
+    const tracked = this.physTracked;
+    tracked.x = this.position.x;
+    tracked.y = this.position.y;
+    tracked.z = this.position.z;
+    return out.kind;
   }
 
   updateLocalPhysics(dt) {
@@ -2064,46 +2731,12 @@ export class Game3D {
       this.attemptShoot();
     }
 
-    // Movement input axes
-    let moveForward = 0;
+    // Movement itself runs in fixed steps (advanceFixedPhysics); this per-frame pass only needs the strafe axis for camera roll
     let moveRight = 0;
     if (this.isPointerLocked) {
-      if (this.keys.KeyW) moveForward += 1;
-      if (this.keys.KeyS) moveForward -= 1;
       if (this.keys.KeyD) moveRight += 1;
       if (this.keys.KeyA) moveRight -= 1;
     }
-
-    if (this.isSliding && (now >= this.slideUntil || !this.onGround)) {
-      this.isSliding = false;
-    }
-
-    const wantsCrouch = this.keys.KeyC || this.keys.ControlLeft;
-    if (wantsCrouch && this.prone) {
-      this.prone = false;
-    }
-    const wantsSprint = (this.keys.ShiftLeft || this.keys.ShiftRight) &&
-      moveForward > 0 &&
-      !this.isAiming &&
-      !wantsCrouch &&
-      !this.isSliding &&
-      this.reloadingUntil <= now &&
-      now - this.lastShotAt > 120;
-
-    if (wantsSprint && this.prone) {
-      this.prone = false;
-    }
-
-    if (wantsCrouch && !this.crouching && !this.isSliding && this.onGround) {
-      this.tryTriggerSlide(now);
-    }
-    const slideDur = MATCH_CONFIG.SLIDE_DURATION_MS || 620;
-    if (!wantsCrouch && this.isSliding && now - (this.slideUntil - slideDur) > 220) {
-      this.isSliding = false;
-    }
-
-    this.crouching = (wantsCrouch || this.isSliding) && !this.prone;
-    this.isSprinting = wantsSprint && !this.crouching && !this.prone;
 
     // Tactical Peek / Lean (Q = -1 left, E = +1 right)
     const targetLean = this.isPointerLocked && !this.isSprinting && !this.isSliding
@@ -2127,87 +2760,9 @@ export class Game3D {
     this.landingDipVel *= Math.max(0, 1 - dt * 14);
     this.landingDip *= Math.max(0, 1 - dt * 8);
 
-    // Compute wish direction on XZ plane
-    const forwardX = -Math.sin(this.yaw);
-    const forwardZ = -Math.cos(this.yaw);
+    // Camera lateral axis (lean offset)
     const rightX = Math.cos(this.yaw);
     const rightZ = -Math.sin(this.yaw);
-
-    let wishDirX = forwardX * moveForward + rightX * moveRight;
-    let wishDirZ = forwardZ * moveForward + rightZ * moveRight;
-    const wishLen = Math.hypot(wishDirX, wishDirZ);
-    if (wishLen > 0.001) {
-      wishDirX /= wishLen;
-      wishDirZ /= wishLen;
-    }
-
-    const weaponMoveMult = cfg.moveSpeedMult || 1.0;
-    const baseTargetSpeed = this.isSliding
-      ? MATCH_CONFIG.SLIDE_INITIAL_SPEED
-      : this.prone
-        ? (MATCH_CONFIG.PRONE_SPEED || 2.0)
-        : this.crouching
-          ? MATCH_CONFIG.CROUCH_SPEED
-          : this.isAiming
-            ? MATCH_CONFIG.ADS_SPEED
-            : this.isSprinting
-              ? MATCH_CONFIG.SPRINT_SPEED
-              : MATCH_CONFIG.WALK_SPEED;
-    const targetSpeed = baseTargetSpeed * (this.isSliding ? 1.0 : weaponMoveMult);
-
-    if (this.isSliding) {
-      const slideFriction = MATCH_CONFIG.SLIDE_FRICTION || 2.6;
-      this.velocity.x *= Math.max(0, 1 - slideFriction * dt);
-      this.velocity.z *= Math.max(0, 1 - slideFriction * dt);
-      this.velocity.x += wishDirX * 4.8 * dt;
-      this.velocity.z += wishDirZ * 4.8 * dt;
-    } else if (this.onGround) {
-      if (wishLen > 0.001) {
-        const wishVx = wishDirX * targetSpeed;
-        const wishVz = wishDirZ * targetSpeed;
-        const dotVel = this.velocity.x * wishDirX + this.velocity.z * wishDirZ;
-        const counterStrafeBoost = dotVel < -0.2 ? 2.35 : 1.0;
-        const dvX = wishVx - this.velocity.x;
-        const dvZ = wishVz - this.velocity.z;
-        const dvLen = Math.hypot(dvX, dvZ);
-        if (dvLen > 0.0001) {
-          const maxStep = (MATCH_CONFIG.GROUND_ACCEL || 56.0) * counterStrafeBoost * dt;
-          const scale = Math.min(1, maxStep / dvLen);
-          this.velocity.x += dvX * scale;
-          this.velocity.z += dvZ * scale;
-        }
-      } else {
-        const friction = MATCH_CONFIG.GROUND_FRICTION || 13.5;
-        const drop = Math.max(0, 1 - friction * dt);
-        this.velocity.x *= drop;
-        this.velocity.z *= drop;
-        if (Math.hypot(this.velocity.x, this.velocity.z) < 0.08) {
-          this.velocity.x = 0;
-          this.velocity.z = 0;
-        }
-      }
-    } else {
-      const airDrag = Math.max(0, 1 - 0.35 * dt);
-      this.velocity.x *= airDrag;
-      this.velocity.z *= airDrag;
-
-      if (wishLen > 0.001) {
-        const currentProj = this.velocity.x * wishDirX + this.velocity.z * wishDirZ;
-        const addSpeed = targetSpeed - currentProj;
-        if (addSpeed > 0) {
-          const accelStep = Math.min(addSpeed, (MATCH_CONFIG.AIR_ACCEL || 16.0) * dt);
-          this.velocity.x += wishDirX * accelStep;
-          this.velocity.z += wishDirZ * accelStep;
-        }
-
-        const maxAirSpeed = MATCH_CONFIG.SLIDE_INITIAL_SPEED * 1.05;
-        const curHoriz = Math.hypot(this.velocity.x, this.velocity.z);
-        if (curHoriz > maxAirSpeed) {
-          this.velocity.x = (this.velocity.x / curHoriz) * maxAirSpeed;
-          this.velocity.z = (this.velocity.z / curHoriz) * maxAirSpeed;
-        }
-      }
-    }
 
     const horizSpeed = Math.hypot(this.velocity.x, this.velocity.z);
     if (this.onGround && horizSpeed > 0.5 && !this.isSliding) {
@@ -2221,127 +2776,6 @@ export class Game3D {
     } else {
       this.weaponBobTime = 0;
     }
-
-    // Jump with Coyote Time & Jump Buffering
-    if (this.keys.Space && this.isPointerLocked) {
-      if (this.prone) {
-        this.prone = false;
-      } else {
-        this.jumpQueuedUntil = now + (MATCH_CONFIG.JUMP_BUFFER_MS || 120);
-      }
-    }
-
-    const canCoyoteJump = this.onGround || (now - this.lastGroundedAt <= (MATCH_CONFIG.COYOTE_TIME_MS || 120));
-    if (now <= this.jumpQueuedUntil && canCoyoteJump && this.velocity.y <= 0.5 && this.isPointerLocked) {
-      this.velocity.y = MATCH_CONFIG.JUMP_FORCE || 8.0;
-      if (this.isSliding) {
-        this.isSliding = false;
-        this.velocity.x *= 1.04;
-        this.velocity.z *= 1.04;
-      }
-      this.onGround = false;
-      this.lastGroundedAt = 0;
-      this.jumpQueuedUntil = 0;
-      this.callbacks.onJump?.();
-    }
-
-    this.velocity.y -= (MATCH_CONFIG.GRAVITY || 22.0) * dt;
-
-    const preFallVy = this.velocity.y;
-    const prevFootY = this.position.y;
-    this.wasOnGround = this.onGround;
-
-    // Integrate horizontal & vertical with AABB collision against active map obstacles
-    this.position.x += this.velocity.x * dt;
-    this.position.z += this.velocity.z * dt;
-    this.position.y += this.velocity.y * dt;
-
-    const radius = MATCH_CONFIG.PLAYER_RADIUS;
-    const radiusSq = radius * radius;
-    const playerHeight = this.prone
-      ? (MATCH_CONFIG.PLAYER_PRONE_HEIGHT || 0.58)
-      : this.isSliding
-        ? (MATCH_CONFIG.PLAYER_SLIDE_HEIGHT || 0.9)
-        : this.crouching
-          ? MATCH_CONFIG.PLAYER_CROUCH_HEIGHT
-          : MATCH_CONFIG.PLAYER_HEIGHT;
-    let highestFloor = 0;
-    const obstacles = this.currentObstacles;
-
-    for (let i = 0; i < obstacles.length; i++) {
-      const box = obstacles[i];
-      const minX = box.minX !== undefined ? box.minX : box.x - box.w * 0.5;
-      const maxX = box.maxX !== undefined ? box.maxX : box.x + box.w * 0.5;
-      if (this.position.x + radius <= minX || this.position.x - radius >= maxX) continue;
-
-      const minZ = box.minZ !== undefined ? box.minZ : box.z - box.d * 0.5;
-      const maxZ = box.maxZ !== undefined ? box.maxZ : box.z + box.d * 0.5;
-      if (this.position.z + radius <= minZ || this.position.z - radius >= maxZ) continue;
-
-      const topY = box.maxY !== undefined ? box.maxY : box.y + box.h * 0.5;
-      const bottomY = box.minY !== undefined ? box.minY : box.y - box.h * 0.5;
-
-      const closestX = this.position.x < minX ? minX : this.position.x > maxX ? maxX : this.position.x;
-      const closestZ = this.position.z < minZ ? minZ : this.position.z > maxZ ? maxZ : this.position.z;
-      const dx = this.position.x - closestX;
-      const dz = this.position.z - closestZ;
-      const distSq = dx * dx + dz * dz;
-
-      if (distSq < radiusSq) {
-        if (this.position.y + 0.52 >= topY && this.velocity.y <= 2.2) {
-          if (topY > highestFloor) {
-            highestFloor = topY;
-          }
-        } else if (this.position.y < topY && this.position.y + playerHeight > bottomY) {
-          if (this.velocity.y > 0 && this.position.y + playerHeight - this.velocity.y * dt <= bottomY + 0.15) {
-            this.position.y = bottomY - playerHeight;
-            this.velocity.y = 0;
-          } else {
-            const dist = Math.sqrt(distSq);
-            if (dist > 0.0001) {
-              const overlap = radius - dist;
-              this.position.x += (dx / dist) * overlap;
-              this.position.z += (dz / dist) * overlap;
-            } else {
-              const penLeft = Math.abs(this.position.x - minX);
-              const penRight = Math.abs(maxX - this.position.x);
-              const penFront = Math.abs(this.position.z - minZ);
-              const penBack = Math.abs(maxZ - this.position.z);
-              const minPen = Math.min(penLeft, penRight, penFront, penBack);
-              if (minPen === penLeft) this.position.x = minX - radius;
-              else if (minPen === penRight) this.position.x = maxX + radius;
-              else if (minPen === penFront) this.position.z = minZ - radius;
-              else this.position.z = maxZ + radius;
-            }
-          }
-        }
-      }
-    }
-
-    if (this.position.y <= highestFloor + 0.025 && this.velocity.y <= 0) {
-      if (this.wasOnGround && highestFloor > prevFootY + 0.03 && highestFloor - prevFootY <= 0.56) {
-        this.stepOffsetY = Math.max(-0.48, (this.stepOffsetY || 0) + (prevFootY - highestFloor));
-      }
-      this.position.y = highestFloor;
-      this.velocity.y = 0;
-      this.onGround = true;
-      this.lastGroundedAt = now;
-
-      if (!this.wasOnGround && preFallVy < -3.2) {
-        const impact = Math.min(1.5, Math.abs(preFallVy) / 10.5);
-        this.landingDipVel = -2.2 * impact;
-        this.callbacks.onLand?.(impact);
-      }
-    } else {
-      this.onGround = false;
-    }
-
-    this.stepOffsetY = (this.stepOffsetY || 0) * Math.exp(-18 * dt);
-    if (Math.abs(this.stepOffsetY) < 0.002) this.stepOffsetY = 0;
-
-    const limit = (this.arenaHalfSize || MATCH_CONFIG.ARENA_HALF_SIZE) - 0.6;
-    this.position.x = Math.max(-limit, Math.min(limit, this.position.x));
-    this.position.z = Math.max(-limit, Math.min(limit, this.position.z));
 
     // Decay crosshair recoil kick & reset spray index smoothly without touching camera pitch/yaw!
     const effectiveFireRateMs = getEffectiveFireRateMs(cfg, this.isAiming);
@@ -2379,11 +2813,20 @@ export class Game3D {
     const leanDropY = Math.abs(this.currentLean) * -0.055;
 
     // Update camera transform (no shooting recoil shake!)
+    const physA = this.physAlpha;
+    const physPrev = this.physPrev;
+    const renderX = physPrev.x + (this.position.x - physPrev.x) * physA;
+    const renderY = physPrev.y + (this.position.y - physPrev.y) * physA;
+    const renderZ = physPrev.z + (this.position.z - physPrev.z) * physA;
+    const renderStepOffset = physPrev.stepOffsetY + ((this.stepOffsetY || 0) - physPrev.stepOffsetY) * physA;
+    // Visual correction offset: hides server reconciliation corrections, decays to 0 within ~100 ms
+    const corr = this.prediction.offset;
     this.camera.position.set(
-      this.position.x + rightX * leanOffset,
-      this.position.y + this.currentEyeHeight + this.landingDip + leanDropY + (this.stepOffsetY || 0),
-      this.position.z + rightZ * leanOffset
+      renderX + corr.x + rightX * leanOffset,
+      renderY + corr.y + this.currentEyeHeight + this.landingDip + leanDropY + renderStepOffset,
+      renderZ + corr.z + rightZ * leanOffset
     );
+    this.prediction.decayOffset(dt);
     this.tmpEuler.set(
       Math.max(-Math.PI / 2 + 0.04, Math.min(Math.PI / 2 - 0.04, this.pitch + this.flinchPitch)),
       this.yaw,
@@ -2421,15 +2864,20 @@ export class Game3D {
     const magMesh = activeVm?.userData?.magMesh;
     const boltMesh = activeVm?.userData?.boltMesh;
     if (activeVm?.userData?.opticReticle) {
-      activeVm.userData.opticReticle.visible = !this.isAiming;
+      activeVm.userData.opticReticle.visible = true;
     }
 
     const equipProgress = isEquipping ? 1 - (this.equipUntil - now) / this.equipDuration : 1;
     const equipDropY = isEquipping ? (1 - equipProgress) * -0.26 : 0;
 
     // Align 3D weapon optic center (Holo / Red-Dot) directly onto screen center (0, 0) during ADS
-    const isAimingSteady = this.isAiming && !isReloading;
-    const adsPos = activeVm?.userData?.adsPosition || { x: 0.0, y: -0.1208, z: -0.2428 };
+    const isAimingSteady =
+      this.isAiming &&
+      !isReloading &&
+      !isEquipping &&
+      this.grenadeThrowUntil <= now &&
+      this.meleeSwingUntil <= now;
+    const adsPos = activeVm?.userData?.adsPosition || { x: 0.0, y: -0.1208, z: -0.1278 };
     const targetVmX = isAimingSteady
       ? adsPos.x
       : (this.isSprinting ? 0.17 : 0.24) + this.currentLean * 0.03;
@@ -2444,13 +2892,21 @@ export class Game3D {
     const bobX = Math.cos(this.weaponBobTime * 0.5) * 0.012 * bobAmp;
     const bobY = Math.abs(Math.sin(this.weaponBobTime)) * 0.014 * bobAmp;
     const swayScale = isAimingSteady ? 0 : 1.0;
-    const recoilZScale = isAimingSteady ? 0.22 : 1.0;
+    const recoilZScale = isAimingSteady ? 0.12 : 1.0;
 
     const vmPosBlend = 1 - Math.exp(-(isAimingSteady ? 32 : 18) * dt);
     const vmRotBlend = 1 - Math.exp(-(isAimingSteady ? 32 : 16) * dt);
     this.viewmodelRig.position.x += (targetVmX + bobX + this.swayX * swayScale - this.viewmodelRig.position.x) * vmPosBlend;
     this.viewmodelRig.position.y += (targetVmY - bobY + this.swayY * swayScale - this.viewmodelRig.position.y) * vmPosBlend;
     this.viewmodelRig.position.z += (targetVmZ + this.recoilOffset * recoilZScale - this.viewmodelRig.position.z) * Math.min(1, dt * 28);
+
+    const distToAds = Math.hypot(
+      this.viewmodelRig.position.x - adsPos.x,
+      this.viewmodelRig.position.y - adsPos.y,
+      this.viewmodelRig.position.z - adsPos.z
+    );
+    const isThroughScopeView = isAimingSteady && !isSniperScoped && distToAds < 0.085;
+    setWeaponAdsCulling(activeVm, isThroughScopeView);
 
     let targetRotX = isAimingSteady ? 0 : this.recoilOffset * 1.15;
     let targetRotY = 0;
@@ -2517,11 +2973,13 @@ export class Game3D {
       if (this.pumpCycleUntil > now) {
         const cyclePct = 1 - (this.pumpCycleUntil - now) / this.pumpCycleDuration;
         const pumpPhase = cyclePct > 0.22 ? Math.sin(((cyclePct - 0.22) / 0.78) * Math.PI) : 0;
-        boltMesh.position.z = boltMesh.userData.baseZ + pumpPhase * 0.115;
-        targetRotX -= pumpPhase * 0.09;
-        targetRotZ += pumpPhase * (this.currentWeapon === 'sniper' ? -0.18 : 0.12);
+        const pumpRotScale = isAimingSteady ? 0 : 1.0;
+        boltMesh.position.z = boltMesh.userData.baseZ + pumpPhase * 0.115 * (isAimingSteady ? 0.35 : 1.0);
+        targetRotX -= pumpPhase * 0.09 * pumpRotScale;
+        targetRotZ += pumpPhase * (this.currentWeapon === 'sniper' ? -0.18 : 0.12) * pumpRotScale;
       } else {
-        boltMesh.position.z = boltMesh.userData.baseZ + this.boltKickOffset * 0.085;
+        const boltKickScale = isAimingSteady ? 0.25 : 1.0;
+        boltMesh.position.z = boltMesh.userData.baseZ + this.boltKickOffset * 0.085 * boltKickScale;
       }
     }
 
@@ -2572,60 +3030,77 @@ export class Game3D {
       this.callbacks.onMovementHudUpdate?.(stance, horizSpeed);
     }
 
-    // Send quantized, delta-filtered position & velocity update at ~30Hz (33ms)
-    if (now - this.lastMoveSentAt >= 33) {
-      const qx = Math.round(this.position.x * 100) / 100;
-      const qy = Math.round(this.position.y * 100) / 100;
-      const qz = Math.round(this.position.z * 100) / 100;
-      const qvx = Math.round(this.velocity.x * 100) / 100;
-      const qvy = Math.round(this.velocity.y * 100) / 100;
-      const qvz = Math.round(this.velocity.z * 100) / 100;
-      const qyaw = Math.round(this.yaw * 1000) / 1000;
-      const qpitch = Math.round(this.pitch * 1000) / 1000;
-      const qlean = Math.round(this.currentLean * 100) / 100;
-
-      const prev = this._lastSentMove;
-      const hasChanged = !prev ||
-        Math.abs(qx - prev.x) >= 0.01 ||
-        Math.abs(qy - prev.y) >= 0.01 ||
-        Math.abs(qz - prev.z) >= 0.01 ||
-        Math.abs(qvx - prev.vx) >= 0.05 ||
-        Math.abs(qvz - prev.vz) >= 0.05 ||
-        Math.abs(qyaw - prev.yaw) >= 0.003 ||
-        Math.abs(qpitch - prev.pitch) >= 0.003 ||
-        this.crouching !== prev.crouching ||
-        this.prone !== prev.prone ||
-        this.isAiming !== prev.isAiming ||
-        Math.abs(qlean - prev.lean) >= 0.02 ||
-        this.currentWeapon !== prev.weapon;
-
-      if (hasChanged || now - this.lastMoveSentAt >= 420) {
-        this.lastMoveSentAt = now;
-        this.moveSeq = (this.moveSeq || 0) + 1;
-        const movePayload = {
-          seq: this.moveSeq,
-          x: qx,
-          y: qy,
-          z: qz,
-          vx: qvx,
-          vy: qvy,
-          vz: qvz,
-          yaw: qyaw,
-          pitch: qpitch,
-          crouching: this.crouching,
-          prone: this.prone,
-          isAiming: this.isAiming,
-          lean: qlean,
-          weapon: this.currentWeapon
-        };
-        this._lastSentMove = movePayload;
-        this.callbacks.onMoveUpdate?.(movePayload);
+    // Send the input commands produced since the last batch (+ a few unacked ones as packet-loss redundancy) at ~30 Hz.
+    // Commands are produced every fixed step, so no separate keep-alive is needed while alive.
+    if (now - this.lastInputBatchAt >= INPUT_BATCH_INTERVAL_MS) {
+      const batch = this.prediction.buildBatch();
+      if (batch) {
+        this.lastInputBatchAt = now;
+        this.callbacks.onInputBatch?.(batch);
       }
     }
   }
 
   animateHumanoidRig(rp, dt, now, isMoving, moveSpeed = 0) {
     animateHumanoidRig(rp, dt, now, isMoving, moveSpeed);
+  }
+
+  /**
+   * Draws every remote player (humans + bots) from its snapshot buffer at renderTime = estimated server time -
+   * INTERP_DELAY_MS: linear interpolation between the two bracketing server snapshots, snap on teleport / respawn /
+   * alive flip, <= 100 ms velocity extrapolation when starved. Animation speed (walk cycle, footsteps) is derived from
+   * the interpolated motion. `now` is the frame time (performance.now() timebase).
+   */
+  updateRemotePlayers(dt, now) {
+    const speedBlend = 1 - Math.exp(-15 * dt);
+    const renderT = this.snapshots.renderTime(now);
+    const out = this._remoteSample;
+
+    for (const [id, rp] of this.remotePlayers.entries()) {
+      if (!rp.alive) continue;
+      if (!rp.velocity) rp.velocity = new THREE.Vector3(0, 0, 0);
+
+      let rawSpeed = 0;
+      const s = this.snapshots.sample(id, renderT, out);
+      if (s) {
+        rp.group.position.set(s.x, s.y, s.z);
+        rp.group.rotation.y = s.yaw;
+        rp.targetYaw = s.yaw;
+        rp.targetPitch = s.pitch;
+        rp.lean = s.lean;
+        rp.crouching = s.crouching;
+        rp.crouch = s.crouching;
+        rp.prone = s.prone;
+        rp.velocity.set(s.vx, s.vy, s.vz);
+        rawSpeed = Math.hypot(s.vx, s.vz);
+      } else {
+        rp.velocity.set(0, 0, 0);
+      }
+
+      rp.smoothedSpeed = (rp.smoothedSpeed || 0) + (rawSpeed - (rp.smoothedSpeed || 0)) * speedBlend;
+      if (rp.smoothedSpeed < 0.05) rp.smoothedSpeed = 0;
+
+      const isMoving = rp.smoothedSpeed > 0.35;
+      const rigMoveSpeed = rp.smoothedSpeed * 0.032;
+      this.animateHumanoidRig(rp, dt, now, isMoving, rigMoveSpeed);
+
+      const isGrounded = rp.onGround !== false && Math.abs(rp.velocity.y) < 0.85;
+      if (this.inMatch && isMoving && rp.smoothedSpeed > 0.65 && isGrounded && !rp.crouch && !rp.crouching && !rp.prone) {
+        const isRemoteSprinting = Boolean(
+          rp.sprinting ||
+          rp.isSprinting ||
+          rp.smoothedSpeed > (MATCH_CONFIG.WALK_SPEED || 6.2) * 1.1
+        );
+        const stepCadenceMs = isRemoteSprinting ? 320 : 430;
+        if (rp.nextFootstepAt && rp.nextFootstepAt - now > stepCadenceMs) {
+          rp.nextFootstepAt = now + stepCadenceMs;
+        }
+        if (!rp.nextFootstepAt || now >= rp.nextFootstepAt) {
+          rp.nextFootstepAt = now + stepCadenceMs;
+          sfx.playSpatialFootstep(this.getAudioListenerState(), rp.group.position, isRemoteSprinting);
+        }
+      }
+    }
   }
 
   animate(now) {
@@ -2682,6 +3157,7 @@ export class Game3D {
       if (this.lobbyShowcaseGroup) {
         this.lobbyShowcaseGroup.visible = false;
       }
+      this.advanceFixedPhysics(dt);
       this.updateLocalPhysics(dt);
     }
 
@@ -2696,62 +3172,11 @@ export class Game3D {
       this.ambientParticles.rotation.y = now * 0.00008;
     }
 
-    const posLerp = 1 - Math.exp(-20 * dt);
-    const rotLerp = 1 - Math.exp(-22 * dt);
-    const speedBlend = 1 - Math.exp(-15 * dt);
-    const arenaLim = (this.arenaHalfSize || MATCH_CONFIG.ARENA_HALF_SIZE) - 0.6;
-
-    for (const rp of this.remotePlayers.values()) {
-      if (!rp.alive) continue;
-
-      const sinceSync = rp.lastSyncAt ? Math.min(0.095, Math.max(0, (now - rp.lastSyncAt) / 1000)) : 0;
-      if (rp.serverPos && rp.velocity) {
-        rp.targetPos.x = Math.max(-arenaLim, Math.min(arenaLim, rp.serverPos.x + rp.velocity.x * sinceSync));
-        rp.targetPos.y = Math.max(0, rp.serverPos.y);
-        rp.targetPos.z = Math.max(-arenaLim, Math.min(arenaLim, rp.serverPos.z + rp.velocity.z * sinceSync));
-      }
-
-      const prevX = rp.group.position.x;
-      const prevZ = rp.group.position.z;
-      rp.group.position.lerp(rp.targetPos, posLerp);
-
-      let yawDiff = rp.targetYaw - rp.group.rotation.y;
-      while (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
-      while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
-      rp.group.rotation.y += yawDiff * rotLerp;
-
-      const velSpeed = rp.velocity ? Math.hypot(rp.velocity.x, rp.velocity.z) : 0;
-      const frameSpeed = dt > 0.001 ? Math.hypot(rp.group.position.x - prevX, rp.group.position.z - prevZ) / dt : 0;
-      const rawSpeed = (!rp.lastSyncAt || now - rp.lastSyncAt < 180)
-        ? Math.max(velSpeed, frameSpeed * 0.85)
-        : 0;
-      rp.smoothedSpeed = (rp.smoothedSpeed || 0) + (rawSpeed - (rp.smoothedSpeed || 0)) * speedBlend;
-      if (rp.smoothedSpeed < 0.05) rp.smoothedSpeed = 0;
-
-      const isMoving = rp.smoothedSpeed > 0.35;
-      const rigMoveSpeed = rp.smoothedSpeed * 0.032;
-      this.animateHumanoidRig(rp, dt, now, isMoving, rigMoveSpeed);
-
-      const isGrounded = rp.onGround !== false && Math.abs(rp.velocity?.y || 0) < 0.85;
-      if (this.inMatch && isMoving && rp.smoothedSpeed > 0.65 && isGrounded && !rp.crouch && !rp.crouching && !rp.prone) {
-        const isRemoteSprinting = Boolean(
-          rp.sprinting ||
-          rp.isSprinting ||
-          rp.smoothedSpeed > (MATCH_CONFIG.WALK_SPEED || 6.2) * 1.1
-        );
-        const stepCadenceMs = isRemoteSprinting ? 320 : 430;
-        if (rp.nextFootstepAt && rp.nextFootstepAt - now > stepCadenceMs) {
-          rp.nextFootstepAt = now + stepCadenceMs;
-        }
-        if (!rp.nextFootstepAt || now >= rp.nextFootstepAt) {
-          rp.nextFootstepAt = now + stepCadenceMs;
-          sfx.playSpatialFootstep(this.getAudioListenerState(), rp.group.position, isRemoteSprinting);
-        }
-      }
-    }
+    this.updateRemotePlayers(dt, now);
 
     // Update top-left Tactical Mini Map / Radar when in match
     if (this.inMatch && this.minimap) {
+      const prevRenderAt = this.minimap.lastRenderAt;
       this.minimap.update({
         localPos: this.position,
         localYaw: this.yaw,
@@ -2761,6 +3186,21 @@ export class Game3D {
         droppedWeapons: this.droppedWeaponMeshes,
         now
       });
+      if (this.minimap.ctx && this.minimap.lastRenderAt !== prevRenderAt) {
+        const mCtx = this.minimap.ctx;
+        for (const rp of this.remotePlayers.values()) {
+          if (!rp || !rp.alive || !rp.group) continue;
+          const rx = this.minimap.clampBlipCoord(this.minimap.worldToCanvasX(rp.group.position.x), 4);
+          const ry = this.minimap.clampBlipCoord(this.minimap.worldToCanvasY(rp.group.position.z), 4);
+          mCtx.fillStyle = rp.isBot ? '#f97316' : '#ef4444';
+          mCtx.strokeStyle = '#090d16';
+          mCtx.lineWidth = 1.1;
+          mCtx.beginPath();
+          mCtx.arc(rx, ry, 3.2, 0, Math.PI * 2);
+          mCtx.fill();
+          mCtx.stroke();
+        }
+      }
     }
 
     for (const item of this.pickupMeshes.values()) {
@@ -2813,10 +3253,9 @@ export class Game3D {
       this.callbacks.onNearbyWeaponChange?.(null, 0);
     }
 
-    const gObstacles = this.currentObstacles || [];
-    const gRadius = 0.18;
-    const gRestitution = 0.45;
-    const gLim = (this.arenaHalfSize || MATCH_CONFIG.ARENA_HALF_SIZE) - 0.25;
+    const gMapCfg = this._movementMapCfg || (this._movementMapCfg = { obstacles: [], arenaHalfSize: MATCH_CONFIG.ARENA_HALF_SIZE });
+    gMapCfg.obstacles = this.currentObstacles || [];
+    gMapCfg.arenaHalfSize = this.arenaHalfSize || MATCH_CONFIG.ARENA_HALF_SIZE;
 
     for (const [gId, item] of this.activeGrenadeMeshes.entries()) {
       if (now - item.createdAt > 3500) {
@@ -2824,140 +3263,8 @@ export class Game3D {
         continue;
       }
 
-      // Smooth 60 FPS client extrapolation with gravity, obstacle AABB bounce, and floor/wall bounce
-      const prevX = item.x;
-      const prevY = item.y;
-      const prevZ = item.z;
-      item.vy -= 22.0 * dt;
-      item.x += item.vx * dt;
-      item.y += item.vy * dt;
-      item.z += item.vz * dt;
-
-      let bouncedImpact = 0;
-
-      if (item.x < -gLim) {
-        bouncedImpact = Math.max(bouncedImpact, Math.abs(item.vx));
-        item.x = -gLim;
-        item.vx = Math.abs(item.vx) * gRestitution;
-        item.vz *= 0.85;
-      } else if (item.x > gLim) {
-        bouncedImpact = Math.max(bouncedImpact, Math.abs(item.vx));
-        item.x = gLim;
-        item.vx = -Math.abs(item.vx) * gRestitution;
-        item.vz *= 0.85;
-      }
-
-      if (item.z < -gLim) {
-        bouncedImpact = Math.max(bouncedImpact, Math.abs(item.vz));
-        item.z = -gLim;
-        item.vz = Math.abs(item.vz) * gRestitution;
-        item.vx *= 0.85;
-      } else if (item.z > gLim) {
-        bouncedImpact = Math.max(bouncedImpact, Math.abs(item.vz));
-        item.z = gLim;
-        item.vz = -Math.abs(item.vz) * gRestitution;
-        item.vx *= 0.85;
-      }
-
-      for (let j = 0; j < gObstacles.length; j++) {
-        const box = gObstacles[j];
-        const minX = (box.minX !== undefined ? box.minX : box.x - box.w * 0.5) - gRadius;
-        const maxX = (box.maxX !== undefined ? box.maxX : box.x + box.w * 0.5) + gRadius;
-        if (item.x < minX || item.x > maxX) continue;
-
-        const minZ = (box.minZ !== undefined ? box.minZ : box.z - box.d * 0.5) - gRadius;
-        const maxZ = (box.maxZ !== undefined ? box.maxZ : box.z + box.d * 0.5) + gRadius;
-        if (item.z < minZ || item.z > maxZ) continue;
-
-        const minY = (box.minY !== undefined ? box.minY : box.y - box.h * 0.5) - gRadius;
-        const maxY = (box.maxY !== undefined ? box.maxY : box.y + box.h * 0.5) + gRadius;
-        if (item.y < minY || item.y > maxY) continue;
-
-        const wasHorizInside =
-          prevX > minX + 0.02 && prevX < maxX - 0.02 &&
-          prevZ > minZ + 0.02 && prevZ < maxZ - 0.02;
-
-        if (wasHorizInside && prevY >= maxY - 0.06 && item.vy <= 0) {
-          item.y = maxY;
-          if (item.vy < -1.1) {
-            bouncedImpact = Math.max(bouncedImpact, Math.abs(item.vy));
-            item.vy = -item.vy * gRestitution;
-            item.vx *= 0.78;
-            item.vz *= 0.78;
-          } else {
-            item.vy = 0;
-            const topFriction = Math.max(0, 1 - 5.5 * dt);
-            item.vx *= topFriction;
-            item.vz *= topFriction;
-          }
-        } else if (wasHorizInside && prevY <= minY + 0.06 && item.vy > 0) {
-          bouncedImpact = Math.max(bouncedImpact, Math.abs(item.vy));
-          item.y = minY;
-          item.vy = -Math.abs(item.vy) * gRestitution;
-        } else if (prevX <= minX + 0.03 && item.vx > 0) {
-          bouncedImpact = Math.max(bouncedImpact, Math.abs(item.vx));
-          item.x = minX;
-          item.vx = -Math.abs(item.vx) * gRestitution;
-          item.vz *= 0.82;
-        } else if (prevX >= maxX - 0.03 && item.vx < 0) {
-          bouncedImpact = Math.max(bouncedImpact, Math.abs(item.vx));
-          item.x = maxX;
-          item.vx = Math.abs(item.vx) * gRestitution;
-          item.vz *= 0.82;
-        } else if (prevZ <= minZ + 0.03 && item.vz > 0) {
-          bouncedImpact = Math.max(bouncedImpact, Math.abs(item.vz));
-          item.z = minZ;
-          item.vz = -Math.abs(item.vz) * gRestitution;
-          item.vx *= 0.82;
-        } else if (prevZ >= maxZ - 0.03 && item.vz < 0) {
-          bouncedImpact = Math.max(bouncedImpact, Math.abs(item.vz));
-          item.z = maxZ;
-          item.vz = Math.abs(item.vz) * gRestitution;
-          item.vx *= 0.82;
-        } else {
-          const penLeft = Math.abs(item.x - minX);
-          const penRight = Math.abs(maxX - item.x);
-          const penFront = Math.abs(item.z - minZ);
-          const penBack = Math.abs(maxZ - item.z);
-          const minPen = Math.min(penLeft, penRight, penFront, penBack);
-          if (minPen === penLeft) {
-            item.x = minX;
-            item.vx = -Math.abs(item.vx) * gRestitution;
-            item.vz *= 0.82;
-          } else if (minPen === penRight) {
-            item.x = maxX;
-            item.vx = Math.abs(item.vx) * gRestitution;
-            item.vz *= 0.82;
-          } else if (minPen === penFront) {
-            item.z = minZ;
-            item.vz = -Math.abs(item.vz) * gRestitution;
-            item.vx *= 0.82;
-          } else {
-            item.z = maxZ;
-            item.vz = Math.abs(item.vz) * gRestitution;
-            item.vx *= 0.82;
-          }
-        }
-      }
-
-      if (item.y <= 0.18) {
-        item.y = 0.18;
-        if (item.vy < -1.1) {
-          bouncedImpact = Math.max(bouncedImpact, Math.abs(item.vy));
-          item.vy = -item.vy * gRestitution;
-          item.vx *= 0.78;
-          item.vz *= 0.78;
-        } else {
-          item.vy = 0;
-          const groundFriction = Math.max(0, 1 - 6.5 * dt);
-          item.vx *= groundFriction;
-          item.vz *= groundFriction;
-          if (Math.hypot(item.vx, item.vz) < 0.08) {
-            item.vx = 0;
-            item.vz = 0;
-          }
-        }
-      }
+      // Client extrapolation uses the exact same shared, sub-stepped integrator as the server (updateGrenades)
+      const bouncedImpact = stepGrenade(item, dt, gMapCfg);
 
       if (this.inMatch && bouncedImpact > 1.3 && now - (item.lastBounceSoundAt || 0) > 110) {
         item.lastBounceSoundAt = now;
@@ -3195,8 +3502,11 @@ export class Game3D {
         }
       } else {
         this.isMouseDown = false;
+        this.isRightMouseDown = false;
+        this.adsToggleActive = false;
         this.isAiming = false;
         this.isSprinting = false;
+        setWeaponAdsCulling(this.viewmodelMeshes[this.currentWeapon], false);
         this.callbacks.onAimChange?.(false, this.currentWeapon);
       }
       this.callbacks.onPointerLockChange?.(this.isPointerLocked);
@@ -3228,11 +3538,21 @@ export class Game3D {
         this.isMouseDown = true;
         this.attemptShoot();
       } else if (e.button === 2) {
+        const now = performance.now();
         const wCfg = WEAPONS[this.currentWeapon];
-        if (this.alive && !wCfg?.isMelee && this.reloadingUntil <= performance.now()) {
-          this.isAiming = true;
-          this.isSprinting = false;
-          this.callbacks.onAimChange?.(this.isAiming, this.currentWeapon);
+        this.isRightMouseDown = true;
+        this.adsPressedAt = now;
+        if (this.alive && !wCfg?.isMelee && this.reloadingUntil <= now) {
+          if (this.isAiming && this.adsToggleActive) {
+            this.isAiming = false;
+            this.adsToggleActive = false;
+            setWeaponAdsCulling(this.viewmodelMeshes[this.currentWeapon], false);
+            this.callbacks.onAimChange?.(false, this.currentWeapon);
+          } else {
+            this.isAiming = true;
+            this.isSprinting = false;
+            this.callbacks.onAimChange?.(true, this.currentWeapon);
+          }
         }
       }
     }, { passive: true });
@@ -3241,8 +3561,18 @@ export class Game3D {
       if (e.button === 0) {
         this.isMouseDown = false;
       } else if (e.button === 2) {
-        this.isAiming = false;
-        this.callbacks.onAimChange?.(false, this.currentWeapon);
+        this.isRightMouseDown = false;
+        const heldMs = performance.now() - (this.adsPressedAt || 0);
+        if (this.isAiming) {
+          if (heldMs < 220 && !this.adsToggleActive) {
+            this.adsToggleActive = true;
+          } else {
+            this.isAiming = false;
+            this.adsToggleActive = false;
+            setWeaponAdsCulling(this.viewmodelMeshes[this.currentWeapon], false);
+            this.callbacks.onAimChange?.(false, this.currentWeapon);
+          }
+        }
       }
     }, { passive: true });
 

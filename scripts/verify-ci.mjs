@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { register } from 'node:module';
 import {
   MATCH_CONFIG,
   WEAPONS,
@@ -14,12 +15,14 @@ import {
   ADS_OPTIC_ZOOM_MULT,
   ADS_OPTIC_ZOOM_FOV,
   computeDistanceFalloff,
-  getEffectiveFireRateMs
+  getEffectiveFireRateMs,
+  INTERP_DELAY_MS
 } from '../shared/constants.js';
 import {
   LAG_COMP_HISTORY_MS,
   LAG_COMP_MAX_REWIND_MS,
   KILL_ADRENALINE_HEAL,
+  resolveShotRewindMs,
   recordPlayerSnapshot,
   getRewoundPlayerPosition,
   rewindRoomPlayersForShot,
@@ -40,19 +43,23 @@ const filesToCheck = [
   'shared/weapons.js',
   'shared/maps.js',
   'shared/physics.js',
+  'shared/movement.js',
+  'shared/netcode.js',
+  'shared/spread.js',
   'shared/lagCompensation.js',
   'server/index.js',
   'server/roomManager.js',
   'server/botAI.js',
   'public/js/main.js',
   'public/js/game3d.js',
+  'public/js/prediction.js',
+  'public/js/snapshotBuffer.js',
   'public/js/minimap.js',
   'public/js/weaponModels.js',
   'public/js/humanoidRig.js',
   'public/js/arenaBuilder.js',
   'public/js/audio.js',
-  'public/js/networkAdapter.js',
-  'scripts/build-pages.mjs'
+  'public/js/networkAdapter.js'
 ];
 
 console.log('🔍 [CI] Checking JavaScript syntax across all modules...');
@@ -120,6 +127,8 @@ const mockIo = {
 };
 
 const rm = new RoomManager(mockIo);
+// Tests drive state explicitly; stop the real tick loop so bots can't kill the test player during an await.
+clearInterval(rm.tickInterval);
 const { room, player } = rm.addHumanPlayer({ id: 'socket_p1' }, {
   name: 'Tester1',
   botCount: 4,
@@ -158,8 +167,11 @@ assert.equal(updatedLoadout.secondary, 'glock', 'Updated secondary should be glo
 
 console.log('⏪ [CI] Verifying Server-Side Lag Compensation (Hitbox Rewind) & +25 HP Kill Adrenaline...');
 assert.equal(LAG_COMP_HISTORY_MS, 350, 'Lag compensation history window should be 350ms');
-assert.equal(LAG_COMP_MAX_REWIND_MS, 250, 'Lag compensation max rewind clamp should be 250ms');
+assert.equal(LAG_COMP_MAX_REWIND_MS, 200, 'Lag compensation max rewind clamp should be 200ms');
 assert.equal(KILL_ADRENALINE_HEAL, 25, 'Kill adrenaline heal should be +25 HP');
+assert.equal(INTERP_DELAY_MS, 100, 'Snapshot interpolation delay should be 100ms');
+assert.equal(resolveShotRewindMs({ id: 'ci', isBot: false, rttMs: 60 }, {}), 60 / 2 + INTERP_DELAY_MS, 'Rewind = rtt/2 + INTERP_DELAY_MS');
+assert.ok(LAG_COMP_HISTORY_MS >= LAG_COMP_MAX_REWIND_MS + 40, 'Lag-comp history must cover the max rewind plus one tick');
 
 const { player: player2 } = rm.addHumanPlayer({ id: 'socket_p2' }, {
   name: 'Target2',
@@ -203,9 +215,9 @@ const midRewind = getRewoundPlayerPosition(player2, baseNow - 100, baseNow);
 assert.ok(Math.abs(midRewind.x - 10) < 0.05, `Expected rewound x ~ 10 at -100ms, got ${midRewind.x}`);
 assert.equal(midRewind.z, -10, 'Rewound z should remain -10');
 
-// 2) Clamp check: requesting 400ms rewind (baseNow - 400) clamps to max 250ms rewind
+// 2) Clamp check: requesting 400ms rewind (baseNow - 400) clamps to max LAG_COMP_MAX_REWIND_MS rewind
 const clampedRewind = getRewoundPlayerPosition(player2, baseNow - 400, baseNow);
-assert.equal(clampedRewind.timestamp, baseNow - 250, 'Rewind timestamp must clamp at max 250ms');
+assert.equal(clampedRewind.timestamp, baseNow - LAG_COMP_MAX_REWIND_MS, 'Rewind timestamp must clamp at LAG_COMP_MAX_REWIND_MS');
 assert.ok(Math.abs(clampedRewind.x - 0) < 0.05, 'Clamped rewind should stop at earliest snapshot x=0');
 
 // 3) Verify rewindRoomPlayersForShot & restoreRewoundPlayers (including posture restoration)
@@ -255,6 +267,8 @@ assert.equal(player.hp, 40, 'Shooter HP must remain 40 when shot misses');
 player.lastShotAt = 0;
 player.ammo = 5;
 player.ammoByWeapon.sniper = 5;
+// Server-authoritative rewind = rttMs/2 + 50ms interpolation allowance -> rttMs 140 rewinds 120ms
+player.rttMs = 140;
 emittedEvents.length = 0;
 
 rm.handleShoot(room, player, {
@@ -498,9 +512,23 @@ const benchElapsedMs = performance.now() - benchStart;
 assert.ok(benchElapsedMs < 150, `1000x serializePlayers must remain fast (<150ms, took ${benchElapsedMs.toFixed(2)}ms)`);
 
 console.log('🔭 [CI] Verifying Holo & Red-Dot 1.25x (+0.25x) ADS Scope Zoom, 3D Sight Center Alignment & Slower ADS Fire Rate...');
-execFileSync(process.execPath, [path.join(ROOT_DIR, 'scripts/build-pages.mjs')], { stdio: 'inherit' });
-const THREE = await import('../dist/vendor/three/three.module.js');
-const { createWeaponMesh } = await import('../dist/js/weaponModels.js');
+// Browser modules import '../vendor/three/three.module.js' (served by Express at /vendor/three);
+// map it to node_modules/three and '../shared/*' to the repo's shared folder for Node.
+register(
+  'data:text/javascript,' + encodeURIComponent(`
+    export async function resolve(specifier, context, nextResolve) {
+      if (specifier === '../vendor/three/three.module.js') {
+        return nextResolve(new URL('node_modules/three/build/three.module.js', ${JSON.stringify(pathToFileURL(ROOT_DIR + '/').href)}).href, context);
+      }
+      if (context.parentURL && context.parentURL.includes('/public/js/') && specifier.startsWith('../shared/')) {
+        return nextResolve(new URL(specifier.slice(3), ${JSON.stringify(pathToFileURL(ROOT_DIR + '/').href)}).href, context);
+      }
+      return nextResolve(specifier, context);
+    }
+  `)
+);
+const THREE = await import('three');
+const { createWeaponMesh, setWeaponAdsCulling } = await import('../public/js/weaponModels.js');
 
 assert.equal(BASE_HIPFIRE_FOV, 68, 'Base hipfire FOV must be 68');
 assert.equal(ADS_OPTIC_ZOOM_MULT, 1.25, 'Holo and Red-Dot ADS zoom multiplier must be 1.25x (+0.25x)');
@@ -536,11 +564,26 @@ for (const wId of opticWeapons) {
   assert.ok(vm.userData.opticCenter, `${wId} first-person viewmodel must expose userData.opticCenter`);
   assert.ok(vm.userData.adsPosition, `${wId} first-person viewmodel must expose userData.adsPosition`);
   assert.ok(vm.userData.opticLens, `${wId} first-person viewmodel must expose userData.opticLens`);
+  assert.ok(vm.userData.opticReticle, `${wId} first-person viewmodel must expose userData.opticReticle`);
+  assert.ok(Array.isArray(vm.userData.adsCulledMeshes) && vm.userData.adsCulledMeshes.length > 0, `${wId} viewmodel must expose adsCulledMeshes for through-scope ADS culling`);
   assert.equal(vm.userData.adsPosition.x, 0, `${wId} ADS viewmodel X must align to screen center 0`);
   assert.ok(
     Math.abs(vm.userData.adsPosition.y + vm.userData.opticCenter.y * 1.14) < 0.001,
     `${wId} ADS viewmodel Y (${vm.userData.adsPosition.y}) must center opticCenter.y (${vm.userData.opticCenter.y}) at camera Y=0`
   );
+  if (wCfg.slot === 2) {
+    assert.equal(
+      vm.userData.opticGroup?.parent,
+      vm.userData.boltMesh,
+      `${wId} RMR optic must be parented to slide boltMesh so it moves with slide blowback`
+    );
+  }
+
+  // Verify True 3D Through-Scope ADS culling hides rear/body meshes while keeping 3D optic & reticle visible
+  setWeaponAdsCulling(vm, true);
+  assert.equal(vm.userData.isAdsCulled, true, `${wId} ADS culling state must activate`);
+  assert.equal(vm.userData.opticLens.visible, true, `${wId} 3D optic lens must stay visible during ADS culling`);
+  assert.equal(vm.userData.opticReticle.visible, true, `${wId} 3D optic reticle must stay visible during ADS culling`);
 
   // Verify unobstructed 3D sightline from camera (0, 0, 0) along (0, 0, -1) through optic lens
   if (vm.userData.opticReticle) {
@@ -572,6 +615,8 @@ for (const wId of opticWeapons) {
     0,
     `${wId} center sightline ray (0,0,0)->(0,0,-1) must have 0 opaque mesh obstructions (found ${opaqueBlockers.length})`
   );
+  setWeaponAdsCulling(vm, false);
+  assert.equal(vm.userData.isAdsCulled, false, `${wId} ADS culling state must restore when exiting ADS`);
 }
 
 // Verify server-side ADS fire rate enforcement & state reset in RoomManager

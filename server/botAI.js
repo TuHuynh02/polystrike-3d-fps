@@ -4,6 +4,7 @@ import {
   PLAYER_COLORS,
   WEAPONS,
   WEAPON_ORDER,
+  collideCapsuleVsBoxes,
   getMapConfig,
   hasLineOfSight
 } from '../shared/constants.js';
@@ -27,49 +28,8 @@ const _otherEye = { x: 0, y: 0, z: 0 };
  */
 export function resolveEntityPhysics(entity, radius = 0.45, mapCfg = null) {
   const cfg = mapCfg || getMapConfig();
-  const obstacles = cfg.obstacles;
-  const radiusSq = radius * radius;
-  let groundY = 0;
-
-  for (let i = 0; i < obstacles.length; i++) {
-    const box = obstacles[i];
-    const minX = box.minX !== undefined ? box.minX : box.x - box.w * 0.5;
-    const maxX = box.maxX !== undefined ? box.maxX : box.x + box.w * 0.5;
-    if (entity.x + radius <= minX || entity.x - radius >= maxX) continue;
-
-    const minZ = box.minZ !== undefined ? box.minZ : box.z - box.d * 0.5;
-    const maxZ = box.maxZ !== undefined ? box.maxZ : box.z + box.d * 0.5;
-    if (entity.z + radius <= minZ || entity.z - radius >= maxZ) continue;
-
-    const topY = box.maxY !== undefined ? box.maxY : box.y + box.h * 0.5;
-    const bottomY = box.minY !== undefined ? box.minY : box.y - box.h * 0.5;
-
-    // Check if entity is horizontally within or touching box
-    const closestX = entity.x < minX ? minX : entity.x > maxX ? maxX : entity.x;
-    const closestZ = entity.z < minZ ? minZ : entity.z > maxZ ? maxZ : entity.z;
-    const dx = entity.x - closestX;
-    const dz = entity.z - closestZ;
-    const distSq = dx * dx + dz * dz;
-
-    if (distSq < radiusSq) {
-      // Can step up onto this surface if topY is at most 0.55m above current foot y
-      if (entity.y + 0.55 >= topY && bottomY <= entity.y + 1.6) {
-        if (topY > groundY) {
-          groundY = topY;
-        }
-      } else if (entity.y < topY && entity.y + 1.7 > bottomY) {
-        // Push horizontally out of obstacle
-        const dist = Math.sqrt(distSq);
-        if (dist > 0.0001) {
-          const overlap = radius - dist;
-          entity.x += (dx / dist) * overlap;
-          entity.z += (dz / dist) * overlap;
-        } else {
-          entity.x += radius;
-        }
-      }
-    }
-  }
+  // Shared player-vs-obstacle collision primitive (bots step up 0.55m and are 1.7m tall)
+  const groundY = collideCapsuleVsBoxes(entity, cfg.obstacles, radius, 1.7, 0.55, 0);
 
   // Smoothly settle onto groundY
   if (entity.y < groundY) {
@@ -175,12 +135,14 @@ export function updateRoomBots(room, dt, now, callbacks) {
     // Complete reload if finished (deducting from reserveAmmo)
     if (bot.reloadingUntil && now >= bot.reloadingUntil) {
       bot.reloadingUntil = 0;
+      bot.reloadWeapon = null;
+      bot.nextShellAt = 0;
       const curMag = bot.ammo ?? 0;
-      const curRes = bot.reserveAmmo ?? weaponCfg.reserveAmmo ?? weaponCfg.magSize;
+      const curRes = (bot.reserveAmmo ?? 0) > 0 ? bot.reserveAmmo : (weaponCfg.reserveAmmo ?? weaponCfg.magSize);
       const needed = Math.max(0, weaponCfg.magSize - curMag);
       const loaded = Math.min(needed, curRes);
       bot.ammo = curMag + loaded;
-      bot.reserveAmmo = Math.max(0, curRes - loaded);
+      bot.reserveAmmo = Math.max(weaponCfg.magSize, curRes - loaded);
       if (bot.ammoByWeapon) bot.ammoByWeapon[bot.weapon] = bot.ammo;
       if (bot.reserveAmmoByWeapon) bot.reserveAmmoByWeapon[bot.weapon] = bot.reserveAmmo;
     }
@@ -210,9 +172,14 @@ export function updateRoomBots(room, dt, now, callbacks) {
         if (dist >= bestDist) continue;
 
         _otherEye.x = other.x;
-        _otherEye.y = other.y + 1.35;
+        _otherEye.y = other.y + (other.prone ? 0.38 : other.crouching ? 0.88 : 1.35);
         _otherEye.z = other.z;
-        if (hasLineOfSight(_botEye, _otherEye, obstacles)) {
+        let hasLos = hasLineOfSight(_botEye, _otherEye, obstacles);
+        if (!hasLos) {
+          _otherEye.y = other.y + (other.prone ? 0.55 : other.crouching ? 1.15 : 1.68);
+          hasLos = hasLineOfSight(_botEye, _otherEye, obstacles);
+        }
+        if (hasLos) {
           bestDist = dist;
           bestTarget = other;
         }
@@ -220,16 +187,18 @@ export function updateRoomBots(room, dt, now, callbacks) {
       bot.targetId = bestTarget ? bestTarget.id : null;
     }
 
-    // Determine navigation waypoint (prefer active health pack if low HP)
+    // Determine navigation waypoint (prefer active reachable health pack if low HP)
     if (bot.waypointIdx >= waypoints.length) {
       bot.waypointIdx = 0;
     }
     let goal = waypoints[bot.waypointIdx] || waypoints[0];
-    if (bot.hp < 65) {
+    let isSeekingHealthPack = false;
+    if (bot.hp < 65 && Array.isArray(room.pickups)) {
       let nearestPack = null;
       let nearestDist = Infinity;
       for (const pack of room.pickups) {
-        if (!pack.active) continue;
+        if (!pack || !pack.active) continue;
+        if (Math.abs((pack.y || 0) - (bot.y || 0)) > 1.8) continue;
         const d = Math.hypot(pack.x - bot.x, pack.z - bot.z);
         if (d < nearestDist) {
           nearestDist = d;
@@ -238,6 +207,7 @@ export function updateRoomBots(room, dt, now, callbacks) {
       }
       if (nearestPack) {
         goal = nearestPack;
+        isSeekingHealthPack = true;
       }
     }
 
@@ -247,10 +217,20 @@ export function updateRoomBots(room, dt, now, callbacks) {
       : null;
     const moveSpeed = (MATCH_CONFIG.BOT_MOVE_SPEED || 4.8) * (weaponCfg.moveSpeedMult || 1.0);
 
+    // Start reload whenever magazine is empty
+    if (bot.ammo <= 0 && !bot.reloadingUntil) {
+      if ((bot.reserveAmmo ?? 0) <= 0) {
+        bot.reserveAmmo = weaponCfg.reserveAmmo ?? weaponCfg.magSize;
+        if (bot.reserveAmmoByWeapon) bot.reserveAmmoByWeapon[bot.weapon] = bot.reserveAmmo;
+      }
+      bot.reloadingUntil = now + weaponCfg.reloadMs;
+    }
+
     if (target) {
       // Face target
+      const targetAimH = target.prone ? 0.38 : target.crouching ? 0.85 : 1.2;
       const dx = target.x - bot.x;
-      const dy = (target.y + 1.2) - (bot.y + 1.45);
+      const dy = (target.y + targetAimH) - (bot.y + 1.45);
       const dz = target.z - bot.z;
       const horizDist = Math.hypot(dx, dz) || 0.001;
 
@@ -281,11 +261,7 @@ export function updateRoomBots(room, dt, now, callbacks) {
       }
 
       // Attempt to fire at target
-      if (bot.ammo <= 0 && !bot.reloadingUntil) {
-        if ((bot.reserveAmmo ?? 0) > 0) {
-          bot.reloadingUntil = now + weaponCfg.reloadMs;
-        }
-      } else if (
+      if (
         !bot.reloadingUntil &&
         bot.ammo > 0 &&
         now - bot.lastShotAt >= Math.max(weaponCfg.fireRateMs * 1.65, 230)
@@ -294,20 +270,23 @@ export function updateRoomBots(room, dt, now, callbacks) {
         _botEye.y = bot.y + 1.5;
         _botEye.z = bot.z;
         _otherEye.x = target.x;
-        _otherEye.y = target.y + 1.25;
+        _otherEye.y = target.y + (target.prone ? 0.38 : target.crouching ? 0.85 : 1.25);
         _otherEye.z = target.z;
+        let canSeeTarget = hasLineOfSight(_botEye, _otherEye, obstacles);
+        if (!canSeeTarget) {
+          _otherEye.y = target.y + (target.prone ? 0.55 : target.crouching ? 1.15 : 1.65);
+          canSeeTarget = hasLineOfSight(_botEye, _otherEye, obstacles);
+        }
 
-        if (hasLineOfSight(_botEye, _otherEye, obstacles)) {
+        if (canSeeTarget) {
           const botEye = { x: _botEye.x, y: _botEye.y, z: _botEye.z };
-          bot.lastShotAt = now;
-          bot.ammo = Math.max(0, bot.ammo - 1);
-          if (bot.ammoByWeapon) bot.ammoByWeapon[bot.weapon] = bot.ammo;
+          const prevLastShotAt = bot.lastShotAt;
 
           // Distance-based accuracy so bots feel fair and exciting
           const dist3D = Math.hypot(dx, dy, dz);
-          const baseHitChance = bot.weapon === 'sniper' ? 0.52 : bot.weapon === 'shotgun' ? 0.68 : 0.42;
+          const baseHitChance = bot.weapon === 'sniper' ? 0.55 : bot.weapon === 'shotgun' ? 0.72 : 0.48;
           const distPenalty = Math.min(0.32, (dist3D / 75) * 0.28);
-          const didHit = Math.random() < Math.max(0.14, baseHitChance - distPenalty);
+          const didHit = Math.random() < Math.max(0.18, baseHitChance - distPenalty);
           const isHeadshot = didHit && Math.random() < 0.16;
 
           const normDir = {
@@ -316,36 +295,56 @@ export function updateRoomBots(room, dt, now, callbacks) {
             z: dz / (dist3D || 1)
           };
 
-          callbacks.onBotShoot(bot, {
-            weapon: bot.weapon,
-            origin: botEye,
-            dir: normDir,
-            targetId: didHit ? target.id : null,
-            isHeadshot,
-            hitPoint: didHit
-              ? {
-                  x: target.x,
-                  y: target.y + (isHeadshot ? 1.55 : 1.05),
-                  z: target.z
-                }
-              : {
-                  x: target.x + (Math.random() - 0.5) * 2.2,
-                  y: Math.max(0.2, target.y + 1.0 + (Math.random() - 0.5) * 1.4),
-                  z: target.z + (Math.random() - 0.5) * 2.2
-                }
-          });
+          const hitY = target.y + (
+            isHeadshot
+              ? (target.prone ? 0.52 : target.crouching ? 1.15 : 1.55)
+              : (target.prone ? 0.35 : target.crouching ? 0.82 : 1.05)
+          );
+
+          callbacks.onBotShoot(
+            bot,
+            {
+              weapon: bot.weapon,
+              origin: botEye,
+              dir: normDir,
+              targetId: didHit ? target.id : null,
+              isHeadshot,
+              hitPoint: didHit
+                ? {
+                    x: target.x,
+                    y: hitY,
+                    z: target.z
+                  }
+                : {
+                    x: target.x + (Math.random() - 0.5) * 2.2,
+                    y: Math.max(0.2, hitY + (Math.random() - 0.5) * 1.4),
+                    z: target.z + (Math.random() - 0.5) * 2.2
+                  }
+            },
+            now
+          );
+
+          // Fallback if a custom callback did not update lastShotAt/ammo via RoomManager.handleShoot
+          if (bot.lastShotAt === prevLastShotAt) {
+            bot.lastShotAt = now;
+            bot.ammo = Math.max(0, (bot.ammo ?? 1) - 1);
+            if (bot.ammoByWeapon) bot.ammoByWeapon[bot.weapon] = bot.ammo;
+          }
         }
       }
     } else {
-      // Patrol between waypoints
+      // Patrol between waypoints or move directly onto an active health pack
       const dx = goal.x - bot.x;
       const dz = goal.z - bot.z;
       const dist = Math.hypot(dx, dz);
+      const arriveRadius = isSeekingHealthPack ? 0.45 : 2.2;
 
-      if (dist < 2.2) {
+      if (dist < arriveRadius) {
         bot.vx = 0;
         bot.vz = 0;
-        bot.waypointIdx = (bot.waypointIdx + 1 + Math.floor(Math.random() * 3)) % waypoints.length;
+        if (!isSeekingHealthPack) {
+          bot.waypointIdx = (bot.waypointIdx + 1 + Math.floor(Math.random() * 3)) % waypoints.length;
+        }
       } else {
         const dirX = dx / dist;
         const dirZ = dz / dist;
