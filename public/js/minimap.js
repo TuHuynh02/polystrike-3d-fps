@@ -28,8 +28,26 @@ export class TacticalMinimap {
     this.lastRenderAt = 0;
     this.lastCoordsUpdateAt = 0;
     this.lastCoordStr = '';
+    this.gunfireBlips = new Map();
 
     this.setMap(DEFAULT_MAP_ID);
+  }
+
+  /**
+   * Records an enemy gunfire blip on the radar for unsuppressed weapons.
+   * Suppressed weapons (`m4a1` PHANTOM-M4) and melee (`knife`) remain stealthy and do not trigger a gunfire sonar ring.
+   */
+  recordGunfireBlip(shooterId, x, z, weaponId = 'rifle', now = (typeof performance !== 'undefined' ? performance.now() : Date.now())) {
+    if (!shooterId || weaponId === 'm4a1' || weaponId === 'knife') return false;
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return false;
+    this.gunfireBlips.set(shooterId, {
+      x,
+      z,
+      weaponId,
+      at: now,
+      durationMs: 2200
+    });
+    return true;
   }
 
   worldToCanvasX(x) {
@@ -54,6 +72,7 @@ export class TacticalMinimap {
     this.mapConfig = cfg;
     this.arenaHalfSize = cfg.arenaHalfSize || 60;
     this.lastRenderAt = 0;
+    if (this.gunfireBlips) this.gunfireBlips.clear();
 
     if (this.mapLabelEl && cfg.name) {
       this.mapLabelEl.textContent = cfg.name;
@@ -213,7 +232,37 @@ export class TacticalMinimap {
       }
     }
 
-    // 4. Render Local Player Position & Viewing Direction Cone (Enemies are hidden from radar)
+    // 3b. Render Active Enemy Gunfire Sonar Rings (Unsuppressed shots pulse for 2.2s)
+    if (this.gunfireBlips && this.gunfireBlips.size > 0) {
+      for (const [shooterId, blip] of this.gunfireBlips.entries()) {
+        const elapsed = now - blip.at;
+        if (elapsed >= blip.durationMs || elapsed < 0) {
+          this.gunfireBlips.delete(shooterId);
+          continue;
+        }
+        const prog = elapsed / blip.durationMs;
+        const alpha = Math.max(0.08, (1 - prog) * 0.92);
+        const bx = this.clampBlipCoord(this.worldToCanvasX(blip.x), 4);
+        const by = this.clampBlipCoord(this.worldToCanvasY(blip.z), 4);
+        const pulseRadius = 3.5 + (elapsed % 750) / 750 * 9.5;
+
+        ctx.strokeStyle = `rgba(248, 113, 113, ${(alpha * 0.85).toFixed(2)})`;
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.arc(bx, by, pulseRadius, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.fillStyle = `rgba(239, 68, 68, ${alpha.toFixed(2)})`;
+        ctx.strokeStyle = '#090d16';
+        ctx.lineWidth = 1.1;
+        ctx.beginPath();
+        ctx.arc(bx, by, 3.6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+
+    // 4. Render Local Player Position & Viewing Direction Cone
     if (localPos) {
       const px = this.clampBlipCoord(this.worldToCanvasX(localPos.x), 5);
       const py = this.clampBlipCoord(this.worldToCanvasY(localPos.z), 5);

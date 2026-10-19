@@ -11,6 +11,10 @@ export const RATE_LIMITS = Object.freeze({
   updateLoadout: { rate: 2, burst: 5 },
   changeMap: { rate: 1, burst: 3 },
   joinRoom: { rate: 2, burst: 4 },
+  switchTeam: { rate: 2, burst: 4 },
+  setTeamReady: { rate: 2, burst: 4 },
+  startTeamMatch: { rate: 1, burst: 3 },
+  leaveRoom: { rate: 2, burst: 4 },
   pingCheck: { rate: 5, burst: 10 },
   default: { rate: 20, burst: 30 }
 });
@@ -130,16 +134,23 @@ export function createRateLimiter({
  */
 export function guardedOn(socket, limiter, event, handler, { expectObject = true, logger = console } = {}) {
   const safe = safeHandler(event, handler, logger);
+  const disconnectAbusive = (reason) => {
+    if (socket.disconnected) return;
+    logger.warn(`[socket] disconnecting ${socket.id} for ${reason} (last event "${event}")`);
+    try {
+      socket.disconnect(true);
+    } catch (err) {
+      logger.error('[socket] disconnect failed:', err);
+    }
+  };
   socket.on(event, (...args) => {
-    if (limiter.shouldDisconnect()) return;
+    if (limiter.shouldDisconnect()) {
+      disconnectAbusive('sustained abuse');
+      return;
+    }
     if (!limiter.allow(event)) {
       if (limiter.shouldDisconnect()) {
-        logger.warn(`[socket] disconnecting ${socket.id} for sustained flooding (last event "${event}")`);
-        try {
-          socket.disconnect(true);
-        } catch (err) {
-          logger.error('[socket] disconnect failed:', err);
-        }
+        disconnectAbusive('sustained flooding');
       }
       return;
     }
@@ -147,6 +158,9 @@ export function guardedOn(socket, limiter, event, handler, { expectObject = true
       const checked = sanitizeObjectPayload(args[0]);
       if (!checked.ok) {
         limiter.recordInvalid();
+        if (limiter.shouldDisconnect()) {
+          disconnectAbusive('malformed payload flood');
+        }
         return;
       }
       args[0] = checked.payload;

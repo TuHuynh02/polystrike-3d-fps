@@ -6,6 +6,8 @@ import {
   WEAPON_ORDER,
   getEffectiveFireRateMs,
   getMapConfig,
+  hasLineOfSight,
+  isPointInsideInflatedBoxes,
   stepGrenade
 } from '../shared/constants.js';
 import { INTERP_DELAY_MAX_MS } from '../shared/config.js';
@@ -114,9 +116,9 @@ export class Game3D {
     this.rayPoint = new THREE.Vector2(0, 0);
 
     // Shared geometries & materials for zero-leak particle/decal pooling
-    this.sharedSparkGeo = new THREE.BoxGeometry(0.055, 0.055, 0.055);
-    this.sharedHitOrbGeo = new THREE.SphereGeometry(0.11, 8, 8);
-    this.sharedShellGeo = new THREE.CylinderGeometry(0.011, 0.011, 0.046, 6);
+    this.sharedSparkGeo = new THREE.SphereGeometry(0.034, 8, 8);
+    this.sharedHitOrbGeo = new THREE.SphereGeometry(0.11, 14, 12);
+    this.sharedShellGeo = new THREE.CylinderGeometry(0.011, 0.011, 0.046, 12);
     this.sharedShellGeo.rotateZ(Math.PI / 2);
     this.sharedShellMat = new THREE.MeshStandardMaterial({
       color: 0xfacc15,
@@ -125,7 +127,7 @@ export class Game3D {
       emissive: 0xca8a04,
       emissiveIntensity: 0.15
     });
-    this.sharedDecalGeo = new THREE.CircleGeometry(0.11, 10);
+    this.sharedDecalGeo = new THREE.CircleGeometry(0.11, 16);
     this.sharedDecalMat = new THREE.MeshBasicMaterial({
       color: 0x050811,
       transparent: true,
@@ -134,10 +136,10 @@ export class Game3D {
       polygonOffset: true,
       polygonOffsetFactor: -2
     });
-    this.sharedGrenadeBodyGeo = new THREE.SphereGeometry(0.11, 10, 10);
-    this.sharedGrenadeBandGeo = new THREE.CylinderGeometry(0.116, 0.116, 0.044, 10);
-    this.sharedGrenadeCapGeo = new THREE.CylinderGeometry(0.045, 0.055, 0.068, 8);
-    this.sharedGrenadeRingGeo = new THREE.TorusGeometry(0.036, 0.008, 6, 12);
+    this.sharedGrenadeBodyGeo = new THREE.SphereGeometry(0.11, 16, 14);
+    this.sharedGrenadeBandGeo = new THREE.CylinderGeometry(0.116, 0.116, 0.044, 16);
+    this.sharedGrenadeCapGeo = new THREE.CylinderGeometry(0.045, 0.055, 0.068, 12);
+    this.sharedGrenadeRingGeo = new THREE.TorusGeometry(0.036, 0.008, 10, 18);
     this.sharedGrenadeBodyMat = new THREE.MeshStandardMaterial({
       color: 0x365314,
       roughness: 0.42,
@@ -151,9 +153,9 @@ export class Game3D {
       roughness: 0.3,
       metalness: 0.85
     });
-    this.sharedExplosionSphereGeo = new THREE.SphereGeometry(1, 14, 12);
-    this.sharedShockwaveRingGeo = new THREE.RingGeometry(0.58, 1.0, 28);
-    this.sharedShockwaveTorusGeo = new THREE.TorusGeometry(0.85, 0.08, 8, 24);
+    this.sharedExplosionSphereGeo = new THREE.SphereGeometry(1, 20, 16);
+    this.sharedShockwaveRingGeo = new THREE.RingGeometry(0.58, 1.0, 36);
+    this.sharedShockwaveTorusGeo = new THREE.TorusGeometry(0.85, 0.08, 12, 32);
 
     // Active map configuration & world collections
     this.currentMapId = DEFAULT_MAP_ID;
@@ -190,10 +192,16 @@ export class Game3D {
     this.inMatch = false;
     this.isPointerLocked = false;
     this.localId = null;
+    this.gameMode = 'ffa';
+    this.localTeam = null;
     this.alive = true;
     this.grenades = 1;
     this.grenadeThrowUntil = 0;
     this.lastGrenadeThrowAt = -2000;
+    this.isCookingGrenade = false;
+    this.grenadeCookStartAt = 0;
+    this.grenadeCookMaxMs = MATCH_CONFIG.GRENADE_FUSE_MS || 3000;
+    this._grenadeSimScratch = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
     this._lastExplodedGrenadeId = null;
     this._lastExplodedAt = 0;
     this.position = new THREE.Vector3(0, 0.1, 0);
@@ -304,6 +312,8 @@ export class Game3D {
     this.crosshairRecoilKick = 0;
     this.accumulatedRecoilPitch = 0;
     this.accumulatedRecoilYaw = 0;
+    this.pendingRecoilPitch = 0;
+    this.pendingRecoilYaw = 0;
     this.punchPitch = 0;
     this.punchRoll = 0;
     this.flinchPitch = 0;
@@ -338,10 +348,11 @@ export class Game3D {
     // Top-left Tactical Mini Map / Radar
     this.minimap = new TacticalMinimap();
 
-    // Build 3D environment, weapon viewmodels & lobby 3D humanoid operator showcase
+    // Build 3D environment, weapon viewmodels, grenade trajectory preview & lobby 3D humanoid operator showcase
     this.setupLights();
     this.loadMap(DEFAULT_MAP_ID);
     this.setupViewmodelWeapons();
+    this.setupGrenadePreview();
     this.setupLobbyShowcase();
     this.bindEvents();
 
@@ -351,12 +362,12 @@ export class Game3D {
   }
 
   setupLights() {
-    this.hemiLight = new THREE.HemisphereLight(0xb8d4f2, 0x1a1e24, 1.05);
+    this.hemiLight = new THREE.HemisphereLight(0xc4ddf7, 0x222933, 1.18);
     this.hemiLight.position.set(0, 75, 0);
     this.scene.add(this.hemiLight);
 
     // Primary warm directional sunlight with static baked shadow map covering the arena
-    this.dirLight = new THREE.DirectionalLight(0xfff1dc, 1.68);
+    this.dirLight = new THREE.DirectionalLight(0xfff3e0, 1.56);
     this.dirLight.position.set(56, 86, 46);
     this.dirLight.castShadow = this.quality.shadowMapSize > 0;
     this.dirLight.shadow.mapSize.width = this.quality.shadowMapSize || 1;
@@ -368,12 +379,12 @@ export class Game3D {
     this.dirLight.shadow.camera.right = d;
     this.dirLight.shadow.camera.top = d;
     this.dirLight.shadow.camera.bottom = -d;
-    this.dirLight.shadow.bias = -0.0004;
-    this.dirLight.shadow.normalBias = 0.02;
+    this.dirLight.shadow.bias = -0.00035;
+    this.dirLight.shadow.normalBias = 0.024;
     this.scene.add(this.dirLight);
 
-    // Cool steel rim light from opposite angle for 3D depth & metallic specular highlights
-    this.rimLight = new THREE.DirectionalLight(0x6488a8, 0.78);
+    // Cool steel rim light from opposite angle for smooth 3D wrap-around shading & specular highlights
+    this.rimLight = new THREE.DirectionalLight(0x7aa2c4, 0.92);
     this.rimLight.position.set(-58, 52, -52);
     this.scene.add(this.rimLight);
 
@@ -797,9 +808,9 @@ export class Game3D {
       this.scene.remove(item.group);
       item.group.traverse((obj) => {
         if (obj.isMesh) {
-          obj.geometry?.dispose();
-          if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
-          else obj.material?.dispose();
+          if (!obj.geometry?.userData?.shared) obj.geometry?.dispose();
+          if (Array.isArray(obj.material)) obj.material.forEach((m) => !m.userData?.shared && m.dispose());
+          else if (!obj.material?.userData?.shared) obj.material?.dispose();
         }
       });
     }
@@ -903,6 +914,230 @@ export class Game3D {
     }
   }
 
+  setupGrenadePreview() {
+    this.grenadePreviewSteps = 36;
+    this.grenadePreviewPositions = new Float32Array((this.grenadePreviewSteps + 1) * 3);
+    this.grenadePreviewGeo = new THREE.BufferGeometry();
+    this.grenadePreviewGeo.setAttribute('position', new THREE.BufferAttribute(this.grenadePreviewPositions, 3));
+    this.grenadePreviewMat = new THREE.LineBasicMaterial({
+      color: 0xff3b30,
+      transparent: true,
+      opacity: 0.92,
+      depthWrite: false
+    });
+    this.grenadePreviewLine = new THREE.Line(this.grenadePreviewGeo, this.grenadePreviewMat);
+    this.grenadePreviewLine.frustumCulled = false;
+    this.grenadePreviewLine.visible = false;
+    this.grenadePreviewLine.renderOrder = 18;
+    this.scene.add(this.grenadePreviewLine);
+
+    this.grenadePreviewTargetGroup = new THREE.Group();
+    this.grenadePreviewTargetGroup.visible = false;
+    this.grenadePreviewTargetGroup.renderOrder = 18;
+
+    this.grenadePreviewRingMat = new THREE.MeshBasicMaterial({
+      color: 0xff3b30,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2
+    });
+    const outerRing = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.72, 28), this.grenadePreviewRingMat);
+    outerRing.rotation.x = -Math.PI / 2;
+
+    this.grenadePreviewDiscMat = new THREE.MeshBasicMaterial({
+      color: 0xf97316,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.24,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1
+    });
+    const innerDisc = new THREE.Mesh(new THREE.CircleGeometry(0.52, 24), this.grenadePreviewDiscMat);
+    innerDisc.rotation.x = -Math.PI / 2;
+
+    this.grenadePreviewTargetGroup.add(outerRing, innerDisc);
+    this.scene.add(this.grenadePreviewTargetGroup);
+
+    this.grenadePreviewBeaconMat = new THREE.MeshBasicMaterial({
+      color: 0xfef08a,
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false
+    });
+    this.grenadePreviewBeacon = new THREE.Mesh(this.sharedHitOrbGeo, this.grenadePreviewBeaconMat);
+    this.grenadePreviewBeacon.scale.setScalar(1.35);
+    this.grenadePreviewBeacon.visible = false;
+    this.grenadePreviewBeacon.renderOrder = 19;
+    this.scene.add(this.grenadePreviewBeacon);
+  }
+
+  startGrenadeCooking() {
+    if (!this.inMatch || !this.alive) return false;
+    const now = performance.now();
+    if (now - this.lastGrenadeThrowAt < 250) return false;
+    if (this.grenades <= 0) {
+      this.callbacks.onThrowGrenade?.({ empty: true });
+      return false;
+    }
+    if (this.isCookingGrenade) return true;
+
+    if (this.isAiming) {
+      this.isAiming = false;
+      this.adsToggleActive = false;
+      setWeaponAdsCulling(this.viewmodelMeshes[this.currentWeapon], false);
+      this.callbacks.onAimChange?.(false, this.currentWeapon);
+    }
+
+    this.isCookingGrenade = true;
+    this.grenadeCookStartAt = now;
+    this.grenadeCookMaxMs = MATCH_CONFIG.GRENADE_FUSE_MS || 3000;
+    this.sfx?.playDryFire?.();
+    this.updateGrenadePreview(now);
+    return true;
+  }
+
+  cancelGrenadeCooking() {
+    if (!this.isCookingGrenade && !this.grenadePreviewLine?.visible) return;
+    this.isCookingGrenade = false;
+    this.grenadeCookStartAt = 0;
+    if (this.grenadePreviewLine) this.grenadePreviewLine.visible = false;
+    if (this.grenadePreviewTargetGroup) this.grenadePreviewTargetGroup.visible = false;
+    if (this.grenadePreviewBeacon) this.grenadePreviewBeacon.visible = false;
+    this.callbacks.onGrenadeCookUpdate?.(false, 0, (this.grenadeCookMaxMs || 3000) / 1000);
+  }
+
+  releaseGrenadeCooking() {
+    if (!this.isCookingGrenade) return false;
+    const now = performance.now();
+    const maxMs = this.grenadeCookMaxMs || (MATCH_CONFIG.GRENADE_FUSE_MS || 3000);
+    const elapsed = Math.max(0, now - this.grenadeCookStartAt);
+    const remMs = Math.max(80, Math.round(maxMs - elapsed));
+    this.cancelGrenadeCooking();
+    return this.attemptThrowGrenade({ fuseMs: remMs });
+  }
+
+  updateGrenadePreview(now = performance.now()) {
+    if (!this.isCookingGrenade) return;
+    if (!this.inMatch || !this.alive || this.grenades <= 0) {
+      this.cancelGrenadeCooking();
+      return;
+    }
+
+    const maxMs = this.grenadeCookMaxMs || (MATCH_CONFIG.GRENADE_FUSE_MS || 3000);
+    const elapsed = Math.max(0, now - this.grenadeCookStartAt);
+    if (elapsed >= maxMs) {
+      this.cancelGrenadeCooking();
+      this.attemptThrowGrenade({ fuseMs: 60, overcooked: true });
+      return;
+    }
+
+    const remMs = maxMs - elapsed;
+    const remSec = remMs / 1000;
+    this.callbacks.onGrenadeCookUpdate?.(true, remSec, maxMs / 1000);
+
+    if (!this.grenadePreviewLine || !this.grenadePreviewPositions) return;
+
+    const yaw = this.yaw;
+    const pitch = this.pitch;
+    const dirX = -Math.sin(yaw) * Math.cos(pitch);
+    const dirY = Math.sin(pitch);
+    const dirZ = -Math.cos(yaw) * Math.cos(pitch);
+
+    const eyeX = this.camera.position.x;
+    const eyeY = Math.max(0.22, this.camera.position.y);
+    const eyeZ = this.camera.position.z;
+
+    const mapCfg = this.getMovementMapCfg();
+    const obstacles = mapCfg.obstacles || [];
+    const arenaLimit = (mapCfg.arenaHalfSize || MATCH_CONFIG.ARENA_HALF_SIZE) - 0.3;
+
+    let startX = eyeX + dirX * 0.38;
+    let startY = Math.max(0.22, eyeY + dirY * 0.22);
+    let startZ = eyeZ + dirZ * 0.38;
+
+    let blockedAtStart = !hasLineOfSight(
+      { x: eyeX, y: eyeY, z: eyeZ },
+      { x: startX, y: startY, z: startZ },
+      obstacles
+    );
+    if (!blockedAtStart) {
+      blockedAtStart = isPointInsideInflatedBoxes(startX, startY, startZ, 0.18, obstacles);
+    }
+    if (blockedAtStart) {
+      startX = eyeX;
+      startY = eyeY;
+      startZ = eyeZ;
+    }
+    startX = Math.max(-arenaLimit, Math.min(arenaLimit, startX));
+    startZ = Math.max(-arenaLimit, Math.min(arenaLimit, startZ));
+
+    const throwSpeed = MATCH_CONFIG.GRENADE_THROW_SPEED || 19.5;
+    const upwardArc = MATCH_CONFIG.GRENADE_UPWARD_ARC || 4.2;
+    const sim = this._grenadeSimScratch;
+    sim.x = startX;
+    sim.y = startY;
+    sim.z = startZ;
+    sim.vx = dirX * throwSpeed + (this.velocity.x || 0) * 0.25;
+    sim.vy = dirY * throwSpeed + upwardArc;
+    sim.vz = dirZ * throwSpeed + (this.velocity.z || 0) * 0.25;
+
+    const steps = this.grenadePreviewSteps;
+    const simDuration = Math.max(0.15, remSec);
+    const stepDt = simDuration / steps;
+    const posArr = this.grenadePreviewPositions;
+
+    // Offset initial visual vertex slightly down-right toward throwing hand so it doesn't block center sight
+    const rightX = Math.cos(yaw);
+    const rightZ = -Math.sin(yaw);
+    posArr[0] = startX + rightX * 0.14;
+    posArr[1] = Math.max(0.18, startY - 0.12);
+    posArr[2] = startZ + rightZ * 0.14;
+
+    let impactX = null;
+    let impactY = null;
+    let impactZ = null;
+
+    for (let i = 1; i <= steps; i++) {
+      const bounce = stepGrenade(sim, stepDt, mapCfg);
+      if (impactX === null && (bounce > 0 || sim.y <= 0.20)) {
+        impactX = sim.x;
+        impactY = sim.y;
+        impactZ = sim.z;
+      }
+      const idx = i * 3;
+      posArr[idx] = sim.x;
+      posArr[idx + 1] = sim.y;
+      posArr[idx + 2] = sim.z;
+    }
+
+    this.grenadePreviewGeo.attributes.position.needsUpdate = true;
+    this.grenadePreviewLine.visible = true;
+
+    const isUrgent = remSec <= 1.1;
+    const arcHex = isUrgent ? 0xff1e1e : 0xf97316;
+    this.grenadePreviewMat.color.setHex(arcHex);
+    this.grenadePreviewRingMat.color.setHex(arcHex);
+
+    const ringX = impactX !== null ? impactX : sim.x;
+    const ringY = Math.max(0.03, (impactY !== null ? impactY : sim.y) - 0.15);
+    const ringZ = impactZ !== null ? impactZ : sim.z;
+    const pulse = 1.0 + Math.sin(now * (isUrgent ? 0.024 : 0.010)) * 0.10;
+    this.grenadePreviewTargetGroup.position.set(ringX, ringY, ringZ);
+    this.grenadePreviewTargetGroup.scale.setScalar(pulse);
+    this.grenadePreviewTargetGroup.visible = true;
+
+    this.grenadePreviewBeacon.position.set(sim.x, sim.y, sim.z);
+    this.grenadePreviewBeaconMat.color.setHex(isUrgent ? 0xff3b30 : 0xfef08a);
+    this.grenadePreviewBeacon.scale.setScalar(isUrgent ? 1.55 : 1.25);
+    this.grenadePreviewBeacon.visible = true;
+  }
+
   triggerLocalGrenadeThrow(outPayload = null) {
     const now = performance.now();
     this.lastGrenadeThrowAt = now;
@@ -930,10 +1165,11 @@ export class Game3D {
     return { yaw, pitch, origin, dir };
   }
 
-  attemptThrowGrenade() {
+  attemptThrowGrenade(options = {}) {
     if (!this.inMatch || !this.alive) return false;
     const now = performance.now();
     if (now - this.lastGrenadeThrowAt < 250) return false;
+    this.cancelGrenadeCooking();
     const yaw = this.yaw;
     const pitch = this.pitch;
     const dir = {
@@ -947,6 +1183,12 @@ export class Game3D {
       z: this.camera.position.z
     };
     const payload = { yaw, pitch, origin, dir };
+    if (typeof options?.fuseMs === 'number' && Number.isFinite(options.fuseMs)) {
+      payload.fuseMs = Math.round(options.fuseMs);
+    }
+    if (options?.overcooked) {
+      payload.overcooked = true;
+    }
     if (this.grenades > 0 && this.isPointerLocked) {
       this.triggerLocalGrenadeThrow(payload);
     }
@@ -955,6 +1197,7 @@ export class Game3D {
   }
 
   clearGrenades() {
+    this.cancelGrenadeCooking();
     for (const id of Array.from(this.activeGrenadeMeshes.keys())) {
       this.removeGrenadeMesh(id);
     }
@@ -1364,8 +1607,8 @@ export class Game3D {
     this.camera.add(this.viewmodelKeyLight);
 
     this.muzzleLight = new THREE.PointLight(0xfef08a, 0, 10, 2);
-    this.muzzleLight.position.set(0, 0.05, -0.9);
-    this.viewmodelRig.add(this.muzzleLight);
+    this.muzzleLight.position.set(0.24, -0.16, -1.30);
+    this.camera.add(this.muzzleLight);
 
     this.viewmodelMeshes = {};
     for (const wId of WEAPON_ORDER) {
@@ -1538,6 +1781,7 @@ export class Game3D {
     if (this.currentWeapon === weaponId && this.equipUntil === 0) return;
 
     const prevWeapon = this.currentWeapon;
+    this.cancelGrenadeCooking();
     this.currentWeapon = weaponId;
     this.reloadingUntil = 0;
     this.nextShellAt = 0;
@@ -1549,6 +1793,8 @@ export class Game3D {
     this.crosshairRecoilKick = 0;
     this.accumulatedRecoilPitch = 0;
     this.accumulatedRecoilYaw = 0;
+    this.pendingRecoilPitch = 0;
+    this.pendingRecoilYaw = 0;
 
     const cfg = WEAPONS[weaponId];
     this.equipDuration = cfg.equipMs || 220;
@@ -1601,6 +1847,7 @@ export class Game3D {
     const reserveAmmo = this.reserveAmmoByWeapon[this.currentWeapon] ?? 0;
     if (currentAmmo >= cfg.magSize || reserveAmmo <= 0) return;
 
+    this.cancelGrenadeCooking();
     this.isAiming = false;
     this.adsToggleActive = false;
     this.isSprinting = false;
@@ -1633,10 +1880,27 @@ export class Game3D {
     );
   }
 
+  setTeamState(gameMode = 'ffa', localTeam = null) {
+    this.gameMode = gameMode === 'tdm' ? 'tdm' : 'ffa';
+    this.localTeam = this.gameMode === 'tdm' ? (localTeam || null) : null;
+    for (const rp of this.remotePlayers.values()) {
+      const isTeammate = Boolean(this.gameMode === 'tdm' && this.localTeam && rp.team && rp.team === this.localTeam);
+      if (rp.isTeammate !== isTeammate) {
+        rp.isTeammate = isTeammate;
+        rp.setTeamOutline?.(isTeammate);
+      }
+    }
+    this.rebuildHitboxList();
+  }
+
   createRemotePlayerMesh(playerData = {}, options = {}) {
+    const isTeammate = options.isTeammate !== undefined
+      ? Boolean(options.isTeammate)
+      : Boolean(this.gameMode === 'tdm' && this.localTeam && playerData.team && playerData.team === this.localTeam);
     const rp = createRemotePlayerMesh(playerData, {
       scene: this.scene,
       defaultColor: this.lobbyOperatorColor || 0x38bdf8,
+      isTeammate,
       ...options
     });
     if (rp?.group) {
@@ -1656,6 +1920,9 @@ export class Game3D {
     this.hitboxMeshes.length = 0;
     for (const rp of this.remotePlayers.values()) {
       if (!rp.alive) continue;
+      if (this.gameMode === 'tdm' && this.localTeam && rp.team && rp.team === this.localTeam) {
+        continue;
+      }
       if (rp.hitboxParts && rp.hitboxParts.length > 0) {
         for (let i = 0; i < rp.hitboxParts.length; i++) {
           this.hitboxMeshes.push(rp.hitboxParts[i]);
@@ -1754,9 +2021,19 @@ export class Game3D {
     let hitboxesDirty = false;
     this._remoteScratch.length = 0;
 
+    for (let i = 0; i < playersArray.length; i++) {
+      const p = playersArray[i];
+      if (p && p.id === this.localId && p.team !== undefined && p.team !== this.localTeam) {
+        this.localTeam = p.team || null;
+        hitboxesDirty = true;
+        break;
+      }
+    }
+
     for (const p of playersArray) {
       if (p.id === this.localId) {
         this.alive = Boolean(p.alive);
+        if (!this.alive) this.cancelGrenadeCooking();
         if (typeof p.grenades === 'number') {
           const isThrowInFlight = p.grenades > this.grenades && (now - this.lastGrenadeThrowAt) < 400;
           if (!isThrowInFlight) {
@@ -1784,6 +2061,16 @@ export class Game3D {
       }
       if (!rp.velocity) rp.velocity = new THREE.Vector3(0, 0, 0);
 
+      if (p.team !== undefined) {
+        rp.team = p.team || null;
+      }
+      const isTeammate = Boolean(this.gameMode === 'tdm' && this.localTeam && rp.team && rp.team === this.localTeam);
+      if (rp.isTeammate !== isTeammate) {
+        rp.isTeammate = isTeammate;
+        rp.setTeamOutline?.(isTeammate);
+        hitboxesDirty = true;
+      }
+
       const nowAlive = Boolean(p.alive);
       if (rp.alive !== nowAlive) {
         hitboxesDirty = true;
@@ -1799,7 +2086,7 @@ export class Game3D {
 
       rp.name = p.name || rp.name;
       if (stamped) {
-        // Pose (position, yaw/pitch/lean, crouch/prone) comes from the snapshot buffer in updateRemotePlayers
+        // Pose (position, yaw/pitch/lean, crouch/prone/sliding) comes from the snapshot buffer in updateRemotePlayers
         this._remoteScratch.push(p);
       } else {
         rp.targetYaw = p.yaw || 0;
@@ -1807,6 +2094,7 @@ export class Game3D {
         rp.crouching = Boolean(p.crouching || p.crouch);
         rp.crouch = rp.crouching;
         rp.prone = Boolean(p.prone);
+        rp.sliding = Boolean(p.sliding || p.isSliding);
         rp.lean = Number(p.lean || 0);
       }
       if (rp.alive && !nowAlive) rp.deadSince = now;
@@ -1895,6 +2183,8 @@ export class Game3D {
     this.crosshairRecoilKick = 0;
     this.accumulatedRecoilPitch = 0;
     this.accumulatedRecoilYaw = 0;
+    this.pendingRecoilPitch = 0;
+    this.pendingRecoilYaw = 0;
     this.recoilShotIndex = 0;
     this.punchPitch = 0;
     this.punchRoll = 0;
@@ -1911,6 +2201,7 @@ export class Game3D {
     if (Number.isInteger(data.spreadSeed)) this.setSpreadSeed(data.spreadSeed);
     this.meleeSwingUntil = 0;
     this.grenadeThrowUntil = 0;
+    this.cancelGrenadeCooking();
     this.grenades = typeof data.grenades === 'number' ? data.grenades : 1;
     this.callbacks.onGrenadeChanged?.(this.grenades);
     for (const wId of WEAPON_ORDER) {
@@ -2052,6 +2343,21 @@ export class Game3D {
     this.tmpVec3A.set(origin.x, origin.y, origin.z);
     this.tmpVec3B.set(hitPoint.x, hitPoint.y, hitPoint.z);
 
+    const dx = this.tmpVec3B.x - this.tmpVec3A.x;
+    const dy = this.tmpVec3B.y - this.tmpVec3A.y;
+    const dz = this.tmpVec3B.z - this.tmpVec3A.z;
+    const totalDist = Math.hypot(dx, dy, dz);
+    const invDist = totalDist > 1e-5 ? 1 / totalDist : 0;
+    const ux = dx * invDist;
+    const uy = dy * invDist;
+    const uz = totalDist > 1e-5 ? dz * invDist : -1;
+
+    // Short projectile bolt length ("1 tia nhỏ thôi") instead of a full static beam
+    const boltLen = Math.min(totalDist, Math.max(0.32, Math.min(1.55, totalDist * 0.22)));
+    const headInitX = this.tmpVec3A.x + ux * boltLen;
+    const headInitY = this.tmpVec3A.y + uy * boltLen;
+    const headInitZ = this.tmpVec3A.z + uz * boltLen;
+
     // Cap concurrent shot effects to the quality tier's maxShotEffects budget during multi-player firefights
     const maxShotEffects = this.quality?.maxShotEffects || 20;
     let activeTracers = 0;
@@ -2079,27 +2385,27 @@ export class Game3D {
       arr[0] = this.tmpVec3A.x;
       arr[1] = this.tmpVec3A.y;
       arr[2] = this.tmpVec3A.z;
-      arr[3] = this.tmpVec3B.x;
-      arr[4] = this.tmpVec3B.y;
-      arr[5] = this.tmpVec3B.z;
+      arr[3] = headInitX;
+      arr[4] = headInitY;
+      arr[5] = headInitZ;
       posAttr.needsUpdate = true;
-      geo.computeBoundingSphere();
       mat.color.setHex(colorHex);
-      mat.opacity = 0.95;
+      mat.opacity = 0.98;
+      line.visible = true;
     } else {
       geo = new THREE.BufferGeometry();
       const positions = new Float32Array([
         this.tmpVec3A.x, this.tmpVec3A.y, this.tmpVec3A.z,
-        this.tmpVec3B.x, this.tmpVec3B.y, this.tmpVec3B.z
+        headInitX, headInitY, headInitZ
       ]);
       geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      geo.computeBoundingSphere();
       mat = new THREE.LineBasicMaterial({
         color: colorHex,
         transparent: true,
-        opacity: 0.95
+        opacity: 0.98
       });
       line = new THREE.Line(geo, mat);
+      line.frustumCulled = false;
     }
     this.scene.add(line);
 
@@ -2131,6 +2437,19 @@ export class Game3D {
       geo: null,
       mat: null,
       sparkMat: null,
+      ox: 0,
+      oy: 0,
+      oz: 0,
+      hx: 0,
+      hy: 0,
+      hz: 0,
+      ux: 0,
+      uy: 0,
+      uz: -1,
+      totalDist: 0,
+      boltLen: 0.8,
+      travelMs: 55,
+      isPlayerHit: false,
       createdAt: 0,
       duration: 145
     };
@@ -2138,20 +2457,20 @@ export class Game3D {
     particles.length = 0;
 
     const pCount = isPlayerHit ? 5 : 3;
-    const nx = hitNormal ? hitNormal.x : 0;
-    const ny = hitNormal ? hitNormal.y : 1;
-    const nz = hitNormal ? hitNormal.z : 0;
+    const nx = hitNormal ? hitNormal.x : -ux * 0.6;
+    const ny = hitNormal ? hitNormal.y : Math.max(0.35, -uy * 0.6);
+    const nz = hitNormal ? hitNormal.z : -uz * 0.6;
     for (let i = 0; i < pCount; i++) {
       const pMesh = this.sparkMeshPool.pop() || new THREE.Mesh(this.sharedSparkGeo, sparkMat);
       pMesh.geometry = this.sharedSparkGeo;
       pMesh.material = sparkMat;
-      pMesh.scale.setScalar(1);
+      pMesh.scale.setScalar(isPlayerHit ? 1.25 : 0.95);
       pMesh.position.copy(this.tmpVec3B);
       const pt = this.tracerParticlePool.pop() || { mesh: null, vx: 0, vy: 0, vz: 0 };
       pt.mesh = pMesh;
-      pt.vx = nx * 3.5 + (Math.random() - 0.5) * 5.5;
-      pt.vy = ny * 3.5 + Math.random() * 4.2;
-      pt.vz = nz * 3.5 + (Math.random() - 0.5) * 5.5;
+      pt.vx = nx * 3.2 + (Math.random() - 0.5) * 5.0;
+      pt.vy = ny * 3.2 + Math.random() * 3.8;
+      pt.vz = nz * 3.2 + (Math.random() - 0.5) * 5.0;
       particles.push(pt);
       this.scene.add(pMesh);
     }
@@ -2160,6 +2479,9 @@ export class Game3D {
       this.spawnBulletDecal(hitPoint, hitNormal);
     }
 
+    const bulletSpeed = 195; // m/s fast visual tracer bolt velocity
+    const travelMs = Math.max(26, Math.min(115, (totalDist / bulletSpeed) * 1000));
+
     fx.type = 'tracer';
     fx.ss = ss;
     fx.line = line;
@@ -2167,8 +2489,21 @@ export class Game3D {
     fx.geo = geo;
     fx.mat = mat;
     fx.sparkMat = sparkMat;
+    fx.ox = this.tmpVec3A.x;
+    fx.oy = this.tmpVec3A.y;
+    fx.oz = this.tmpVec3A.z;
+    fx.hx = this.tmpVec3B.x;
+    fx.hy = this.tmpVec3B.y;
+    fx.hz = this.tmpVec3B.z;
+    fx.ux = ux;
+    fx.uy = uy;
+    fx.uz = uz;
+    fx.totalDist = totalDist;
+    fx.boltLen = boltLen;
+    fx.travelMs = travelMs;
+    fx.isPlayerHit = Boolean(isPlayerHit);
     fx.createdAt = performance.now();
-    fx.duration = 145;
+    fx.duration = Math.max(120, Math.round(travelMs + 55));
     this.activeEffects.push(fx);
   }
 
@@ -2183,26 +2518,27 @@ export class Game3D {
     return this._audioListenerState;
   }
 
-  triggerRemoteShotEffect(shooterId, weaponId, origin, hitPoint) {
-    this.spawnShotVisual(shooterId, weaponId, origin, hitPoint);
+  triggerRemoteShotEffect(shooterId, weaponId, origin, hitPoint, isPlayerHit = false) {
+    this.spawnShotVisual(shooterId, weaponId, origin, hitPoint, isPlayerHit);
   }
 
-  spawnShotVisual(shooterId, weaponId, origin, hitPoint) {
+  spawnShotVisual(shooterId, weaponId, origin, hitPoint, isPlayerHit = false) {
     if (shooterId && typeof shooterId === 'object') {
       if ('x' in shooterId && 'z' in shooterId && !('shooterId' in shooterId) && !('origin' in shooterId)) {
         const resolvedWep = typeof origin === 'string' ? origin : 'rifle';
-        return this.spawnShotVisual(null, resolvedWep, shooterId, weaponId);
+        return this.spawnShotVisual(null, resolvedWep, shooterId, weaponId, Boolean(hitPoint));
       }
       const payload = shooterId;
       return this.spawnShotVisual(
         payload.shooterId,
         payload.weapon || payload.weaponId || 'rifle',
         payload.origin,
-        payload.hitPoint
+        payload.hitPoint,
+        Boolean(payload.isPlayerHit)
       );
     }
     if (typeof shooterId === 'string' && weaponId && typeof weaponId === 'object' && 'x' in weaponId) {
-      return this.spawnShotVisual(null, shooterId, weaponId, origin);
+      return this.spawnShotVisual(null, shooterId, weaponId, origin, Boolean(hitPoint));
     }
 
     const rp = this.remotePlayers.get(shooterId);
@@ -2218,11 +2554,21 @@ export class Game3D {
     const shotOrigin = origin || (rp ? rp.group.position : null);
     if ((!shooterId || shooterId !== this.localId) && shotOrigin) {
       sfx.playSpatialGunshot(resolvedWeapon, this.getAudioListenerState(), shotOrigin);
+      const isTeammateShooter = Boolean(this.gameMode === 'tdm' && this.localTeam && rp?.team && rp.team === this.localTeam);
+      if (!isTeammateShooter) {
+        this.minimap?.recordGunfireBlip?.(
+          shooterId || 'enemy',
+          shotOrigin.x,
+          shotOrigin.z,
+          resolvedWeapon,
+          performance.now()
+        );
+      }
     }
 
     if (shotOrigin && hitPoint) {
       const wColor = WEAPONS[resolvedWeapon]?.color || 0xfef08a;
-      this.spawnTracerEffect(shotOrigin, hitPoint, wColor, false, null);
+      this.spawnTracerEffect(shotOrigin, hitPoint, wColor, Boolean(isPlayerHit), null);
     }
   }
 
@@ -2340,10 +2686,10 @@ export class Game3D {
     }
   }
 
-  applyDamageFlinch(damage = 20) {
-    const scale = Math.min(1.2, damage / 40);
-    this.flinchPitch = Math.min(0.025, this.flinchPitch + 0.01 * scale);
-    this.flinchRoll = (Math.random() < 0.5 ? -1 : 1) * 0.012 * scale;
+  applyDamageFlinch(_damage = 20) {
+    // Disabled per user request: getting shot (including headshots) never shakes or flinches the camera.
+    this.flinchPitch = 0;
+    this.flinchRoll = 0;
   }
 
   /**
@@ -2433,19 +2779,40 @@ export class Game3D {
 
     const horizSpeed = Math.hypot(this.velocity.x, this.velocity.z);
     const isMovingWhileShooting = horizSpeed > 0.95 || !this.onGround;
+    const isLowPosture = Boolean(this.onGround && (this.prone || (this.crouching && !this.isSliding)));
 
-    // Crosshair-only recoil & dynamic bloom HUD (ZERO camera pitch/yaw/roll shake!). The damage spread does NOT read this.
-    const moveBloomMult = isMovingWhileShooting ? 1.85 : 1.0;
+    // Dynamic bloom HUD & Tactical FPS (PUBG/CS/Valorant) stance-controlled recoil climb
+    const moveBloomMult = isMovingWhileShooting ? (isLowPosture ? 1.15 : 1.85) : 1.0;
+    const stanceBloomMult = this.prone ? 0.55 : (this.crouching && !this.isSliding) ? 0.75 : 1.0;
     this.currentBloom = Math.min(
       (cfg.bloomMax || 0.018) * moveBloomMult,
-      this.currentBloom + (cfg.bloomPerShot || 0.002) * (this.isAiming ? 0.5 : 1.0) * moveBloomMult
+      this.currentBloom + (cfg.bloomPerShot || 0.002) * (this.isAiming ? 0.5 : 1.0) * stanceBloomMult * moveBloomMult
     );
 
     this.recoilShotIndex = Math.min(30, this.recoilShotIndex + 1);
-    const chKick = (cfg.crosshairKick || 0.018) * (this.isAiming ? 0.65 : 1.0) * (this.prone ? 0.65 : this.crouching ? 0.8 : 1.0);
+    const runRecoilPenalty = (isMovingWhileShooting && !isLowPosture) ? 1.22 : 1.0;
+    const postureMult =
+      (this.isAiming ? 0.65 : 1.0) *
+      (this.prone ? 0.48 : (this.crouching && !this.isSliding) ? 0.70 : 1.0) *
+      runRecoilPenalty;
+    const chKick = (cfg.crosshairKick || 0.018) * postureMult;
     this.crosshairRecoilKick = Math.min(0.11, this.crosshairRecoilKick + chKick);
 
-    // Gentle 3D weapon viewmodel kickback & reciprocating bolt/pump animation (camera stays 100% steady)
+    const patternArr = cfg.recoilPattern;
+    const patIdx = Math.max(0, Math.min((patternArr?.length || 1) - 1, Math.floor(this.recoilShotIndex) - 1));
+    const patDir = patternArr ? patternArr[patIdx] : ((Math.floor(this.recoilShotIndex) % 2 === 0) ? 1 : -1);
+    const climbFactor = 1 + Math.min(8, Math.max(0, this.recoilShotIndex - 1)) * (cfg.recoilClimbMult || 0.08);
+    const maxRecPitch = cfg.recoilMaxPitch || 0.095;
+    const rawKickPitch = (cfg.recoilPitch || 0.011) * climbFactor * postureMult;
+    const availPitch = Math.max(0, maxRecPitch - (this.accumulatedRecoilPitch + (this.pendingRecoilPitch || 0)));
+    const kickPitch = Math.min(availPitch, rawKickPitch);
+    const kickYaw = (cfg.recoilYaw || 0.004) * patDir * postureMult;
+    this.pendingRecoilPitch = (this.pendingRecoilPitch || 0) + kickPitch;
+    this.pendingRecoilYaw = (this.pendingRecoilYaw || 0) + kickYaw;
+    this.punchPitch = Math.min(0.018, (this.punchPitch || 0) + kickPitch * 0.42);
+    this.punchRoll = patDir * Math.min(0.008, Math.abs(kickYaw) * 0.65);
+
+    // 3D weapon viewmodel kickback & reciprocating bolt/pump animation
     this.recoilOffset = Math.min(0.16, this.recoilOffset + (cfg.visualKick || 0.055));
     this.boltKickOffset = 1.0;
     if (this.currentWeapon === 'shotgun' || this.currentWeapon === 'sniper') {
@@ -2546,7 +2913,12 @@ export class Game3D {
           y: firstHit.point.y,
           z: firstHit.point.z
         };
-        hitNormal = firstHit.face ? firstHit.face.normal : null;
+        if (firstHit.face) {
+          const wn = (this._tmpHitNormal || (this._tmpHitNormal = new THREE.Vector3()))
+            .copy(firstHit.face.normal)
+            .transformDirection(firstHit.object.matrixWorld);
+          hitNormal = { x: wn.x, y: wn.y, z: wn.z };
+        }
         isPlayerHit = Boolean(firstHit.object.userData?.playerId);
       }
 
@@ -3197,38 +3569,78 @@ export class Game3D {
       const bobRate = this.isSprinting ? 12.2 : this.prone ? 4.8 : this.crouching ? 6.4 : 9.2;
       this.weaponBobTime += dt * bobRate;
 
-      if (now >= this.nextFootstepAt && !this.crouching && !this.prone) {
-        this.nextFootstepAt = now + (this.isSprinting ? 335 : 460);
-        this.callbacks.onFootstep?.(this.isSprinting);
+      if (now >= this.nextFootstepAt && !this.prone) {
+        if (this.crouching) {
+          this.nextFootstepAt = now + 560;
+          this.callbacks.onFootstep?.(false, true);
+        } else {
+          this.nextFootstepAt = now + (this.isSprinting ? 335 : 460);
+          this.callbacks.onFootstep?.(this.isSprinting, false);
+        }
       }
     } else {
       this.weaponBobTime = 0;
     }
 
-    // Decay crosshair recoil kick & reset spray index smoothly without touching camera pitch/yaw!
+    // Apply pending weapon recoil impulse and auto-recover smoothly after firing stops
     const effectiveFireRateMs = getEffectiveFireRateMs(cfg, this.isAiming);
     const recDelay = cfg.recoilRecoveryDelayMs || (effectiveFireRateMs + 35);
-    this.crosshairRecoilKick = Math.max(0, this.crosshairRecoilKick - dt * (cfg.recoilRecovery || 14.0) * 0.018);
+    const stanceRecBoost = this.prone ? 1.35 : (this.crouching && !this.isSliding) ? 1.18 : 1.0;
+    this.crosshairRecoilKick = Math.max(0, this.crosshairRecoilKick - dt * (cfg.recoilRecovery || 14.0) * stanceRecBoost * 0.018);
+
+    if (this.pendingRecoilPitch || this.pendingRecoilYaw) {
+      const kickStep = Math.min(1, dt * 36);
+      const dp = this.pendingRecoilPitch * kickStep;
+      const dy = this.pendingRecoilYaw * kickStep;
+      this.pendingRecoilPitch -= dp;
+      this.pendingRecoilYaw -= dy;
+      if (Math.abs(this.pendingRecoilPitch) < 1e-5) this.pendingRecoilPitch = 0;
+      if (Math.abs(this.pendingRecoilYaw) < 1e-5) this.pendingRecoilYaw = 0;
+      const prevPitch = this.pitch;
+      this.pitch = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, this.pitch + dp));
+      this.accumulatedRecoilPitch += (this.pitch - prevPitch);
+      this.yaw += dy;
+      this.accumulatedRecoilYaw += dy;
+    }
+
     if (now - this.lastShotAt > recDelay) {
-      this.recoilShotIndex = Math.max(0, this.recoilShotIndex - dt * 28);
+      this.recoilShotIndex = Math.max(0, this.recoilShotIndex - dt * 28 * stanceRecBoost);
       if (this.recoilShotIndex < 0.2) this.recoilShotIndex = 0;
+
+      const recFactor = Math.min(1, dt * (cfg.recoilRecovery || 14.0) * stanceRecBoost);
+      if (this.accumulatedRecoilPitch > 0) {
+        const recoverP = this.accumulatedRecoilPitch * recFactor;
+        this.pitch = Math.max(-Math.PI / 2 + 0.05, this.pitch - recoverP);
+        this.accumulatedRecoilPitch = Math.max(0, this.accumulatedRecoilPitch - recoverP);
+        if (this.accumulatedRecoilPitch < 1e-4) this.accumulatedRecoilPitch = 0;
+      }
+      if (Math.abs(this.accumulatedRecoilYaw) > 0) {
+        const recoverY = this.accumulatedRecoilYaw * recFactor;
+        this.yaw -= recoverY;
+        this.accumulatedRecoilYaw -= recoverY;
+        if (Math.abs(this.accumulatedRecoilYaw) < 1e-4) this.accumulatedRecoilYaw = 0;
+      }
     }
 
     this.currentBloom = Math.max(0, this.currentBloom - (cfg.bloomDecay || 0.14) * dt);
     this.effectiveSpread = this.computeEffectiveSpread(cfg);
     const isMoving = horizSpeed > 0.65 || !this.onGround;
+    const isStanceSteady = Boolean(this.onGround && (this.prone || (this.crouching && !this.isSliding)));
     this.callbacks.onSpreadUpdate?.(
       this.effectiveSpread,
       this.isAiming,
       isMoving,
-      this.crosshairRecoilKick
+      this.crosshairRecoilKick,
+      isStanceSteady
     );
 
-    // Decay damage flinch springs (punchPitch and punchRoll remain 0 when shooting)
-    this.punchPitch = 0;
-    this.punchRoll = 0;
-    this.flinchPitch *= Math.max(0, 1 - dt * 14);
-    this.flinchRoll *= Math.max(0, 1 - dt * 14);
+    // Decay subtle shooting view punch (damage flinch stays 0)
+    this.punchPitch *= Math.max(0, 1 - dt * 18);
+    this.punchRoll *= Math.max(0, 1 - dt * 18);
+    if (Math.abs(this.punchPitch) < 1e-4) this.punchPitch = 0;
+    if (Math.abs(this.punchRoll) < 1e-4) this.punchRoll = 0;
+    this.flinchPitch = 0;
+    this.flinchRoll = 0;
 
     // Camera Strafe Roll, Slide Tilt & Tactical Q/E Lean Roll
     const leanRoll = -this.currentLean * (MATCH_CONFIG.LEAN_ROLL_ANGLE || 0.145);
@@ -3240,7 +3652,7 @@ export class Game3D {
     const leanOffset = this.currentLean * (MATCH_CONFIG.LEAN_OFFSET || 0.42);
     const leanDropY = Math.abs(this.currentLean) * -0.055;
 
-    // Update camera transform (no shooting recoil shake!)
+    // Update camera transform
     const physA = this.physAlpha;
     const physPrev = this.physPrev;
     const renderX = physPrev.x + (this.position.x - physPrev.x) * physA;
@@ -3256,12 +3668,13 @@ export class Game3D {
     );
     this.prediction.decayOffset(dt);
     this.tmpEuler.set(
-      Math.max(-Math.PI / 2 + 0.04, Math.min(Math.PI / 2 - 0.04, this.pitch + this.flinchPitch)),
+      Math.max(-Math.PI / 2 + 0.04, Math.min(Math.PI / 2 - 0.04, this.pitch + this.punchPitch)),
       this.yaw,
-      this.cameraRoll + this.flinchRoll,
+      this.cameraRoll + this.punchRoll,
       'YXZ'
     );
     this.camera.quaternion.setFromEuler(this.tmpEuler);
+    this.updateGrenadePreview(now);
 
     // Smooth Dynamic FOV (+0.25x / 1.25x zoomFov 54.4 for Holo & Red-Dot optics, 26 for Sniper)
     const targetFov = this.isAiming
@@ -3420,7 +3833,11 @@ export class Game3D {
       this.viewmodelRig.position.z -= slashArc * 0.16;
     }
 
-    if (this.grenadeThrowUntil > now) {
+    if (this.isCookingGrenade) {
+      targetRotX += 0.22;
+      targetRotZ -= 0.18;
+      this.viewmodelRig.position.y -= 0.035;
+    } else if (this.grenadeThrowUntil > now) {
       const tossPct = 1 - (this.grenadeThrowUntil - now) / 260;
       const tossArc = Math.sin(tossPct * Math.PI);
       targetRotX += tossArc * 0.42;
@@ -3506,6 +3923,7 @@ export class Game3D {
         rp.crouching = s.crouching;
         rp.crouch = s.crouching;
         rp.prone = s.prone;
+        rp.sliding = Boolean(s.sliding);
         rp.velocity.set(s.vx, s.vy, s.vz);
         rawSpeed = Math.hypot(s.vx, s.vz);
         rp.extrapolated = Boolean(s.extrapolated);
@@ -3522,19 +3940,20 @@ export class Game3D {
       this.animateHumanoidRig(rp, dt, now, isMoving, rigMoveSpeed);
 
       const isGrounded = rp.onGround !== false && Math.abs(rp.velocity.y) < 0.85;
-      if (this.inMatch && isMoving && rp.smoothedSpeed > 0.65 && isGrounded && !rp.crouch && !rp.crouching && !rp.prone) {
-        const isRemoteSprinting = Boolean(
+      const isRemoteCrouching = Boolean(rp.crouch || rp.crouching);
+      if (this.inMatch && isMoving && rp.smoothedSpeed > 0.55 && isGrounded && !rp.prone && !rp.sliding) {
+        const isRemoteSprinting = !isRemoteCrouching && Boolean(
           rp.sprinting ||
           rp.isSprinting ||
-          rp.smoothedSpeed > (MATCH_CONFIG.WALK_SPEED || 6.2) * 1.1
+          rp.smoothedSpeed > (MATCH_CONFIG.WALK_SPEED || 5.0) * 1.1
         );
-        const stepCadenceMs = isRemoteSprinting ? 320 : 430;
+        const stepCadenceMs = isRemoteCrouching ? 560 : isRemoteSprinting ? 310 : 430;
         if (rp.nextFootstepAt && rp.nextFootstepAt - now > stepCadenceMs) {
           rp.nextFootstepAt = now + stepCadenceMs;
         }
         if (!rp.nextFootstepAt || now >= rp.nextFootstepAt) {
           rp.nextFootstepAt = now + stepCadenceMs;
-          sfx.playSpatialFootstep(this.getAudioListenerState(), rp.group.position, isRemoteSprinting);
+          sfx.playSpatialFootstep(this.getAudioListenerState(), rp.group.position, isRemoteSprinting, isRemoteCrouching);
         }
       }
     }
@@ -3633,15 +4052,34 @@ export class Game3D {
       });
       if (this.minimap.ctx && this.minimap.lastRenderAt !== prevRenderAt) {
         const mCtx = this.minimap.ctx;
-        for (const rp of this.remotePlayers.values()) {
+        for (const [rpId, rp] of this.remotePlayers.entries()) {
           if (!rp || !rp.alive || !rp.group) continue;
           const rx = this.minimap.clampBlipCoord(this.minimap.worldToCanvasX(rp.group.position.x), 4);
           const ry = this.minimap.clampBlipCoord(this.minimap.worldToCanvasY(rp.group.position.z), 4);
-          mCtx.fillStyle = '#ef4444';
+          const isTeammate = Boolean(this.gameMode === 'tdm' && this.localTeam && rp.team && rp.team === this.localTeam);
+          if (isTeammate) {
+            mCtx.fillStyle = '#38bdf8';
+            mCtx.strokeStyle = '#090d16';
+            mCtx.lineWidth = 1.1;
+            mCtx.beginPath();
+            mCtx.arc(rx, ry, 3.4, 0, Math.PI * 2);
+            mCtx.fill();
+            mCtx.stroke();
+            continue;
+          }
+          const distToMe = Math.hypot(rp.group.position.x - this.position.x, rp.group.position.z - this.position.z);
+          const isStealthStance = Boolean(rp.prone || rp.crouching || rp.crouch);
+          const hasGunfireBlip = Boolean(this.minimap.gunfireBlips?.has(rpId));
+          const blipAlpha = hasGunfireBlip
+            ? 1.0
+            : (isStealthStance && distToMe > 24)
+              ? 0.28
+              : 0.92;
+          mCtx.fillStyle = blipAlpha >= 0.9 ? '#ef4444' : `rgba(239, 68, 68, ${blipAlpha})`;
           mCtx.strokeStyle = '#090d16';
           mCtx.lineWidth = 1.1;
           mCtx.beginPath();
-          mCtx.arc(rx, ry, 3.2, 0, Math.PI * 2);
+          mCtx.arc(rx, ry, hasGunfireBlip ? 3.6 : 3.1, 0, Math.PI * 2);
           mCtx.fill();
           mCtx.stroke();
         }
@@ -3820,7 +4258,24 @@ export class Game3D {
             }
           }
         } else {
-          fx.mat.opacity = alpha;
+          if (fx.geo && fx.totalDist > 0) {
+            const travelProg = fx.travelMs > 0 ? Math.min(1, elapsed / fx.travelMs) : 1;
+            const headDist = Math.min(fx.totalDist, fx.boltLen + travelProg * fx.totalDist);
+            const tailDist = Math.min(fx.totalDist, Math.max(0, headDist - fx.boltLen));
+            const posAttr = fx.geo.attributes.position;
+            const arr = posAttr.array;
+            arr[0] = fx.ox + fx.ux * tailDist;
+            arr[1] = fx.oy + fx.uy * tailDist;
+            arr[2] = fx.oz + fx.uz * tailDist;
+            arr[3] = fx.ox + fx.ux * headDist;
+            arr[4] = fx.oy + fx.uy * headDist;
+            arr[5] = fx.oz + fx.uz * headDist;
+            posAttr.needsUpdate = true;
+            if (fx.line) {
+              fx.line.visible = (headDist - tailDist) > 0.015;
+            }
+          }
+          fx.mat.opacity = Math.min(1, alpha * 1.25);
           fx.sparkMat.opacity = alpha;
           if (fx.particles) {
             for (let p = 0; p < fx.particles.length; p++) {
@@ -3922,6 +4377,7 @@ export class Game3D {
         this.adsToggleActive = false;
         this.isAiming = false;
         this.isSprinting = false;
+        this.cancelGrenadeCooking();
         setWeaponAdsCulling(this.viewmodelMeshes[this.currentWeapon], false);
         this.callbacks.onAimChange?.(false, this.currentWeapon);
       }
@@ -3936,6 +4392,9 @@ export class Game3D {
       const dy = -e.movementY * sens;
       this.yaw += dx;
       this.pitch = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, this.pitch + dy));
+      if (dy < 0 && this.accumulatedRecoilPitch > 0) {
+        this.accumulatedRecoilPitch = Math.max(0, this.accumulatedRecoilPitch + dy);
+      }
 
       this.swayX = Math.max(-0.045, Math.min(0.045, -e.movementX * 0.00055));
       this.swayY = Math.max(-0.045, Math.min(0.045, e.movementY * 0.00055));
@@ -4069,7 +4528,7 @@ export class Game3D {
         this.callbacks.onLoadoutToggle?.();
       }
       else if (e.code === 'KeyG' && this.alive) {
-        this.attemptThrowGrenade();
+        this.startGrenadeCooking();
       }
       else if (e.code === 'KeyZ' && this.alive && this.onGround) {
         this.prone = !this.prone;
@@ -4094,6 +4553,10 @@ export class Game3D {
         this.keys[e.code] = false;
       } else if (e.code === 'ControlRight') {
         this.keys.ControlLeft = false;
+      }
+      if (e.code === 'KeyG' && this.isCookingGrenade) {
+        e.preventDefault();
+        this.releaseGrenadeCooking();
       }
       if (e.code === 'Tab') {
         e.preventDefault();

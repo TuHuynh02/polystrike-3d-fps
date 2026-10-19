@@ -133,6 +133,10 @@ describe('socketGuard: rate limiter', () => {
     assert.equal(RATE_LIMITS.setBots, undefined, 'the bot-count event was removed together with the bots');
     assert.equal(RATE_LIMITS.changeMap.rate, 1);
     assert.equal(RATE_LIMITS.joinRoom.rate, 2);
+    assert.equal(RATE_LIMITS.switchTeam.rate, 2);
+    assert.equal(RATE_LIMITS.setTeamReady.rate, 2);
+    assert.equal(RATE_LIMITS.startTeamMatch.rate, 1);
+    assert.equal(RATE_LIMITS.leaveRoom.rate, 2);
     assert.equal(RATE_LIMITS.pingCheck.rate, 5);
     assert.equal(RATE_LIMITS.default.rate, 20);
   });
@@ -190,6 +194,23 @@ describe('socketGuard: rate limiter', () => {
     const before = handled;
     socket.fire('inputBatch', {});
     assert.equal(handled, before, 'flagged sockets are ignored');
+  });
+
+  it('disconnects a socket that floods malformed non-object payloads within the abuse window', () => {
+    const now = fakeClock();
+    const socket = fakeSocket();
+    const limiter = createRateLimiter({ now, abuseDropLimit: 10 });
+    let handled = 0;
+    guardedOn(socket, limiter, 'inputBatch', () => {
+      handled += 1;
+    }, { logger: silent });
+    for (let i = 0; i < 15; i += 1) {
+      socket.fire('inputBatch', 'not-an-object');
+      now.advance(50); // slow enough that token bucket stays full; only recordInvalid increments drops
+    }
+    assert.equal(handled, 0);
+    assert.equal(limiter.shouldDisconnect(), true);
+    assert.equal(socket.disconnected, true, 'abusive socket via malformed payloads must be disconnected');
   });
 
   it('does not disconnect when drops are spread across windows', () => {

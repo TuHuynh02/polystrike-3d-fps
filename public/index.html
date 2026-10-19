@@ -243,6 +243,24 @@
 
           <div id="lobby-error" class="error-box hidden"></div>
 
+          <label class="field-label">Chế độ chơi</label>
+          <div class="game-mode-select-grid" id="lobby-game-mode-grid">
+            <button type="button" class="game-mode-option active" data-mode="ffa">
+              <span class="mode-badge">FFA</span>
+              <span class="mode-info">
+                <strong>ĐẤU ĐƠN TỰ DO</strong>
+                <small>Mọi người là kẻ địch • 20 mạng</small>
+              </span>
+            </button>
+            <button type="button" class="game-mode-option" data-mode="tdm">
+              <span class="mode-badge mode-badge-tdm">2 PHE</span>
+              <span class="mode-info">
+                <strong>ĐẤU ĐỘI 2 PHE</strong>
+                <small>Chia Xanh vs Đỏ • Chọn phe &amp; Sẵn sàng</small>
+              </span>
+            </button>
+          </div>
+
           <button id="btn-quick-play" class="btn btn-primary btn-large">
             <span>▶ VÀO TRẬN NHANH</span>
           </button>
@@ -343,6 +361,11 @@
       <div class="hud-match-center">
         <div class="hud-timer" id="hud-timer">05:00</div>
         <div class="hud-goal hidden"><span id="hud-kill-limit">20</span></div>
+        <div id="hud-team-score" class="hud-team-score hidden">
+          <span class="team-score-pill team-alpha-pill">ALPHA <strong id="hud-score-alpha">0</strong></span>
+          <span class="team-score-vs">VS</span>
+          <span class="team-score-pill team-bravo-pill"><strong id="hud-score-bravo">0</strong> BRAVO</span>
+        </div>
         <div class="hud-leader" id="hud-leader">Dẫn đầu: ---</div>
       </div>
 
@@ -414,6 +437,17 @@
       <kbd>F</kbd>
       <span id="weapon-pickup-text">Nhặt <strong>VANDAL-AK</strong></span>
       <span id="weapon-pickup-timer" class="pickup-timer-pill">4.8s</span>
+    </div>
+
+    <!-- PUBG-Style Grenade Cooking Countdown & Trajectory HUD -->
+    <div id="grenade-cook-hud" class="grenade-cook-hud hidden">
+      <div class="grenade-cook-header">
+        <span class="grenade-cook-icon">💣 NẤU LỰU ĐẠN [THẢ G ĐỂ NÉM]</span>
+        <strong id="grenade-cook-timer" class="grenade-cook-timer">3.0s</strong>
+      </div>
+      <div class="grenade-cook-bar-track">
+        <div id="grenade-cook-bar" class="grenade-cook-bar-fill" style="width: 100%;"></div>
+      </div>
     </div>
 
     <!-- Bottom Left: Health, Movement Stance & K/D Status -->
@@ -597,6 +631,61 @@
         </thead>
         <tbody id="scoreboard-body"></tbody>
       </table>
+    </div>
+  </div>
+
+  <!-- ======================== TEAM WAITING LOBBY (TDM PRE-MATCH) ======================== -->
+  <div id="team-lobby-modal" class="modal-backdrop hidden">
+    <div class="team-lobby-card">
+      <div class="team-lobby-header">
+        <div>
+          <span class="team-lobby-mode-pill">CHẾ ĐỘ ĐẤU ĐỘI 2 PHE (TDM)</span>
+          <h2 class="team-lobby-title">PHÒNG CHỜ PHÂN ĐỘI</h2>
+          <p class="team-lobby-meta">
+            Mã phòng: <strong id="team-lobby-room-code">#------</strong> • Bản đồ: <strong id="team-lobby-map-name">CYBER CITADEL</strong> • Mục tiêu: <strong id="team-lobby-kill-limit">30</strong> mạng / 05:00
+          </p>
+        </div>
+        <button type="button" id="btn-copy-team-lobby-link" class="btn btn-accent">COPY LINK MỜI</button>
+      </div>
+
+      <div class="team-columns-grid">
+        <!-- Alpha Team (Blue / North Base) -->
+        <div class="team-column team-column-alpha">
+          <div class="team-column-header">
+            <span class="team-badge-dot alpha"></span>
+            <div>
+              <h3>PHE XANH (ALPHA)</h3>
+              <small>Căn cứ Bắc (North Base)</small>
+            </div>
+            <span class="team-count-badge" id="team-alpha-count">0/6</span>
+          </div>
+          <div id="team-alpha-roster" class="team-roster-list"></div>
+        </div>
+
+        <!-- Bravo Team (Red / South Base) -->
+        <div class="team-column team-column-bravo">
+          <div class="team-column-header">
+            <span class="team-badge-dot bravo"></span>
+            <div>
+              <h3>PHE ĐỎ (BRAVO)</h3>
+              <small>Căn cứ Nam (South Base)</small>
+            </div>
+            <span class="team-count-badge" id="team-bravo-count">0/6</span>
+          </div>
+          <div id="team-bravo-roster" class="team-roster-list"></div>
+        </div>
+      </div>
+
+      <div class="team-lobby-status" id="team-lobby-status">
+        Chọn phe và bấm Sẵn Sàng. Khi tất cả sẵn sàng (mỗi phe có ít nhất 1 người), trận đấu sẽ tự động bắt đầu!
+      </div>
+
+      <div class="team-lobby-actions">
+        <button type="button" id="btn-switch-team" class="btn btn-secondary">⇄ ĐỔI PHE</button>
+        <button type="button" id="btn-team-ready" class="btn btn-primary btn-large">✓ SẴN SÀNG</button>
+        <button type="button" id="btn-start-team-match" class="btn btn-accent btn-large hidden">▶ BẮT ĐẦU TRẬN (CHỦ PHÒNG)</button>
+        <button type="button" id="btn-leave-team-lobby" class="btn btn-danger">RỜI PHÒNG</button>
+      </div>
     </div>
   </div>
 

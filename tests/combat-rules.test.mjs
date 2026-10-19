@@ -226,3 +226,36 @@ describe('Position history uses the server clock', () => {
     assert.ok(history.every((s) => s.timestamp >= before - 5000), 'no client-clock entries in the ring buffer');
   });
 });
+
+describe('Grenade cooking & custom fuseMs', () => {
+  it('honors clamped fuseMs for cooked throws and detonates immediately when overcooked', () => {
+    const { rm, emitted } = createHarness();
+    const { room, player } = join(rm, 'p1');
+    join(rm, 'p2');
+    player.grenades = 2;
+
+    // 1. Cooked throw with 950ms remaining fuse
+    rm.handleThrowGrenade(room, player, {
+      yaw: 0,
+      pitch: 0.1,
+      fuseMs: 950
+    });
+    assert.equal(player.grenades, 1);
+    assert.equal(room.grenades.length, 1);
+    const [cookedGrenade] = room.grenades;
+    assert.ok(Math.abs(cookedGrenade.fuseRemaining - 0.95) < 0.01, `expected ~0.95s fuse, got ${cookedGrenade.fuseRemaining}`);
+
+    // 2. Overcooked grenade explodes immediately at the player's position
+    player.lastGrenadeAt = 0;
+    const explodedBefore = emitted.filter((e) => e.event === 'grenadeExploded').length;
+    rm.handleThrowGrenade(room, player, {
+      yaw: 0,
+      pitch: 0,
+      fuseMs: 80,
+      overcooked: true
+    });
+    const explodedAfter = emitted.filter((e) => e.event === 'grenadeExploded').length;
+    assert.equal(explodedAfter, explodedBefore + 1, 'overcooked grenade should detonate immediately');
+  });
+});
+

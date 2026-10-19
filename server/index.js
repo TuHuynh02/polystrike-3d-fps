@@ -128,21 +128,29 @@ io.on('connection', (socket) => {
       socket.join(room.code);
       roomManager.startLatencyProbe(socket, player); // server-measured RTT for lag compensation (stopped in removePlayer)
 
-      const timeRemaining = Math.max(0, Math.ceil((room.matchEndsAt - Date.now()) / 1000));
+      const timeRemaining = room.state === 'WAITING'
+        ? MATCH_CONFIG.MATCH_DURATION_SEC
+        : Math.max(0, Math.ceil((room.matchEndsAt - Date.now()) / 1000));
       const mapCfg = getMapConfig(room.mapId);
 
       socket.emit('roomJoined', {
         playerId: player.id,
         roomCode: room.code,
         isPublic: room.isPublic,
+        gameMode: room.gameMode || 'ffa',
+        state: room.state,
+        hostId: room.hostId,
+        teamScores: room.teamScores || { alpha: 0, bravo: 0 },
         mapId: room.mapId,
         mapName: mapCfg.name,
-        killLimit: MATCH_CONFIG.KILL_LIMIT,
+        killLimit: room.killLimit || (room.gameMode === 'tdm' ? (MATCH_CONFIG.TDM_KILL_LIMIT || 30) : MATCH_CONFIG.KILL_LIMIT),
         timeRemaining,
         player: {
           id: player.id,
           name: player.name,
           color: player.color,
+          team: player.team || null,
+          ready: Boolean(player.ready),
           x: player.x,
           y: player.y,
           z: player.z,
@@ -172,9 +180,23 @@ io.on('connection', (socket) => {
       socket.to(room.code).emit('playerJoined', {
         id: player.id,
         name: player.name,
-        color: player.color
+        color: player.color,
+        team: player.team || null
       });
+
+      if (room.gameMode === 'tdm') {
+        roomManager.broadcastTeamLobby(room);
+      }
     } catch (err) {
+      if (currentRoomCode) {
+        try {
+          socket.leave(currentRoomCode);
+          roomManager.removePlayer(socket.id);
+        } catch {
+          // ignore rollback error
+        }
+        currentRoomCode = null;
+      }
       console.error('Error in joinRoom:', err);
       socket.emit('joinError', { message: 'Không thể tham gia phòng chơi. Vui lòng thử lại.' });
     }
@@ -253,6 +275,46 @@ io.on('connection', (socket) => {
       socket.emit('actionDenied', { action: 'changeMap', reason: result.error, message: HOST_ONLY_MESSAGE });
     }
   });
+
+  on('switchTeam', (payload) => {
+    if (!currentRoomCode) return;
+    const room = roomManager.rooms.get(currentRoomCode);
+    if (!room) return;
+    const player = room.players.get(socket.id);
+    if (!player) return;
+    const result = roomManager.handleSwitchTeam(room, player, payload || {});
+    if (!result.ok) {
+      socket.emit('actionDenied', { action: 'switchTeam', reason: result.error, message: result.message || result.error });
+    }
+  }, { expectObject: false });
+
+  on('setTeamReady', (payload) => {
+    if (!currentRoomCode) return;
+    const room = roomManager.rooms.get(currentRoomCode);
+    if (!room) return;
+    const player = room.players.get(socket.id);
+    if (!player) return;
+    const result = roomManager.handleSetTeamReady(room, player, payload || {});
+    if (!result.ok) {
+      socket.emit('actionDenied', { action: 'setTeamReady', reason: result.error, message: result.message || result.error });
+    }
+  }, { expectObject: false });
+
+  on('startTeamMatch', () => {
+    if (!currentRoomCode) return;
+    const room = roomManager.rooms.get(currentRoomCode);
+    if (!room) return;
+    const player = room.players.get(socket.id);
+    if (!player) return;
+    const result = roomManager.handleStartTeamMatch(room, player);
+    if (!result.ok) {
+      socket.emit('actionDenied', {
+        action: 'startTeamMatch',
+        reason: result.error,
+        message: result.message || (result.error === 'not_host' ? HOST_ONLY_MESSAGE : 'Cần ít nhất 1 người ở mỗi phe để bắt đầu trận đấu.')
+      });
+    }
+  }, { expectObject: false });
 
   on('pingCheck', (clientSentAt, ack) => {
     if (typeof ack === 'function') {

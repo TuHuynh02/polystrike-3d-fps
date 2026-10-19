@@ -152,7 +152,7 @@ describe('shared/movement.js - fixed timestep & determinism', () => {
       assert.ok(Math.abs(p.y - ref.y) < 0.05, `y differs: ${p.y} vs ${ref.y}`);
     }
     // The player must really have travelled, jumped and slid
-    assert.ok(ref.z < -15, `expected >15m of forward travel in 3s, got ${ref.z}`);
+    assert.ok(ref.z < -12, `expected >12m of forward travel in 3s, got ${ref.z}`);
     assert.ok(runs[1].traj.some((p) => p.y > 1.0), 'player should have jumped');
     // Frame times that are exact multiples of FIXED_DT (60 fps) vs half-rate (30 fps) land on identical step indices
     const a = runs[0].traj[idx];

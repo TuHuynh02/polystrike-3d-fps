@@ -518,6 +518,44 @@ describe('arena builds on every tier and map within budget', () => {
     assert.ok(low.currentPixelRatio >= low.quality.minPixelRatio - 1e-9);
     assert.ok(low.currentPixelRatio <= low.maxPixelRatio);
   });
+
+  it('spawns a short travelling bullet tracer bolt that advances from gun muzzle to impact endpoint without overshooting', async () => {
+    const game = await createTestGame3D({ qualityChoice: 'high' });
+    const origin = { x: 0, y: 1.5, z: 0 };
+    const hitPoint = { x: 0, y: 1.5, z: -20 };
+    game.spawnTracerEffect(origin, hitPoint, 0xffdd77, false, true);
+    assert.equal(game.activeEffects.length, 1);
+
+    const fx = game.activeEffects[0];
+    assert.equal(fx.type, 'tracer');
+    assert.ok(fx.boltLen > 0.25 && fx.boltLen < 2.0, `short bolt length=${fx.boltLen}`);
+    assert.ok(Math.abs(fx.totalDist - 20) < 1e-6);
+
+    const posAttr = fx.line.geometry.getAttribute('position');
+    const initialTailZ = posAttr.getZ(0);
+    const initialHeadZ = posAttr.getZ(1);
+    const initialSegLen = Math.hypot(
+      posAttr.getX(1) - posAttr.getX(0),
+      posAttr.getY(1) - posAttr.getY(0),
+      posAttr.getZ(1) - posAttr.getZ(0)
+    );
+    assert.ok(Math.abs(initialTailZ - 0) < 1e-5, 'starts at muzzle');
+    assert.ok(initialSegLen < 2.0, `initial bolt segment (${initialSegLen}) is much shorter than full 20m ray`);
+
+    // Advance mid-flight
+    game.animate(fx.createdAt + fx.travelMs * 0.5);
+    const midTailZ = posAttr.getZ(0);
+    const midHeadZ = posAttr.getZ(1);
+    assert.ok(midHeadZ < initialHeadZ && midTailZ < initialTailZ, 'bolt advances toward target');
+    assert.ok(midHeadZ >= -20 - 1e-5, 'bolt does not overshoot target mid-flight');
+
+    // Advance to arrival at impact point
+    game.animate(fx.createdAt + fx.travelMs + 5);
+    const endHeadZ = posAttr.getZ(1);
+    const endTailZ = posAttr.getZ(0);
+    assert.ok(Math.abs(endHeadZ - -20) < 1e-4, `clamps head at impact z=-20 (got ${endHeadZ})`);
+    assert.ok(endTailZ >= -20 - 1e-4, `clamps tail at or before impact z=-20 (got ${endTailZ})`);
+  });
 });
 
 // ---------------------------------------------------------------- real server static serving

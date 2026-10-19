@@ -452,6 +452,26 @@ export const MAPS = {
       { x: -50, y: 0.1, z: 26, yaw: -Math.PI * 0.5 },
       { x: 50, y: 0.1, z: 26, yaw: Math.PI * 0.5 }
     ],
+    teamSpawns: {
+      alpha: [
+        { x: 0, y: 0.1, z: -53, yaw: Math.PI },
+        { x: -7, y: 0.1, z: -53, yaw: Math.PI },
+        { x: 7, y: 0.1, z: -53, yaw: Math.PI },
+        { x: -14, y: 0.1, z: -53, yaw: Math.PI },
+        { x: 14, y: 0.1, z: -53, yaw: Math.PI },
+        { x: -26, y: 0.1, z: -50, yaw: Math.PI },
+        { x: 26, y: 0.1, z: -50, yaw: Math.PI }
+      ],
+      bravo: [
+        { x: 0, y: 0.1, z: 53, yaw: 0 },
+        { x: -7, y: 0.1, z: 53, yaw: 0 },
+        { x: 7, y: 0.1, z: 53, yaw: 0 },
+        { x: -14, y: 0.1, z: 53, yaw: 0 },
+        { x: 14, y: 0.1, z: 53, yaw: 0 },
+        { x: -26, y: 0.1, z: 50, yaw: 0 },
+        { x: 26, y: 0.1, z: 50, yaw: 0 }
+      ]
+    },
   },
 
   cargo_dock: {
@@ -503,6 +523,26 @@ export const MAPS = {
       { x: -54, y: 0.1, z: 30, yaw: -Math.PI * 0.5 },
       { x: 54, y: 0.1, z: 30, yaw: Math.PI * 0.5 }
     ],
+    teamSpawns: {
+      alpha: [
+        { x: 0, y: 0.1, z: -56, yaw: Math.PI },
+        { x: -7, y: 0.1, z: -56, yaw: Math.PI },
+        { x: 7, y: 0.1, z: -56, yaw: Math.PI },
+        { x: -14, y: 0.1, z: -56, yaw: Math.PI },
+        { x: 14, y: 0.1, z: -56, yaw: Math.PI },
+        { x: -20, y: 0.1, z: -54, yaw: Math.PI },
+        { x: 20, y: 0.1, z: -54, yaw: Math.PI }
+      ],
+      bravo: [
+        { x: 0, y: 0.1, z: 56, yaw: 0 },
+        { x: -7, y: 0.1, z: 56, yaw: 0 },
+        { x: 7, y: 0.1, z: 56, yaw: 0 },
+        { x: -14, y: 0.1, z: 56, yaw: 0 },
+        { x: 14, y: 0.1, z: 56, yaw: 0 },
+        { x: -20, y: 0.1, z: 54, yaw: 0 },
+        { x: 20, y: 0.1, z: 54, yaw: 0 }
+      ]
+    },
   },
 
   desert_outpost: {
@@ -554,6 +594,26 @@ export const MAPS = {
       { x: -52, y: 0.1, z: 24, yaw: -Math.PI * 0.5 },
       { x: 52, y: 0.1, z: 24, yaw: Math.PI * 0.5 }
     ],
+    teamSpawns: {
+      alpha: [
+        { x: 0, y: 0.1, z: -54, yaw: Math.PI },
+        { x: -7, y: 0.1, z: -54, yaw: Math.PI },
+        { x: 7, y: 0.1, z: -54, yaw: Math.PI },
+        { x: -14, y: 0.1, z: -54, yaw: Math.PI },
+        { x: 14, y: 0.1, z: -54, yaw: Math.PI },
+        { x: -24, y: 0.1, z: -52, yaw: Math.PI },
+        { x: 24, y: 0.1, z: -52, yaw: Math.PI }
+      ],
+      bravo: [
+        { x: 0, y: 0.1, z: 54, yaw: 0 },
+        { x: -7, y: 0.1, z: 54, yaw: 0 },
+        { x: 7, y: 0.1, z: 54, yaw: 0 },
+        { x: -14, y: 0.1, z: 54, yaw: 0 },
+        { x: 14, y: 0.1, z: 54, yaw: 0 },
+        { x: -24, y: 0.1, z: 52, yaw: 0 },
+        { x: 24, y: 0.1, z: 52, yaw: 0 }
+      ]
+    },
   },
 
   neon_lab: {
@@ -605,6 +665,26 @@ export const MAPS = {
       { x: -52, y: 0.1, z: 30, yaw: -Math.PI * 0.5 },
       { x: 52, y: 0.1, z: 30, yaw: Math.PI * 0.5 }
     ],
+    teamSpawns: {
+      alpha: [
+        { x: 0, y: 0.1, z: -52, yaw: Math.PI },
+        { x: -7, y: 0.1, z: -52, yaw: Math.PI },
+        { x: 7, y: 0.1, z: -52, yaw: Math.PI },
+        { x: -14, y: 0.1, z: -52, yaw: Math.PI },
+        { x: 14, y: 0.1, z: -52, yaw: Math.PI },
+        { x: -26, y: 0.1, z: -48, yaw: Math.PI },
+        { x: 26, y: 0.1, z: -48, yaw: Math.PI }
+      ],
+      bravo: [
+        { x: 0, y: 0.1, z: 52, yaw: 0 },
+        { x: -7, y: 0.1, z: 52, yaw: 0 },
+        { x: 7, y: 0.1, z: 52, yaw: 0 },
+        { x: -14, y: 0.1, z: 52, yaw: 0 },
+        { x: 14, y: 0.1, z: 52, yaw: 0 },
+        { x: -26, y: 0.1, z: 48, yaw: 0 },
+        { x: 26, y: 0.1, z: 48, yaw: 0 }
+      ]
+    }
   }
 };
 
@@ -633,7 +713,7 @@ for (const mapId of MAP_ORDER) {
 }
 
 export function getMapConfig(mapId) {
-  return MAPS[mapId] || MAPS[DEFAULT_MAP_ID];
+  return (typeof mapId === 'string' && Object.hasOwn(MAPS, mapId)) ? MAPS[mapId] : MAPS[DEFAULT_MAP_ID];
 }
 
 // Default exports for backward compatibility

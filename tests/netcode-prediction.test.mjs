@@ -722,7 +722,7 @@ describe('client prediction + reconciliation (headless Game3D <-> RoomManager, 5
       game.keys.KeyW = true;
       sim.run(120);
       assert.equal(game.prediction.stats.replays, 0);
-      assert.ok(game.position.z < 40 - 10, 'walked -Z along open ground');
+      assert.ok(game.position.z < 40 - 8, 'walked -Z along open ground');
 
       // The server pushes the player 1 m sideways (no epoch change: a plain authoritative correction)
       player.moveState.x += 1;

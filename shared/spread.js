@@ -120,6 +120,8 @@ export function computeSpreadAmount(cfg, ctx) {
   const onGround = Boolean(ctx.onGround);
   const aiming = Boolean(ctx.aiming);
   const bloom = Math.max(0, finiteOr(ctx.bloom));
+  const isCrouchSteady = Boolean(ctx.crouching && !ctx.sliding && onGround);
+  const isProneSteady = Boolean(ctx.prone && onGround);
   const isStationary = horizSpeed < STATIONARY_SPEED && onGround;
 
   // Laser-tight accuracy when stationary / crouched / prone on the first shot of a burst
@@ -133,10 +135,20 @@ export function computeSpreadAmount(cfg, ctx) {
       ? (cfg.crouchSpreadMult || 0.55)
       : 1.0;
 
-  // Run-and-gun penalty: moving or jumping widens the cone
+  // Tactical FPS movement penalty:
+  // - Prone crawl / Crouch-peek stay controlled and accurate
+  // - ADS walking tightens spread by ~32% compared to hipfire
+  // - Standing / Sprinting / Sliding hipfire run-and-gun incurs a heavy spread penalty
   const speedRatio = Math.min(1.65, horizSpeed / MATCH_CONFIG.WALK_SPEED);
+  const moveStanceMult = isProneSteady
+    ? 0.22
+    : isCrouchSteady
+      ? 0.38
+      : ctx.sliding
+        ? (aiming ? 0.88 : 1.25)
+        : (aiming ? 0.68 : 1.15);
   const movePenalty = speedRatio > 0.12
-    ? Math.pow(speedRatio, 1.12) * (cfg.moveSpread || 0.095) * (aiming ? 0.85 : 1.0)
+    ? Math.pow(speedRatio, 1.15) * (cfg.moveSpread || 0.095) * moveStanceMult
     : 0;
   const airPenalty = !onGround ? (cfg.airSpread || 0.135) : 0;
 
@@ -207,11 +219,13 @@ export function consumeShot(state, weaponId, cfg, timeMs, pose, scratch = { bloo
     shotIndex: pre.shotIndex
   });
 
-  const moveBloomMult = moving ? MOVE_BLOOM_MULT : 1.0;
+  const isLowPosture = Boolean(onGround && (pose.prone || (pose.crouching && !pose.sliding)));
+  const moveBloomMult = moving ? (isLowPosture ? 1.15 : MOVE_BLOOM_MULT) : 1.0;
+  const stanceBloomMult = pose.prone ? 0.55 : (pose.crouching && !pose.sliding) ? 0.75 : 1.0;
   state.weapon = weaponId;
   state.bloom = Math.min(
     (cfg.bloomMax || 0.018) * moveBloomMult,
-    pre.bloom + (cfg.bloomPerShot || 0.002) * (aiming ? 0.5 : 1.0) * moveBloomMult
+    pre.bloom + (cfg.bloomPerShot || 0.002) * (aiming ? 0.5 : 1.0) * stanceBloomMult * moveBloomMult
   );
   state.shotIndex = Math.min(SHOT_INDEX_MAX, pre.shotIndex + 1);
   state.atMs = timeMs;

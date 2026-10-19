@@ -49,6 +49,7 @@ const btnJoinInvited = document.getElementById('btn-join-invited');
 const playerNameInput = document.getElementById('player-name');
 const weaponGrid = document.getElementById('lobby-weapon-grid');
 const mapGrid = document.getElementById('lobby-map-grid');
+const lobbyGameModeGrid = document.getElementById('lobby-game-mode-grid');
 const lobbyError = document.getElementById('lobby-error');
 const btnQuickPlay = document.getElementById('btn-quick-play');
 const btnCreatePrivate = document.getElementById('btn-create-private');
@@ -83,6 +84,9 @@ const hudMapName = document.getElementById('hud-map-name');
 const btnCopyLinkHud = document.getElementById('btn-copy-link-hud');
 const hudTimer = document.getElementById('hud-timer');
 const hudKillLimit = document.getElementById('hud-kill-limit');
+const hudTeamScore = document.getElementById('hud-team-score');
+const hudScoreAlpha = document.getElementById('hud-score-alpha');
+const hudScoreBravo = document.getElementById('hud-score-bravo');
 const hudLeader = document.getElementById('hud-leader');
 const hudFps = document.getElementById('hud-fps');
 const hudPing = document.getElementById('hud-ping');
@@ -100,6 +104,9 @@ const reloadBarFill = document.getElementById('reload-bar-fill');
 const weaponPickupPrompt = document.getElementById('weapon-pickup-prompt');
 const weaponPickupText = document.getElementById('weapon-pickup-text');
 const weaponPickupTimer = document.getElementById('weapon-pickup-timer');
+const grenadeCookHud = document.getElementById('grenade-cook-hud');
+const grenadeCookTimer = document.getElementById('grenade-cook-timer');
+const grenadeCookBar = document.getElementById('grenade-cook-bar');
 const hudWeaponName = document.getElementById('hud-weapon-name');
 const hudWeaponRole = document.getElementById('hud-weapon-role');
 const hudAmmoCurrent = document.getElementById('hud-ammo-current');
@@ -153,6 +160,21 @@ const scoreboardModal = document.getElementById('scoreboard-modal');
 const sbRoomCode = document.getElementById('sb-room-code');
 const sbMapName = document.getElementById('sb-map-name');
 const scoreboardBody = document.getElementById('scoreboard-body');
+
+const teamLobbyModal = document.getElementById('team-lobby-modal');
+const teamLobbyRoomCode = document.getElementById('team-lobby-room-code');
+const teamLobbyMapName = document.getElementById('team-lobby-map-name');
+const teamLobbyKillLimit = document.getElementById('team-lobby-kill-limit');
+const btnCopyTeamLobbyLink = document.getElementById('btn-copy-team-lobby-link');
+const teamAlphaCount = document.getElementById('team-alpha-count');
+const teamBravoCount = document.getElementById('team-bravo-count');
+const teamAlphaRoster = document.getElementById('team-alpha-roster');
+const teamBravoRoster = document.getElementById('team-bravo-roster');
+const teamLobbyStatus = document.getElementById('team-lobby-status');
+const btnSwitchTeam = document.getElementById('btn-switch-team');
+const btnTeamReady = document.getElementById('btn-team-ready');
+const btnStartTeamMatch = document.getElementById('btn-start-team-match');
+const btnLeaveTeamLobby = document.getElementById('btn-leave-team-lobby');
 
 const matchEndModal = document.getElementById('match-end-modal');
 const victoryWinnerName = document.getElementById('victory-winner-name');
@@ -326,6 +348,13 @@ let selectedLoadout = {
 };
 let selectedMapId = userPrefs.selectedMap;
 let selectedOperatorColor = userPrefs.operatorColor;
+let selectedGameMode = 'ffa';
+let currentRoomGameMode = 'ffa';
+let currentRoomState = 'PLAYING';
+let currentRoomHostId = null;
+let currentLocalTeam = null;
+let currentLocalReady = false;
+let currentTeamScores = { alpha: 0, bravo: 0 };
 let activeRoomCode = '';
 let latestPlayers = [];
 let hitmarkerTimer = null;
@@ -492,13 +521,19 @@ const game = new Game3D(canvasContainer, {
       hudCache.chAiming = false;
     }
   },
-  onSpreadUpdate: (effectiveSpread, isAiming, isMoving = false, crosshairKick = 0) => {
-    // Convert angular spread + crosshair recoil kick into pixel gap (2px stationary up to 44px when running/firing)
-    const moveBonusPx = isMoving ? 10 : 0;
+  onSpreadUpdate: (effectiveSpread, isAiming, isMoving = false, crosshairKick = 0, isStanceSteady = false) => {
+    // Convert angular spread + crosshair recoil kick into pixel gap:
+    // - Stationary crouch/prone tightens to 2px (tactical precision)
+    // - Standing run-and-gun expands clearly (+12px) to discourage running fire
+    const moveBonusPx = isMoving ? (isStanceSteady ? 3 : 12) : 0;
     const kickPx = Math.round((crosshairKick || 0) * 280);
-    const gapPx = Math.max(2, Math.min(44, Math.round(effectiveSpread * 340) + moveBonusPx + kickPx));
+    const baseGap = isStanceSteady && !isMoving
+      ? Math.max(2, Math.round(effectiveSpread * 260))
+      : Math.max(3, Math.round(effectiveSpread * 350));
+    const gapPx = Math.max(2, Math.min(46, baseGap + moveBonusPx + kickPx));
     const aimingBool = Boolean(isAiming);
-    const movingBool = Boolean(isMoving);
+    const movingBool = Boolean(isMoving && !isStanceSteady);
+    const steadyBool = Boolean(isStanceSteady && !isMoving);
     const recoilingBool = kickPx >= 3;
 
     if (hudCache.chGap !== gapPx) {
@@ -512,6 +547,10 @@ const game = new Game3D(canvasContainer, {
     if (hudCache.chMoving !== movingBool) {
       hudCache.chMoving = movingBool;
       crosshair.classList.toggle('moving', movingBool);
+    }
+    if (hudCache.chSteady !== steadyBool) {
+      hudCache.chSteady = steadyBool;
+      crosshair.classList.toggle('steady', steadyBool);
     }
     if (hudCache.chRecoiling !== recoilingBool) {
       hudCache.chRecoiling = recoilingBool;
@@ -543,8 +582,8 @@ const game = new Game3D(canvasContainer, {
   onJump: () => {
     sfx.playJump();
   },
-  onFootstep: (isSprint) => {
-    sfx.playFootstep(isSprint);
+  onFootstep: (isSprint, isCrouch = false) => {
+    sfx.playFootstep(isSprint, isCrouch);
   },
   onSlide: () => {
     sfx.playSlide();
@@ -570,6 +609,25 @@ const game = new Game3D(canvasContainer, {
   },
   onThrowGrenade: (payload) => {
     handleThrowGrenadeRequest(payload);
+  },
+  onGrenadeCookUpdate: (active, remSec = 0, maxSec = 3) => {
+    if (!grenadeCookHud) return;
+    if (!active) {
+      grenadeCookHud.classList.add('hidden');
+      grenadeCookHud.classList.remove('danger');
+      return;
+    }
+    grenadeCookHud.classList.remove('hidden');
+    const cleanRem = Math.max(0, Number(remSec) || 0);
+    const cleanMax = Math.max(0.1, Number(maxSec) || 3);
+    const pct = Math.max(0, Math.min(100, (cleanRem / cleanMax) * 100));
+    if (grenadeCookTimer) {
+      grenadeCookTimer.textContent = `${cleanRem.toFixed(1)}s`;
+    }
+    if (grenadeCookBar) {
+      grenadeCookBar.style.width = `${pct.toFixed(1)}%`;
+    }
+    grenadeCookHud.classList.toggle('danger', cleanRem <= 1.0);
   },
   onGrenadeChanged: (count) => {
     updateGrenadeHud(count);
@@ -857,14 +915,15 @@ function handleThrowGrenadeRequest(customPayload = null) {
   if (isModalOpen) return;
 
   const now = performance.now();
-  if (now - lastGrenadeThrowAt < 250) return;
-
-  if (localGrenades <= 0) {
+  if (customPayload?.empty || localGrenades <= 0) {
+    if (now - lastGrenadeThrowAt < 250) return;
     lastGrenadeThrowAt = now;
     sfx.playDryFire?.();
     showCenterBanner('💣 HẾT LỰU ĐẠN');
     return;
   }
+
+  if (now - lastGrenadeThrowAt < 250) return;
 
   lastGrenadeThrowAt = now;
   updateGrenadeHud(localGrenades - 1);
@@ -881,6 +940,10 @@ function handleThrowGrenadeRequest(customPayload = null) {
     y: game.camera?.position?.y ?? (game.position.y + 1.5),
     z: game.camera?.position?.z ?? game.position.z
   };
+  const fuseMs = typeof customPayload?.fuseMs === 'number'
+    ? Math.max(80, Math.min(MATCH_CONFIG.GRENADE_FUSE_MS || 3000, Math.round(customPayload.fuseMs)))
+    : (MATCH_CONFIG.GRENADE_DEFAULT_THROW_FUSE_MS || 2200);
+  const overcooked = Boolean(customPayload?.overcooked);
 
   sfx.playGrenadeThrow?.();
   if (!game.grenadeThrowUntil || game.grenadeThrowUntil <= now) {
@@ -890,7 +953,9 @@ function handleThrowGrenadeRequest(customPayload = null) {
     yaw,
     pitch,
     origin,
-    dir
+    dir,
+    fuseMs,
+    overcooked
   });
 }
 
@@ -1260,6 +1325,7 @@ function requestJoinRoom({ mode = 'public', roomCode = '' }) {
     name,
     roomCode,
     mode,
+    gameMode: selectedGameMode,
     color: selectedOperatorColor,
     weapon: selectedStartingWeapon,
     loadout: selectedLoadout,
@@ -1280,6 +1346,17 @@ const handlePlayerNamePersist = () => {
 };
 playerNameInput.addEventListener('input', handlePlayerNamePersist);
 playerNameInput.addEventListener('change', handlePlayerNamePersist);
+
+if (lobbyGameModeGrid) {
+  lobbyGameModeGrid.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-mode]');
+    if (!btn) return;
+    selectedGameMode = btn.dataset.mode === 'tdm' ? 'tdm' : 'ffa';
+    lobbyGameModeGrid.querySelectorAll('.game-mode-option').forEach((el) => {
+      el.classList.toggle('active', el.dataset.mode === selectedGameMode);
+    });
+  });
+}
 
 weaponGrid.addEventListener('click', (e) => {
   const btn = e.target.closest('.weapon-option');
@@ -1408,6 +1485,7 @@ roomCodeInput.addEventListener('keydown', (e) => {
 
 btnCopyLinkHud.addEventListener('click', () => copyInviteLinkToClipboard());
 btnCopyLinkPause.addEventListener('click', () => copyInviteLinkToClipboard());
+btnCopyTeamLobbyLink?.addEventListener('click', () => copyInviteLinkToClipboard());
 
 btnResume.addEventListener('click', () => {
   pauseModal.classList.add('hidden');
@@ -1415,9 +1493,32 @@ btnResume.addEventListener('click', () => {
   game.requestPointerLock();
 });
 
-btnLeaveRoom.addEventListener('click', () => {
-  socket.emit('leaveRoom');
+function leaveActiveRoom(opts = {}) {
+  const shouldEmit = opts?.emitLeave !== false;
+  if (shouldEmit && activeRoomCode) {
+    socket.emit('leaveRoom');
+  }
   activeRoomCode = '';
+  currentRoomGameMode = 'ffa';
+  currentRoomState = 'PLAYING';
+  currentRoomHostId = null;
+  currentLocalTeam = null;
+  currentLocalReady = false;
+  currentTeamScores = { alpha: 0, bravo: 0 };
+  latestPlayers = [];
+  lastScoreboardSig = '';
+  hudCache.leaderText = '';
+  if (respawnInterval) {
+    clearInterval(respawnInterval);
+    respawnInterval = null;
+  }
+  if (nextMatchInterval) {
+    clearInterval(nextMatchInterval);
+    nextMatchInterval = null;
+  }
+  clearSpawnProtectionHud();
+  clearAdrenalineHealHud();
+  game.setTeamState?.('ffa', null);
   game.inMatch = false;
   game.isAiming = false;
   unlockGameplayKeys();
@@ -1430,14 +1531,144 @@ btnLeaveRoom.addEventListener('click', () => {
   opticScope?.classList.remove('optic-holo', 'optic-reddot');
   crosshair.classList.remove('hidden', 'aiming');
   hudCache.chAiming = false;
+  if (damageOverlay) damageOverlay.style.opacity = '0';
+  killFeed?.replaceChildren();
+  scoreboardModal?.classList.add('hidden');
+  reloadIndicator?.classList.add('hidden');
+  grenadeCookHud?.classList.add('hidden');
+  weaponPickupPrompt?.classList.add('hidden');
+  damageDirIndicator?.classList.add('hidden');
+  multikillBanner?.classList.add('hidden');
+  centerBanner?.classList.add('hidden');
+  hudTeamScore?.classList.add('hidden');
   pauseModal.classList.add('hidden');
   if (loadoutModal) loadoutModal.classList.add('hidden');
+  teamLobbyModal?.classList.add('hidden');
   deathOverlay.classList.add('hidden');
   matchEndModal.classList.add('hidden');
   hudScreen.classList.add('hidden');
   lobbyScreen.classList.remove('hidden');
+  try {
+    window.history.replaceState(null, '', window.location.pathname || '/');
+  } catch {
+    // ignore history error in headless test environments
+  }
   fetchActiveRooms();
+}
+
+btnLeaveRoom.addEventListener('click', () => leaveActiveRoom({ emitLeave: true }));
+btnLeaveTeamLobby?.addEventListener('click', () => leaveActiveRoom({ emitLeave: true }));
+
+btnSwitchTeam?.addEventListener('click', () => {
+  socket.emit('switchTeam', {});
 });
+
+btnTeamReady?.addEventListener('click', () => {
+  socket.emit('setTeamReady', { ready: !currentLocalReady });
+});
+
+btnStartTeamMatch?.addEventListener('click', () => {
+  socket.emit('startTeamMatch');
+});
+
+function updateTeamScoreHud(teamScores = currentTeamScores) {
+  const alphaKills = Math.max(0, Number(teamScores?.alpha) || 0);
+  const bravoKills = Math.max(0, Number(teamScores?.bravo) || 0);
+  currentTeamScores = { alpha: alphaKills, bravo: bravoKills };
+
+  if (hudScoreAlpha) hudScoreAlpha.textContent = String(alphaKills);
+  if (hudScoreBravo) hudScoreBravo.textContent = String(bravoKills);
+
+  if (hudTeamScore) {
+    hudTeamScore.classList.toggle('hidden', currentRoomGameMode !== 'tdm');
+  }
+
+  if (currentRoomGameMode === 'tdm' && hudLeader) {
+    let nextLeaderText = `⚖️ HÒA: ${ alphaKills } - ${ bravoKills } (${ hudKillLimit.textContent })`;
+    if (alphaKills > bravoKills) {
+      nextLeaderText = `🔵 PHE XANH DẪN ĐẦU (${ alphaKills }/${ hudKillLimit.textContent })`;
+    } else if (bravoKills > alphaKills) {
+      nextLeaderText = `🔴 PHE ĐỎ DẪN ĐẦU (${ bravoKills }/${ hudKillLimit.textContent })`;
+    }
+    if (hudCache.leaderText !== nextLeaderText) {
+      hudCache.leaderText = nextLeaderText;
+      hudLeader.textContent = nextLeaderText;
+    }
+  }
+}
+
+function renderTeamWaitingLobby(lobbyData = {}) {
+  if (!teamLobbyModal) return;
+  const players = Array.isArray(lobbyData.players) ? lobbyData.players : latestPlayers;
+  if (lobbyData.hostId) currentRoomHostId = lobbyData.hostId;
+  if (lobbyData.state) currentRoomState = lobbyData.state;
+  if (lobbyData.mapName && teamLobbyMapName) teamLobbyMapName.textContent = lobbyData.mapName;
+  if (teamLobbyRoomCode && activeRoomCode) teamLobbyRoomCode.textContent = `#${ activeRoomCode }`;
+  if (teamLobbyKillLimit) teamLobbyKillLimit.textContent = String(lobbyData.killLimit || hudKillLimit.textContent || 30);
+
+  const alphaList = players.filter((p) => p.team === 'alpha');
+  const bravoList = players.filter((p) => p.team === 'bravo');
+
+  const me = players.find((p) => p.id === game.localId);
+  if (me) {
+    currentLocalTeam = me.team || 'alpha';
+    currentLocalReady = Boolean(me.ready);
+    game.setTeamState?.(currentRoomGameMode, currentLocalTeam);
+  }
+
+  if (teamAlphaCount) teamAlphaCount.textContent = `${ alphaList.length }/6`;
+  if (teamBravoCount) teamBravoCount.textContent = `${ bravoList.length }/6`;
+
+  const renderRosterColumn = (list) => {
+    if (list.length === 0) {
+      return `<div class="rooms-empty">Chưa có chiến binh ở phe này</div>`;
+    }
+    return list
+      .map((p) => {
+        const isMe = p.id === game.localId;
+        const isHost = p.id === currentRoomHostId;
+        const readyBool = Boolean(p.ready);
+        return `
+          <div class="team-roster-item ${ isMe ? 'is-me' : '' }">
+            <span>
+              ${ isHost ? '👑 ' : '' }<strong>${ escapeHtml(p.name) }</strong> ${ isMe ? '(Bạn)' : '' }
+            </span>
+            <span class="team-roster-status ${ readyBool ? 'ready' : 'waiting' }">
+              ${ readyBool ? '✓ SẴN SÀNG' : 'ĐANG CHỜ' }
+            </span>
+          </div>
+        `;
+      })
+      .join('');
+  };
+
+  if (teamAlphaRoster) teamAlphaRoster.innerHTML = renderRosterColumn(alphaList);
+  if (teamBravoRoster) teamBravoRoster.innerHTML = renderRosterColumn(bravoList);
+
+  if (btnTeamReady) {
+    btnTeamReady.textContent = currentLocalReady ? '✗ HỦY SẴN SÀNG' : '✓ SẴN SÀNG';
+  }
+
+  const isHost = Boolean(game.localId && currentRoomHostId === game.localId);
+  const canStart = lobbyData.canStart !== undefined
+    ? Boolean(lobbyData.canStart)
+    : ((alphaList.length >= 1 && bravoList.length >= 1) || players.length === 1);
+
+  if (btnStartTeamMatch) {
+    btnStartTeamMatch.classList.toggle('hidden', !isHost);
+    btnStartTeamMatch.disabled = !canStart;
+  }
+
+  if (teamLobbyStatus) {
+    if (players.length >= 2 && (alphaList.length === 0 || bravoList.length === 0)) {
+      teamLobbyStatus.textContent = '⚠️ Cần ít nhất 1 người ở mỗi phe (Xanh và Đỏ) để bắt đầu trận đấu!';
+    } else if (isHost) {
+      teamLobbyStatus.textContent = '👑 Bạn là Chủ phòng: Có thể bấm BẮT ĐẦU TRẬN ngay hoặc chờ tất cả bấm SẴN SÀNG.';
+    } else {
+      teamLobbyStatus.textContent = 'Chọn phe và bấm Sẵn Sàng. Khi tất cả sẵn sàng, trận đấu sẽ tự động bắt đầu!';
+    }
+  }
+}
 
 if (pauseMapSelect) {
   pauseMapSelect.addEventListener('change', () => {
@@ -1549,13 +1780,14 @@ async function fetchActiveRooms() {
           const safeMap = escapeHtml(r.mapName || 'CYBER CITADEL');
           const safeTotal = Number(r.total) || 0;
           const safeMax = Number(r.maxPlayers) || 16;
+          const modeLabel = r.gameMode === 'tdm' ? '2 PHE' : 'FFA';
           return `
         <div class="room-item">
           <div>
             <span class="room-item-code">#${ safeCode }</span>
-            <span> • ${ safeMap } (${ safeTotal }/${ safeMax })</span>
+            <span> • [${ modeLabel }] ${ safeMap } (${ safeTotal }/${ safeMax })</span>
           </div>
-          <button class="room-item-join" data-code="${ safeCode }">VÀO</button>
+          <button class="room-item-join" data-code="${ safeCode }" data-mode="${ r.gameMode === 'tdm' ? 'tdm' : 'ffa' }">VÀO</button>
         </div>
       `;
         }
@@ -1569,6 +1801,9 @@ async function fetchActiveRooms() {
 activeRoomsList.addEventListener('click', (e) => {
   const btn = e.target.closest('.room-item-join');
   if (!btn) return;
+  if (btn.dataset.mode) {
+    selectedGameMode = btn.dataset.mode === 'tdm' ? 'tdm' : 'ffa';
+  }
   requestJoinRoom({ mode: 'public', roomCode: btn.dataset.code });
 });
 
@@ -1585,7 +1820,7 @@ function renderScoreboard(players) {
   });
 
   const sig = sorted
-    .map((p) => `${p.id}:${p.name}:${p.kills}:${p.deaths}:${p.streak}`)
+    .map((p) => `${p.id}:${p.name}:${p.team || ''}:${p.kills}:${p.deaths}:${p.streak}`)
     .join('|');
   if (sig === lastScoreboardSig) return;
   lastScoreboardSig = sig;
@@ -1597,10 +1832,13 @@ function renderScoreboard(players) {
       const streak = Number(p.streak) || 0;
       const kd = deaths === 0 ? kills.toFixed(1) : (kills / deaths).toFixed(2);
       const isMe = p.id === game.localId;
+      const teamTag = currentRoomGameMode === 'tdm' && p.team
+        ? `<span class="sb-team-tag ${ p.team === 'alpha' ? 'alpha' : 'bravo' }">${ p.team === 'alpha' ? 'ALPHA' : 'BRAVO' }</span>`
+        : '';
       return `
         <tr class="${ isMe ? 'sb-row-me' : '' }">
           <td>${ i + 1 }</td>
-          <td>${ escapeHtml(p.name) } ${ isMe ? '(Bạn)' : '' }</td>
+          <td>${ teamTag }${ escapeHtml(p.name) } ${ isMe ? '(Bạn)' : '' }</td>
           <td>${ kills }</td>
           <td>${ deaths }</td>
           <td>${ kd }</td>
@@ -1667,7 +1905,7 @@ socket.on('connect_error', showServerUnreachable);
 // and joins the same room again as soon as the socket is back, instead of leaving every opponent frozen in place.
 let lastJoinPayload = null;
 installRejoinOnReconnect(socket, {
-  isInMatch: () => game.inMatch,
+  isInMatch: () => Boolean(game.inMatch || activeRoomCode),
   onLost: () => showToast('⚠️ Mất kết nối — đang kết nối lại...'),
   rejoin: () => {
     if (!lastJoinPayload) return;
@@ -1678,7 +1916,7 @@ installRejoinOnReconnect(socket, {
   onReconnected: () => showToast('🔄 Đã kết nối lại — vào lại phòng')
 });
 socket.on('disconnect', () => {
-  if (!game.inMatch) showServerUnreachable();
+  if (!game.inMatch && !activeRoomCode) showServerUnreachable();
 });
 socket.on('connect', () => {
   if (serverErrorShown) {
@@ -1689,6 +1927,9 @@ socket.on('connect', () => {
 });
 
 socket.on('joinError', ({ message }) => {
+  if (activeRoomCode || game.inMatch) {
+    leaveActiveRoom({ emitLeave: false });
+  }
   lobbyError.textContent = message;
   lobbyError.classList.remove('hidden');
 });
@@ -1696,7 +1937,14 @@ socket.on('joinError', ({ message }) => {
 socket.on('roomJoined', (data) => {
   activeRoomCode = data.roomCode;
   game.localId = data.playerId;
-  game.inMatch = true;
+  currentRoomGameMode = data.gameMode === 'tdm' ? 'tdm' : 'ffa';
+  currentRoomState = data.state || 'PLAYING';
+  currentRoomHostId = data.hostId || null;
+  currentLocalTeam = data.player?.team || null;
+  currentLocalReady = Boolean(data.player?.ready);
+  const isWaitingTeamLobby = currentRoomGameMode === 'tdm' && currentRoomState === 'WAITING';
+  game.inMatch = !isWaitingTeamLobby;
+  game.setTeamState?.(currentRoomGameMode, currentLocalTeam);
   game.clearAllRemotePlayers();
 
   // Load room map geometry & update HUD map indicators
@@ -1711,8 +1959,9 @@ socket.on('roomJoined', (data) => {
   hudRoomCode.textContent = `#${ activeRoomCode }`;
   sbRoomCode.textContent = `#${ activeRoomCode }`;
   pauseInviteUrl.value = shareUrl;
-  hudKillLimit.textContent = String(data.killLimit || 20);
+  hudKillLimit.textContent = String(data.killLimit || (currentRoomGameMode === 'tdm' ? 30 : 20));
   hudTimer.textContent = formatTime(data.timeRemaining || 300);
+  updateTeamScoreHud(data.teamScores || { alpha: 0, bravo: 0 });
 
   // Set starting 3-slot loadout & spawn position
   if (data.player.loadout) {
@@ -1733,7 +1982,9 @@ socket.on('roomJoined', (data) => {
   multikillBanner?.classList.add('hidden');
   updateHpHud(data.player.hp);
   updateGrenadeHud(data.player.grenades ?? data.player.grenadeCount ?? 1);
-  triggerSpawnProtectionHud(data.player.spawnProtectionMs || MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500);
+  if (!isWaitingTeamLobby) {
+    triggerSpawnProtectionHud(data.player.spawnProtectionMs || MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500);
+  }
   const wCfg = WEAPONS[game.currentWeapon] || WEAPONS.rifle;
   updateWeaponHud(
     game.currentWeapon,
@@ -1747,20 +1998,60 @@ socket.on('roomJoined', (data) => {
   latestPlayers = data.players || [];
   game.syncPlayersState(latestPlayers);
 
-  // Switch UI from Lobby to HUD & lock pointer
+  // Switch UI from Lobby to Team Waiting Lobby or In-Match HUD
   lobbyScreen.classList.add('hidden');
   pauseModal.classList.add('hidden');
   loadoutModal?.classList.add('hidden');
   deathOverlay.classList.add('hidden');
   matchEndModal.classList.add('hidden');
-  hudScreen.classList.remove('hidden');
 
-  game.requestPointerLock();
-  showToast(`🎯 Phòng #${ activeRoomCode } • ${ getMapConfig(roomMapId).name }`);
+  if (isWaitingTeamLobby) {
+    hudScreen.classList.add('hidden');
+    teamLobbyModal?.classList.remove('hidden');
+    renderTeamWaitingLobby({
+      roomCode: activeRoomCode,
+      gameMode: currentRoomGameMode,
+      state: currentRoomState,
+      hostId: currentRoomHostId,
+      mapId: roomMapId,
+      mapName: getMapConfig(roomMapId).name,
+      killLimit: data.killLimit || 30,
+      players: latestPlayers
+    });
+    showToast(`🛡️ Phòng Đấu Đội #${ activeRoomCode } • Chọn phe và Sẵn sàng!`);
+  } else {
+    teamLobbyModal?.classList.add('hidden');
+    hudScreen.classList.remove('hidden');
+    game.requestPointerLock();
+    showToast(`🎯 Phòng #${ activeRoomCode } • ${ getMapConfig(roomMapId).name }`);
+  }
+});
+
+socket.on('teamLobbyState', (data) => {
+  if (!activeRoomCode || !data) return;
+  if (Array.isArray(data.players)) {
+    latestPlayers = data.players;
+  }
+  if (data.gameMode) {
+    currentRoomGameMode = data.gameMode === 'tdm' ? 'tdm' : 'ffa';
+  }
+  if (data.state) {
+    currentRoomState = data.state;
+  }
+  if (data.hostId) {
+    currentRoomHostId = data.hostId;
+  }
+  if (data.teamScores) {
+    updateTeamScoreHud(data.teamScores);
+  }
+  renderTeamWaitingLobby(data);
+  if (currentRoomGameMode === 'tdm' && currentRoomState === 'WAITING') {
+    teamLobbyModal?.classList.remove('hidden');
+  }
 });
 
 socket.on('loadoutUpdated', (data) => {
-  if (!game.inMatch) return;
+  if (!game.inMatch && !activeRoomCode) return;
   if (data?.loadout?.pending) {
     // Mid-life loadout swaps are applied on the next respawn (prefs below keep the pending pick)
     showToast('🎒 Trang bị mới sẽ có hiệu lực khi hồi sinh');
@@ -1783,12 +2074,12 @@ socket.on('loadoutUpdated', (data) => {
 });
 
 socket.on('playerJoined', (data) => {
-  if (!game.inMatch || !data?.name) return;
+  if ((!game.inMatch && !activeRoomCode) || !data?.name) return;
   showToast(`👤 ${ data.name } đã vào phòng`);
 });
 
 socket.on('mapChanged', (data) => {
-  if (!game.inMatch) return;
+  if (!game.inMatch && !activeRoomCode) return;
   const newMapId = data.mapId || DEFAULT_MAP_ID;
   game.loadMap(newMapId);
   updateMapHud(newMapId);
@@ -1804,7 +2095,7 @@ socket.on('mapChanged', (data) => {
   multikillBanner?.classList.add('hidden');
 
   const me = latestPlayers.find((p) => p.id === game.localId);
-  if (me) {
+  if (me && game.inMatch) {
     if (respawnInterval) clearInterval(respawnInterval);
     deathOverlay.classList.add('hidden');
     damageOverlay.style.opacity = '0';
@@ -1824,9 +2115,9 @@ socket.on('spawnProtectionEnded', (data) => {
   if (data?.playerId && data.playerId === game.localId) clearSpawnProtectionHud();
 });
 
-// Server rejected a host-only action (map): tell the player and restore the controls
+// Server rejected a host-only or team-lobby action: tell the player and restore the controls
 socket.on('actionDenied', (data) => {
-  if (!game.inMatch) return;
+  if (!game.inMatch && !activeRoomCode) return;
   showToast(`⛔ ${ data?.message || 'Hành động không được phép.' }`);
   if (data?.action === 'changeMap') {
     updateMapHud(game.currentMapConfig?.id || selectedMapId);
@@ -1834,7 +2125,13 @@ socket.on('actionDenied', (data) => {
 });
 
 socket.on('hostChanged', (data) => {
-  if (!game.inMatch || !data?.name) return;
+  if ((!game.inMatch && !activeRoomCode) || !data?.name) return;
+  if (data.hostId) {
+    currentRoomHostId = data.hostId;
+    if (currentRoomGameMode === 'tdm' && currentRoomState === 'WAITING') {
+      renderTeamWaitingLobby({ hostId: data.hostId, players: latestPlayers });
+    }
+  }
   showToast(`👑 ${ data.name } là chủ phòng mới`);
 });
 
@@ -1879,9 +2176,12 @@ socket.on('selfState', (state) => {
 });
 
 socket.on('playerLeft', (data) => {
-  if (!game.inMatch || !data?.playerId) return;
+  if ((!game.inMatch && !activeRoomCode) || !data?.playerId) return;
   latestPlayers = latestPlayers.filter((p) => p.id !== data.playerId);
   game.syncPlayersState(latestPlayers);
+  if (currentRoomGameMode === 'tdm' && currentRoomState === 'WAITING') {
+    renderTeamWaitingLobby({ players: latestPlayers });
+  }
 });
 
 socket.on('stateUpdate', (snapshot) => {
@@ -1890,6 +2190,12 @@ socket.on('stateUpdate', (snapshot) => {
   if (hudCache.timerSec !== remSec) {
     hudCache.timerSec = remSec;
     hudTimer.textContent = formatTime(remSec);
+  }
+  if (snapshot.gameMode) {
+    currentRoomGameMode = snapshot.gameMode === 'tdm' ? 'tdm' : 'ffa';
+  }
+  if (snapshot.teamScores) {
+    updateTeamScoreHud(snapshot.teamScores);
   }
   latestPlayers = snapshot.players || [];
   // `snapshot.t` = server timestamp (ms) of this tick: remote players are drawn by snapshot interpolation
@@ -1911,6 +2217,10 @@ socket.on('stateUpdate', (snapshot) => {
       topPlayer = p;
     }
     if (p.id === game.localId) {
+      if (p.team && p.team !== currentLocalTeam) {
+        currentLocalTeam = p.team;
+        game.setTeamState?.(currentRoomGameMode, currentLocalTeam);
+      }
       if (hudCache.kills !== p.kills) {
         hudCache.kills = p.kills;
         hudKills.textContent = String(p.kills);
@@ -1934,7 +2244,7 @@ socket.on('stateUpdate', (snapshot) => {
     }
   }
 
-  if (topPlayer) {
+  if (currentRoomGameMode !== 'tdm' && topPlayer) {
     const nextLeaderText = `👑 ${ topPlayer.name } (${ topPlayer.kills }/${ hudKillLimit.textContent })`;
     if (hudCache.leaderText !== nextLeaderText) {
       hudCache.leaderText = nextLeaderText;
@@ -1955,7 +2265,7 @@ socket.on('shotFired', (data) => {
     y: data.origin.y + data.dir.y * 55,
     z: data.origin.z + data.dir.z * 55
   };
-  game.triggerRemoteShotEffect(data.shooterId, data.weapon, data.origin, endPt);
+  game.triggerRemoteShotEffect(data.shooterId, data.weapon, data.origin, endPt, Boolean(data.isPlayerHit));
 });
 
 socket.on('damageDealt', (data) => {
@@ -2031,6 +2341,9 @@ socket.on('spawnProtectedHit', (data) => {
 socket.on('killEvent', (data) => {
   if (!game.inMatch) return;
   addKillFeedItem(data);
+  if (data.teamScores) {
+    updateTeamScoreHud(data.teamScores);
+  }
 
   if (data.victimId && data.victimId !== game.localId) {
     const victimRp = game.remotePlayers?.get(data.victimId);
@@ -2110,6 +2423,10 @@ socket.on('killEvent', (data) => {
     respawnInterval = setInterval(() => {
       rem = Math.max(0, rem - 1);
       respawnTimerEl.textContent = String(rem);
+      if (rem <= 0 && respawnInterval) {
+        clearInterval(respawnInterval);
+        respawnInterval = null;
+      }
     }, 1000);
   }
 });
@@ -2132,7 +2449,10 @@ socket.on('playerRespawned', (data) => {
     }
   }
   if (data.playerId === game.localId) {
-    if (respawnInterval) clearInterval(respawnInterval);
+    if (respawnInterval) {
+      clearInterval(respawnInterval);
+      respawnInterval = null;
+    }
     deathOverlay.classList.add('hidden');
     damageOverlay.style.opacity = '0';
     localMultiKillCount = 0;
@@ -2234,6 +2554,10 @@ socket.on('weaponSwapped', (data) => {
 
 socket.on('matchEnded', (data) => {
   if (!game.inMatch) return;
+  if (respawnInterval) {
+    clearInterval(respawnInterval);
+    respawnInterval = null;
+  }
   game.isAiming = false;
   clearSpawnProtectionHud();
   clearAdrenalineHealHud();
@@ -2248,19 +2572,38 @@ socket.on('matchEnded', (data) => {
   crosshair.classList.remove('hidden', 'aiming');
   hudCache.chAiming = false;
 
-  victoryWinnerName.textContent = data.winner?.name || '---';
-  victoryWinnerStats.textContent = `${ data.winner?.kills || 0 } Kills • ${ data.winner?.deaths || 0 } Deaths`;
+  if (data.gameMode === 'tdm' || currentRoomGameMode === 'tdm') {
+    const alphaK = Number(data.teamScores?.alpha ?? currentTeamScores.alpha ?? 0);
+    const bravoK = Number(data.teamScores?.bravo ?? currentTeamScores.bravo ?? 0);
+    updateTeamScoreHud({ alpha: alphaK, bravo: bravoK });
+    if (data.winningTeam === 'alpha') {
+      victoryWinnerName.textContent = 'PHE XANH (ALPHA)';
+    } else if (data.winningTeam === 'bravo') {
+      victoryWinnerName.textContent = 'PHE ĐỎ (BRAVO)';
+    } else {
+      victoryWinnerName.textContent = 'HÒA (DRAW)';
+    }
+    const mvpText = data.winner?.name ? ` • MVP: ${ data.winner.name } (${ data.winner.kills || 0 } K)` : '';
+    victoryWinnerStats.textContent = `ALPHA ${ alphaK } - ${ bravoK } BRAVO${ mvpText }`;
+  } else {
+    victoryWinnerName.textContent = data.winner?.name || '---';
+    victoryWinnerStats.textContent = `${ data.winner?.kills || 0 } Kills • ${ data.winner?.deaths || 0 } Deaths`;
+  }
 
+  const isTdmEnd = data.gameMode === 'tdm' || currentRoomGameMode === 'tdm';
   victoryLeaderboardBody.innerHTML = (data.leaderboard || [])
     .slice(0, 8)
     .map((p, idx) => {
       const kills = Number(p.kills) || 0;
       const deaths = Number(p.deaths) || 0;
       const kd = deaths === 0 ? kills.toFixed(1) : (kills / deaths).toFixed(2);
+      const teamTag = isTdmEnd && p.team
+        ? `<span class="sb-team-tag ${ p.team === 'alpha' ? 'alpha' : 'bravo' }">${ p.team === 'alpha' ? 'ALPHA' : 'BRAVO' }</span>`
+        : '';
       return `
         <tr class="${ p.id === game.localId ? 'sb-row-me' : '' }">
           <td>#${ idx + 1 }</td>
-          <td>${ escapeHtml(p.name) } ${ p.id === game.localId ? '(Bạn)' : '' }</td>
+          <td>${ teamTag }${ escapeHtml(p.name) } ${ p.id === game.localId ? '(Bạn)' : '' }</td>
           <td>${ kills }</td>
           <td>${ deaths }</td>
           <td>${ kd }</td>
@@ -2281,10 +2624,28 @@ socket.on('matchEnded', (data) => {
 });
 
 socket.on('matchStarted', (data) => {
-  if (!game.inMatch) return;
-  if (nextMatchInterval) clearInterval(nextMatchInterval);
+  if (!game.inMatch && !activeRoomCode) return;
+  if (respawnInterval) {
+    clearInterval(respawnInterval);
+    respawnInterval = null;
+  }
+  if (nextMatchInterval) {
+    clearInterval(nextMatchInterval);
+    nextMatchInterval = null;
+  }
+  currentRoomState = 'PLAYING';
+  if (data.gameMode) {
+    currentRoomGameMode = data.gameMode === 'tdm' ? 'tdm' : 'ffa';
+  }
+  if (data.killLimit) {
+    hudKillLimit.textContent = String(data.killLimit);
+  }
+  updateTeamScoreHud(data.teamScores || { alpha: 0, bravo: 0 });
+  teamLobbyModal?.classList.add('hidden');
   matchEndModal.classList.add('hidden');
   deathOverlay.classList.add('hidden');
+  hudScreen.classList.remove('hidden');
+  game.inMatch = true;
   localMultiKillCount = 0;
   lastLocalKillAt = 0;
   lastGrenadeThrowAt = 0;
@@ -2298,15 +2659,19 @@ socket.on('matchStarted', (data) => {
   game.syncDroppedWeapons(data.droppedWeapons || []);
   game.syncGrenades?.(data.activeGrenades || []);
   latestPlayers = data.players || [];
-  game.syncPlayersState(latestPlayers);
   const me = latestPlayers.find((p) => p.id === game.localId);
+  if (me && me.team) {
+    currentLocalTeam = me.team;
+  }
+  game.setTeamState?.(currentRoomGameMode, currentLocalTeam);
+  game.syncPlayersState(latestPlayers);
   if (me) {
     game.spawnLocalPlayer(me);
     updateHpHud(me.hp);
     updateGrenadeHud(me.grenades ?? me.grenadeCount ?? 1);
     triggerSpawnProtectionHud(MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500);
   }
-  showCenterBanner('🔥 BẮT ĐẦU');
+  showCenterBanner(currentRoomGameMode === 'tdm' ? '⚔️ ĐẤU ĐỘI BẮT ĐẦU' : '🔥 BẮT ĐẦU');
   game.requestPointerLock();
 });
 

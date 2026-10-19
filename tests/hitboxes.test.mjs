@@ -55,11 +55,11 @@ describe('Shared hitbox definition: part geometry', () => {
     assert.ok(Object.isFrozen(HITBOX_PART_DEFS));
   });
 
-  it('stands ~1.95 m tall (helmet) with the head box in the upper 0.48 m and legs below the pelvis', () => {
+  it('stands ~2.01 m tall (helmet) with the head box in the upper 0.54 m and legs below the pelvis', () => {
     const parts = getHitboxParts('stand', 0, 0, { x: 0, y: 0, z: 0 });
     const head = getBoxWorldAABB(part(parts, 'head'));
     near(head.min.y, 1.47, 0.005, 'head bottom');
-    near(head.max.y, 1.95, 0.005, 'head top');
+    near(head.max.y, 2.01, 0.005, 'head top');
     const torso = getBoxWorldAABB(part(parts, 'torso'));
     near(torso.min.y, 0.88, 0.005, 'torso bottom');
     near(torso.max.y, 1.54, 0.005, 'torso top');
@@ -81,8 +81,8 @@ describe('Shared hitbox definition: part geometry', () => {
     const prone = top('prone');
     assert.ok(stand > crouch + 0.2, `crouch top ${crouch} vs stand ${stand}`);
     assert.ok(crouch > prone + 0.4, `prone top ${prone} vs crouch ${crouch}`);
-    near(crouch, 1.694, 0.01, 'crouch helmet top');
-    assert.ok(prone < 1.15, `prone top ${prone}`);
+    near(crouch, 1.754, 0.01, 'crouch helmet top');
+    assert.ok(prone < 1.18, `prone top ${prone}`);
 
     const a = getHitboxParts('crouch', 0.7, 0.3, { x: 1, y: 2, z: 3 });
     const b = getHitboxParts('slide', 0.7, 0.3, { x: 1, y: 2, z: 3 });
@@ -205,48 +205,48 @@ describe('Shared hitbox ray casting', () => {
     assert.equal(shoot(0.30, { x: 0.15, z: 20 }).zone, 'leg');
 
     const hit = front(1.80);
-    near(hit.point.z, -0.22 - PART_PADDING, 1e-9, 'entry point on the padded head front face');
-    near(hit.distance, 20 - 0.22 - PART_PADDING, 1e-9);
+    near(hit.point.z, -0.25 - PART_PADDING, 1e-9, 'entry point on the padded head front face');
+    near(hit.distance, 20 - 0.25 - PART_PADDING, 1e-9);
   });
 
   it('misses just outside a box by more than PART_PADDING and hits just inside it', () => {
     const player = alive();
     const m = 0.005;
-    // Head (y = 1.80 is above the torso), shot travelling along +Z: lateral extent is half-width 0.21 + padding
+    // Head (y = 1.80 is above the torso), shot travelling along +Z: lateral extent is half-width 0.24 + padding
     const lateral = (x) => raycastPlayerParts({ x, y: 1.8, z: -10 }, { x: 0, y: 0, z: 1 }, player, 100);
-    assert.ok(lateral(0.21 + PART_PADDING - m), 'just inside the padded head width must hit');
-    assert.equal(lateral(0.21 + PART_PADDING + m), null, 'just outside the padded head width must miss');
-    assert.ok(lateral(-(0.21 + PART_PADDING - m)));
-    assert.equal(lateral(-(0.21 + PART_PADDING + m)), null);
+    assert.ok(lateral(0.24 + PART_PADDING - m), 'just inside the padded head width must hit');
+    assert.equal(lateral(0.24 + PART_PADDING + m), null, 'just outside the padded head width must miss');
+    assert.ok(lateral(-(0.24 + PART_PADDING - m)));
+    assert.equal(lateral(-(0.24 + PART_PADDING + m)), null);
 
-    // Top of the helmet (1.95 m)
+    // Top of the helmet (2.01 m)
     const vertical = (y) => raycastPlayerParts({ x: 0, y, z: -10 }, { x: 0, y: 0, z: 1 }, player, 100);
-    assert.ok(vertical(1.95 + PART_PADDING - m));
-    assert.equal(vertical(1.95 + PART_PADDING + m), null);
+    assert.ok(vertical(2.01 + PART_PADDING - m));
+    assert.equal(vertical(2.01 + PART_PADDING + m), null);
 
-    // Thigh side at x = 0.28 (hip 0.145 + half-width 0.13)
+    // Thigh side at x = 0.30 (hip 0.145 + half-width 0.15)
     const thighSide = (x) => raycastPlayerParts({ x, y: 0.62, z: -10 }, { x: 0, y: 0, z: 1 }, player, 100);
-    assert.ok(thighSide(0.28 + PART_PADDING - m));
-    assert.equal(thighSide(0.28 + PART_PADDING + m), null);
+    assert.ok(thighSide(0.30 + PART_PADDING - m));
+    assert.equal(thighSide(0.30 + PART_PADDING + m), null);
 
     // No padding at all -> the bare box
     const bare = (x) => raycastPlayerParts({ x, y: 1.8, z: -10 }, { x: 0, y: 0, z: 1 }, player, 100, { padding: 0 });
-    assert.ok(bare(0.21 - m));
-    assert.equal(bare(0.21 + m), null);
+    assert.ok(bare(0.24 - m));
+    assert.equal(bare(0.24 + m), null);
   });
 
   it('nearest part wins: a shot through the arm is a torso hit, head only wins when it is really hit first', () => {
     const player = alive();
-    // Through the arm (x = +-0.3 is inside the 0.72 m wide torso box, no separate arm box exists)
+    // Through the arm (x = +-0.3 is inside the 0.80 m wide torso box, no separate arm box exists)
     const arm = raycastPlayerParts({ x: 6, y: 1.25, z: -0.1 }, { x: -1, y: 0, z: 0 }, player, 100);
     assert.deepEqual([arm.partId, arm.zone], ['torso', 'body']);
-    near(arm.distance, 6 - 0.36 - PART_PADDING, 1e-9);
+    near(arm.distance, 6 - 0.40 - PART_PADDING, 1e-9);
 
-    // y = 1.50 lies in both the head box (1.47..1.95) and the torso box (..1.54):
-    // from the front the torso's front face (z=-0.36) is nearer than the head's (z=-0.22) -> body
+    // y = 1.50 lies in both the head box (1.47..2.01) and the torso box (..1.54):
+    // from the front the torso's front face (z=-0.36) is nearer than the head's (z=-0.25) -> body
     const fromFront = raycastPlayerParts({ x: 0, y: 1.5, z: -10 }, { x: 0, y: 0, z: 1 }, player, 100);
     assert.deepEqual([fromFront.partId, fromFront.zone], ['torso', 'body']);
-    // from behind the head's back face (z=+0.20) is nearer than the torso's (z=+0.16) -> head
+    // from behind the head's back face (z=+0.23) is nearer than the torso's (z=+0.16) -> head
     const fromBehind = raycastPlayerParts({ x: 0, y: 1.5, z: 10 }, { x: 0, y: 0, z: -1 }, player, 100);
     assert.deepEqual([fromBehind.partId, fromBehind.zone], ['head', 'head']);
 
@@ -259,29 +259,29 @@ describe('Shared hitbox ray casting', () => {
     for (const yaw of [0, 0.5, 1.2, Math.PI / 2, 2.6, Math.PI, -0.8, -2.2]) {
       const player = alive({ x: 4, y: 0.5, z: -3, yaw });
       const f = fwd(yaw);
-      const headY = 0.5 + 1.71;
+      const headY = 0.5 + 1.74;
       // Shooter 6 m in front of the face, shooting back at the target
       const front = raycastPlayerParts(
         { x: 4 + f.x * 6, y: headY, z: -3 + f.z * 6 }, { x: -f.x, y: 0, z: -f.z }, player, 100
       );
       assert.equal(front.partId, 'head', `yaw ${yaw}`);
-      near(front.distance, 6 - (0.22 + PART_PADDING), 1e-9, `front face at yaw ${yaw}`);
+      near(front.distance, 6 - (0.25 + PART_PADDING), 1e-9, `front face at yaw ${yaw}`);
 
-      // Shooter behind the head: the back face is at +0.20 (+ padding) towards the rear
+      // Shooter behind the head: the back face is at +0.23 (+ padding) towards the rear
       const back = raycastPlayerParts(
         { x: 4 - f.x * 6, y: headY, z: -3 - f.z * 6 }, { x: f.x, y: 0, z: f.z }, player, 100
       );
       assert.equal(back.partId, 'head');
-      near(back.distance, 6 - (0.20 + PART_PADDING), 1e-9, `back face at yaw ${yaw}`);
+      near(back.distance, 6 - (0.23 + PART_PADDING), 1e-9, `back face at yaw ${yaw}`);
 
-      // Shooter on the target's right (rig +X = (cos yaw, -sin yaw)): the side face is at 0.21 + padding
+      // Shooter on the target's right (rig +X = (cos yaw, -sin yaw)): the side face is at 0.24 + padding
       const rx = Math.cos(yaw);
       const rz = -Math.sin(yaw);
       const side = raycastPlayerParts(
         { x: 4 + rx * 6, y: headY, z: -3 + rz * 6 }, { x: -rx, y: 0, z: -rz }, player, 100
       );
       assert.equal(side.partId, 'head');
-      near(side.distance, 6 - (0.21 + PART_PADDING), 1e-9, `right face at yaw ${yaw}`);
+      near(side.distance, 6 - (0.24 + PART_PADDING), 1e-9, `right face at yaw ${yaw}`);
     }
   });
 
@@ -293,7 +293,7 @@ describe('Shared hitbox ray casting', () => {
 
     assert.ok(shot(standing, 1.85), 'standing helmet reaches 1.85 m');
     assert.equal(shot(crouched, 1.85), null, 'crouching target is lower than 1.85 m');
-    assert.ok(shot(crouched, 1.55), 'crouching head is around 1.2 .. 1.7 m');
+    assert.ok(shot(crouched, 1.55), 'crouching head is around 1.2 .. 1.75 m');
     assert.equal(shot(prone, 1.45), null, 'prone target is below 1.2 m');
     assert.ok(shot(prone, 0.4), 'prone body is around 0.0 .. 0.8 m');
     assert.equal(shot(standing, 0.4)?.zone === 'body', false, 'standing: 0.4 m is a leg (or miss), not a torso hit');
@@ -316,7 +316,7 @@ describe('Shared hitbox ray casting', () => {
     assert.equal(inside.zone, 'head');
     // Non-normalised direction is accepted
     const scaled = raycastPlayerParts({ x: 0, y: 1.8, z: -10 }, { x: 0, y: 0, z: 25 }, player, 100);
-    near(scaled.distance, 10 - 0.22 - PART_PADDING, 1e-9);
+    near(scaled.distance, 10 - 0.25 - PART_PADDING, 1e-9);
   });
 
   it('classifyPointZone maps a claimed point to the part it lies in or next to, within a tolerance', () => {
@@ -327,7 +327,7 @@ describe('Shared hitbox ray casting', () => {
     assert.equal(classifyPointZone(part(boxes, 'thigh_l').center, player).zone, 'leg');
     assert.equal(classifyPointZone(part(boxes, 'shin_r').center, player).partId, 'shin_r');
     // 5 cm above the helmet is within the tolerance (still head), a metre away is nothing
-    const top = { ...part(boxes, 'head').center, y: 1.95 + PART_PADDING + 0.05 };
+    const top = { ...part(boxes, 'head').center, y: 2.01 + PART_PADDING + 0.05 };
     assert.equal(classifyPointZone(top, player).zone, 'head');
     assert.equal(classifyPointZone({ x: 10, y: 1, z: 10 }, player), null);
     assert.equal(classifyPointZone({ x: NaN, y: 1, z: 1 }, player), null);
@@ -342,8 +342,8 @@ describe('raycastPlayerHitbox (server entry point) keeps its contract on top of 
       { h: head.isHeadshot, l: head.isLegshot, zone: head.zone, partId: head.partId },
       { h: true, l: false, zone: 'head', partId: 'head' }
     );
-    near(head.hitPoint.z, -0.22 - PART_PADDING, 1e-9);
-    assert.ok(Math.abs(head.distance - (10 - 0.22 - PART_PADDING)) < 1e-9);
+    near(head.hitPoint.z, -0.25 - PART_PADDING, 1e-9);
+    assert.ok(Math.abs(head.distance - (10 - 0.25 - PART_PADDING)) < 1e-9);
 
     const leg = raycastPlayerHitbox({ x: 0.15, y: 0.3, z: -10 }, { x: 0, y: 0, z: 1 }, player, 100);
     assert.deepEqual({ h: leg.isHeadshot, l: leg.isLegshot, zone: leg.zone }, { h: false, l: true, zone: 'leg' });
@@ -356,7 +356,7 @@ describe('raycastPlayerHitbox (server entry point) keeps its contract on top of 
 
   it('radiusPadding is extra box inflation (shotgun spread), default is PART_PADDING', () => {
     const player = alive();
-    const o = { x: 0.7, y: 1.8, z: -10 }; // 0.7 m beside the head
+    const o = { x: 0.72, y: 1.8, z: -10 }; // 0.72 m beside the head
     const d = { x: 0, y: 0, z: 1 };
     assert.equal(raycastPlayerHitbox(o, d, player, 100), null);
     assert.equal(raycastPlayerHitbox(o, d, player, 100, 0.3), null);

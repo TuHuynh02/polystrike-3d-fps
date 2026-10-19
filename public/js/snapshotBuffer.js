@@ -206,6 +206,7 @@ function copyEntity(raw, t) {
     lean: num(raw.lean),
     crouching: Boolean(raw.crouching ?? raw.crouch),
     prone: Boolean(raw.prone),
+    sliding: Boolean(raw.sliding ?? raw.isSliding),
     vx: num(raw.vx),
     vy: num(raw.vy),
     vz: num(raw.vz),
@@ -226,6 +227,7 @@ function fillOut(out, s, vx, vy, vz) {
   out.lean = s.lean;
   out.crouching = s.crouching;
   out.prone = s.prone;
+  out.sliding = Boolean(s.sliding);
   out.alive = s.alive;
   out.weapon = s.weapon;
   out.vx = vx;

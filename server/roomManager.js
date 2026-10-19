@@ -79,10 +79,19 @@ export function sanitizeRoomCode(raw) {
 }
 
 export function sanitizeMapId(raw) {
-  if (typeof raw === 'string' && MAPS[raw]) {
+  if (typeof raw === 'string' && Object.hasOwn(MAPS, raw)) {
     return raw;
   }
   return DEFAULT_MAP_ID;
+}
+
+export function sanitizeGameMode(raw) {
+  return raw === 'tdm' ? 'tdm' : 'ffa';
+}
+
+export function sanitizeTeam(raw) {
+  if (raw === 'alpha' || raw === 'bravo') return raw;
+  return null;
 }
 
 export function createInitialAmmoMap() {
@@ -104,8 +113,12 @@ export function createInitialReserveAmmoMap() {
 export function sanitizeLoadout(raw = {}, fallbackPrimary = 'rifle') {
   const reqPrimary = raw?.primary || fallbackPrimary;
   const reqSecondary = raw?.secondary || 'pistol';
-  const primary = WEAPONS[reqPrimary]?.slot === 1 ? reqPrimary : 'rifle';
-  const secondary = WEAPONS[reqSecondary]?.slot === 2 ? reqSecondary : 'pistol';
+  const primary = (typeof reqPrimary === 'string' && Object.hasOwn(WEAPONS, reqPrimary) && WEAPONS[reqPrimary]?.slot === 1)
+    ? reqPrimary
+    : 'rifle';
+  const secondary = (typeof reqSecondary === 'string' && Object.hasOwn(WEAPONS, reqSecondary) && WEAPONS[reqSecondary]?.slot === 2)
+    ? reqSecondary
+    : 'pistol';
   return {
     primary,
     secondary,
@@ -116,7 +129,7 @@ export function sanitizeLoadout(raw = {}, fallbackPrimary = 'rifle') {
 // ---- Server-side movement / shot validation limits (client is never trusted for these) ----
 // Movement uses a "distance budget" that refills with server time, so neither one big teleport
 // nor a flood of small packets can move a player faster than MOVE_MAX_SPEED on average.
-export const MOVE_MAX_SPEED = (MATCH_CONFIG.SLIDE_INITIAL_SPEED || 11.2) * 1.25; // m/s horizontal
+export const MOVE_MAX_SPEED = Math.max(14.0, (MATCH_CONFIG.SLIDE_INITIAL_SPEED || 11.2) * 1.25); // m/s horizontal
 export const MOVE_BUDGET_CAP_XZ = MOVE_MAX_SPEED * 1.2 + 1.5;
 export const MOVE_UP_SPEED = (MATCH_CONFIG.JUMP_FORCE || 8) * 1.5; // m/s upward (jump, step-up)
 export const MOVE_DOWN_SPEED = 35; // m/s downward (terminal fall speed is clamped to 30)
@@ -257,6 +270,8 @@ export class RoomManager {
     try {
       this.tick();
       this.netStats.recordTick(performance.now() - slotStart, slotStart - this._nextTickSlotAt);
+    } catch (err) {
+      console.error('[tickLoop] uncaught error in tick():', err);
     } finally {
       // Advance to the next absolute slot strictly in the future, skipping any slots missed while ticking
       const afterPerf = performance.now();
@@ -357,37 +372,44 @@ export class RoomManager {
     }));
   }
 
-  createRoom(code, isPublic = true, mapId = DEFAULT_MAP_ID) {
+  createRoom(code, isPublic = true, mapId = DEFAULT_MAP_ID, gameMode = 'ffa') {
     const roomCode = code || generateRoomCode(this.rooms);
     const cleanMapId = sanitizeMapId(mapId);
+    const cleanGameMode = sanitizeGameMode(gameMode);
+    const isTdm = cleanGameMode === 'tdm';
     const now = Date.now();
 
     const room = {
       code: roomCode,
       isPublic,
       mapId: cleanMapId,
-      state: 'PLAYING', // 'PLAYING' | 'ENDED'
+      gameMode: cleanGameMode,
+      state: isTdm ? 'WAITING' : 'PLAYING', // 'WAITING' | 'PLAYING' | 'ENDED'
       matchStartedAt: now,
       matchEndsAt: now + MATCH_CONFIG.MATCH_DURATION_SEC * 1000,
       nextMatchAt: 0,
+      killLimit: isTdm ? (MATCH_CONFIG.TDM_KILL_LIMIT || 30) : (MATCH_CONFIG.KILL_LIMIT || 20),
+      teamScores: { alpha: 0, bravo: 0 },
       players: new Map(),
       pickups: this.createPickupsForMap(cleanMapId),
       droppedWeapons: [],
       grenades: [],
       recentSpawns: [],
-      hostId: null // first player in the room; only the host may change the map
+      hostId: null // first player in the room; only the host may change the map or force-start TDM
     };
 
     this.rooms.set(roomCode, room);
     return room;
-  }
+   }
 
-  findOrCreatePublicRoom(preferredMapId = null) {
+  findOrCreatePublicRoom(preferredMapId = null, gameMode = 'ffa') {
     const cleanMapId = preferredMapId ? sanitizeMapId(preferredMapId) : null;
+    const cleanGameMode = sanitizeGameMode(gameMode);
 
-    // First look for an open public room matching the requested map
+    // First look for an open public room matching the requested map & gameMode
     for (const room of this.rooms.values()) {
       if (!room.isPublic) continue;
+      if ((room.gameMode || 'ffa') !== cleanGameMode) continue;
       if (cleanMapId && room.mapId !== cleanMapId) continue;
       const humanCount = this.getHumanCount(room);
       if (humanCount < MATCH_CONFIG.MAX_PLAYERS) {
@@ -395,30 +417,59 @@ export class RoomManager {
       }
     }
 
-    // Create a public room for this map
-    const defaultCode = !this.rooms.has('PUB001') ? 'PUB001' : generateRoomCode(this.rooms);
-    return this.createRoom(defaultCode, true, cleanMapId || DEFAULT_MAP_ID);
+    // Create a public room for this map & gameMode
+    const defaultCode = (cleanGameMode === 'ffa' && !this.rooms.has('PUB001'))
+      ? 'PUB001'
+      : generateRoomCode(this.rooms);
+    return this.createRoom(defaultCode, true, cleanMapId || DEFAULT_MAP_ID, cleanGameMode);
   }
 
-  getOrCreateRoomByCode(rawCode, isPublic = false, mapId = DEFAULT_MAP_ID) {
+  getOrCreateRoomByCode(rawCode, isPublic = false, mapId = DEFAULT_MAP_ID, gameMode = 'ffa') {
     const code = sanitizeRoomCode(rawCode);
     if (code && this.rooms.has(code)) {
       return this.rooms.get(code);
     }
-    return this.createRoom(code || generateRoomCode(this.rooms), isPublic, mapId);
+    return this.createRoom(code || generateRoomCode(this.rooms), isPublic, mapId, gameMode);
   }
 
   getHumanCount(room) {
     return room.players.size;
   }
 
-  pickSafeSpawnPoint(room, excludeId = null) {
+  getTeamCounts(room) {
+    let alpha = 0;
+    let bravo = 0;
+    if (room?.players) {
+      for (const p of room.players.values()) {
+        if (p.team === 'bravo') bravo++;
+        else if (p.team === 'alpha') alpha++;
+      }
+    }
+    return { alpha, bravo };
+  }
+
+  assignBalancedTeam(room, preferredTeam = null) {
+    const { alpha, bravo } = this.getTeamCounts(room);
+    const maxPerTeam = Math.ceil((MATCH_CONFIG.MAX_PLAYERS || 12) / 2);
+    const cleanPref = sanitizeTeam(preferredTeam);
+    if (cleanPref === 'alpha' && alpha < maxPerTeam) return 'alpha';
+    if (cleanPref === 'bravo' && bravo < maxPerTeam) return 'bravo';
+    return alpha <= bravo ? 'alpha' : 'bravo';
+  }
+
+  pickSafeSpawnPoint(room, excludeId = null, forcedTeam = null) {
     const now = Date.now();
     const mapCfg = getMapConfig(room?.mapId);
-    const spawnPoints = mapCfg.spawnPoints || [];
+    const respawningPlayer = excludeId ? room?.players?.get(excludeId) : null;
+    const isTdm = room?.gameMode === 'tdm';
+    const teamKey = isTdm ? (sanitizeTeam(forcedTeam || respawningPlayer?.team) || 'alpha') : null;
+    const teamSpawnList = isTdm && teamKey && Array.isArray(mapCfg.teamSpawns?.[teamKey]) && mapCfg.teamSpawns[teamKey].length > 0
+      ? mapCfg.teamSpawns[teamKey]
+      : null;
+    const spawnPoints = teamSpawnList || mapCfg.spawnPoints || [];
     const obstacles = mapCfg.obstacles || [];
     const arenaHalf = (mapCfg.arenaHalfSize || MATCH_CONFIG.ARENA_HALF_SIZE) - 2.0;
-    const minClearance = MATCH_CONFIG.SPAWN_MIN_CLEARANCE || 6.0;
+    const minClearance = teamSpawnList ? 3.5 : (MATCH_CONFIG.SPAWN_MIN_CLEARANCE || 6.0);
     const densityRadius = MATCH_CONFIG.SPAWN_DENSITY_RADIUS || 36.0;
     const recentWindowMs = MATCH_CONFIG.SPAWN_RECENT_COOLDOWN_MS || 4500;
 
@@ -434,10 +485,9 @@ export class RoomManager {
       aliveOthers.push(other);
     }
 
-    const respawningPlayer = excludeId ? room.players.get(excludeId) : null;
     const lastDeathX = respawningPlayer?.lastDeathX;
     const lastDeathZ = respawningPlayer?.lastDeathZ;
-    const hasDeathPos = Number.isFinite(lastDeathX) && Number.isFinite(lastDeathZ);
+    const hasDeathPos = !teamSpawnList && Number.isFinite(lastDeathX) && Number.isFinite(lastDeathZ);
 
     // Evaluate each candidate spawn point:
     // 1) Never overlap other players or recently used spawn points (hard clearance check)
@@ -460,17 +510,20 @@ export class RoomManager {
         const other = aliveOthers[j];
         const d = Math.hypot(other.x - sp.x, other.z - sp.z);
         if (d < minDist) minDist = d;
-        if (d < 18.0) closeCount++;
-        if (d < densityRadius) zoneCount++;
-        if (d < 48.0) {
-          const weight = 1 - d / 48.0;
-          crowdingLoad += weight * weight;
-        }
-        if (d < 65.0) {
-          const otherEye = { x: other.x, y: (other.y || 0) + 1.5, z: other.z };
-          if (hasLineOfSight(spEye, otherEye, obstacles)) {
-            losCount++;
-            if (d < minLosDist) minLosDist = d;
+        const isEnemy = !isTdm || !other.team || other.team !== teamKey;
+        if (isEnemy) {
+          if (d < 18.0) closeCount++;
+          if (d < densityRadius) zoneCount++;
+          if (d < 48.0) {
+            const weight = 1 - d / 48.0;
+            crowdingLoad += weight * weight;
+          }
+          if (d < 65.0) {
+            const otherEye = { x: other.x, y: (other.y || 0) + 1.5, z: other.z };
+            if (hasLineOfSight(spEye, otherEye, obstacles)) {
+              losCount++;
+              if (d < minLosDist) minLosDist = d;
+            }
           }
         }
       }
@@ -487,7 +540,7 @@ export class RoomManager {
       }
 
       const isOccupiedByPlayer = minDist < minClearance;
-      const isRecentlyUsed = minRecentDist < 4.5;
+      const isRecentlyUsed = minRecentDist < (teamSpawnList ? 2.8 : 4.5);
 
       let score = 0;
       if (isOccupiedByPlayer) {
@@ -520,7 +573,7 @@ export class RoomManager {
         }
       }
 
-      // Distance bonus from the nearest enemy (capped so density remains dominant)
+      // Distance bonus from the nearest player (capped so density remains dominant)
       const effectiveMinDist = minDist === Infinity ? 60.0 : Math.min(minDist, 56.0);
       score += effectiveMinDist * 1.65;
 
@@ -532,7 +585,7 @@ export class RoomManager {
 
     scoredCandidates.sort((a, b) => b.score - a.score);
     const bestCandidate = scoredCandidates[0] || {
-      sp: { x: 0, y: 0.1, z: -50, yaw: Math.PI }
+      sp: { x: 0, y: 0.1, z: teamKey === 'bravo' ? 50 : -50, yaw: teamKey === 'bravo' ? 0 : Math.PI }
     };
     const baseSp = bestCandidate.sp;
 
@@ -543,6 +596,7 @@ export class RoomManager {
 
     const isPositionSafeAndUnstacked = (cx, cz, minSep = 3.2) => {
       if (Math.abs(cx) > arenaHalf || Math.abs(cz) > arenaHalf) return false;
+      if (teamSpawnList && Math.abs(cz - baseSp.z) > 4.2) return false;
       if (!isPointClearOfObstacles(cx, cz, 0.85, obstacles, footY)) return false;
       for (let j = 0; j < aliveOthers.length; j++) {
         if (Math.hypot(aliveOthers[j].x - cx, aliveOthers[j].z - cz) < minSep) {
@@ -594,7 +648,7 @@ export class RoomManager {
       x: finalX,
       y: footY,
       z: finalZ,
-      yaw: baseSp.yaw ?? Math.atan2(finalX, finalZ)
+      yaw: baseSp.yaw ?? (teamKey === 'alpha' ? Math.PI : teamKey === 'bravo' ? 0 : Math.atan2(finalX, finalZ))
     };
 
     room.recentSpawns.push({
@@ -612,21 +666,22 @@ export class RoomManager {
     return chosen;
   }
 
-  addHumanPlayer(socket, { name, roomCode, mode, weapon, loadout, mapId }) {
+  addHumanPlayer(socket, { name, roomCode, mode, weapon, loadout, mapId, gameMode, team } = {}) {
     installSmartVolatile(socket);
     const cleanName = sanitizeName(name);
     const requestedCode = sanitizeRoomCode(roomCode);
     const cleanLoadout = sanitizeLoadout(loadout, weapon);
-    const initialWeapon = WEAPONS[weapon] ? weapon : cleanLoadout.primary;
+    const initialWeapon = this.isWeaponAllowed({ loadout: cleanLoadout }, weapon) ? weapon : cleanLoadout.primary;
     const cleanMapId = sanitizeMapId(mapId);
+    const cleanGameMode = sanitizeGameMode(gameMode);
 
     let room;
     if (requestedCode) {
-      room = this.getOrCreateRoomByCode(requestedCode, mode === 'public', cleanMapId);
+      room = this.getOrCreateRoomByCode(requestedCode, mode === 'public', cleanMapId, cleanGameMode);
     } else if (mode === 'private') {
-      room = this.createRoom(generateRoomCode(this.rooms), false, cleanMapId);
+      room = this.createRoom(generateRoomCode(this.rooms), false, cleanMapId, cleanGameMode);
     } else {
-      room = this.findOrCreatePublicRoom(cleanMapId);
+      room = this.findOrCreatePublicRoom(cleanMapId, cleanGameMode);
     }
 
     // Check human capacity
@@ -634,24 +689,39 @@ export class RoomManager {
       return { error: 'Phòng này đã đủ 12 người chơi thật! Vui lòng tạo phòng mới hoặc vào phòng chung.' };
     }
 
-    // Update the map if this player is the first human in the room
+    // Update the map & gameMode if this player is the first human in the room
     if (this.getHumanCount(room) === 0) {
-      if (mapId && MAPS[mapId] && room.mapId !== mapId) {
+      if (mapId && typeof mapId === 'string' && Object.hasOwn(MAPS, mapId) && room.mapId !== mapId) {
+        const nextPickups = this.createPickupsForMap(mapId);
         room.mapId = mapId;
-        room.pickups = this.createPickupsForMap(mapId);
+        room.pickups = nextPickups;
+      }
+      if (gameMode !== undefined && room.gameMode !== cleanGameMode) {
+        room.gameMode = cleanGameMode;
+        room.killLimit = cleanGameMode === 'tdm' ? (MATCH_CONFIG.TDM_KILL_LIMIT || 30) : (MATCH_CONFIG.KILL_LIMIT || 20);
+        room.teamScores = { alpha: 0, bravo: 0 };
+        room.state = cleanGameMode === 'tdm' ? 'WAITING' : 'PLAYING';
       }
     }
 
     const now = Date.now();
     const protectionMs = MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500;
-    const spawn = this.pickSafeSpawnPoint(room, socket.id);
+    const isTdm = room.gameMode === 'tdm';
+    const assignedTeam = isTdm ? this.assignBalancedTeam(room, team) : null;
+    const isWaiting = isTdm && room.state === 'WAITING';
+    const spawn = this.pickSafeSpawnPoint(room, socket.id, assignedTeam);
     const colorIdx = room.players.size % PLAYER_COLORS.length;
+    const playerColor = isTdm
+      ? (assignedTeam === 'bravo' ? 0xef4444 : 0x38bdf8)
+      : PLAYER_COLORS[colorIdx];
     const weaponCfg = WEAPONS[initialWeapon];
 
     const player = {
       id: socket.id,
       name: cleanName,
-      color: PLAYER_COLORS[colorIdx],
+      color: playerColor,
+      team: assignedTeam,
+      ready: isTdm ? !isWaiting : true,
       x: spawn.x,
       y: spawn.y || 0,
       z: spawn.z,
@@ -675,7 +745,7 @@ export class RoomManager {
       reserveAmmo: weaponCfg.infiniteAmmo ? 0 : (weaponCfg.reserveAmmo ?? weaponCfg.magSize * 3),
       grenades: 1,
       hp: MATCH_CONFIG.MAX_HP,
-      alive: true,
+      alive: !isWaiting,
       kills: 0,
       deaths: 0,
       streak: 0,
@@ -685,8 +755,8 @@ export class RoomManager {
       reloadStartedAt: 0,
       reloadWeapon: null,
       nextShellAt: 0,
-      respawnAt: 0,
-      invulnerableUntil: now + protectionMs,
+      respawnAt: isWaiting ? Infinity : 0,
+      invulnerableUntil: isWaiting ? 0 : (now + protectionMs),
       lastDeathX: null,
       lastDeathZ: null,
       // Shots in the command stream (see processFireCommand): `ss` bookkeeping + the owner-only spread seed
@@ -698,7 +768,8 @@ export class RoomManager {
       _staticMeta: {
         id: socket.id,
         name: cleanName,
-        color: PLAYER_COLORS[colorIdx]
+        color: playerColor,
+        team: assignedTeam
       }
     };
 
@@ -751,6 +822,137 @@ export class RoomManager {
     return Boolean(room && playerId && room.hostId === playerId);
   }
 
+  canStartTeamMatch(room) {
+    if (!room || room.gameMode !== 'tdm' || room.state !== 'WAITING') return false;
+    const total = room.players.size;
+    if (total === 0) return false;
+    if (total === 1) return true; // Allow host to test solo if alone in room
+    const { alpha, bravo } = this.getTeamCounts(room);
+    return alpha >= 1 && bravo >= 1;
+  }
+
+  shouldAutoStartTeamMatch(room) {
+    if (!room || room.gameMode !== 'tdm' || room.state !== 'WAITING') return false;
+    if (room.players.size < 2) return false;
+    const { alpha, bravo } = this.getTeamCounts(room);
+    if (alpha < 1 || bravo < 1) return false;
+    for (const p of room.players.values()) {
+      if (!p.ready) return false;
+    }
+    return true;
+  }
+
+  getTeamLobbyState(room) {
+    if (!room) return null;
+    const mapCfg = getMapConfig(room.mapId);
+    const { alpha, bravo } = this.getTeamCounts(room);
+    return {
+      roomCode: room.code,
+      gameMode: room.gameMode || 'ffa',
+      state: room.state,
+      mapId: room.mapId,
+      mapName: mapCfg.name,
+      hostId: room.hostId,
+      killLimit: room.killLimit || (room.gameMode === 'tdm' ? (MATCH_CONFIG.TDM_KILL_LIMIT || 30) : (MATCH_CONFIG.KILL_LIMIT || 20)),
+      teamScores: room.teamScores || { alpha: 0, bravo: 0 },
+      teamCounts: { alpha, bravo },
+      canStart: this.canStartTeamMatch(room),
+      players: this.serializePlayers(room)
+    };
+  }
+
+  broadcastTeamLobby(room) {
+    if (!room || room.gameMode !== 'tdm') return null;
+    const payload = this.getTeamLobbyState(room);
+    this.io.to(room.code).emit('teamLobbyState', payload);
+    return payload;
+  }
+
+  handleSwitchTeam(room, player, payload = {}) {
+    if (!room || !player || room.gameMode !== 'tdm') {
+      return { ok: false, error: 'invalid_mode', message: 'Chế độ chơi hiện tại không hỗ trợ đổi phe.' };
+    }
+    if (room.state !== 'WAITING') {
+      return {
+        ok: false,
+        error: 'match_in_progress',
+        message: 'Chỉ có thể đổi phe tại phòng chờ trước khi trận đấu bắt đầu!'
+      };
+    }
+    const targetTeam = sanitizeTeam(payload?.team) || (player.team === 'alpha' ? 'bravo' : 'alpha');
+    if (targetTeam === player.team) {
+      return { ok: true, team: player.team };
+    }
+
+    const counts = this.getTeamCounts(room);
+    const maxPerTeam = Math.ceil((MATCH_CONFIG.MAX_PLAYERS || 12) / 2);
+    if ((counts[targetTeam] || 0) >= maxPerTeam) {
+      return {
+        ok: false,
+        error: 'team_full',
+        message: 'Phe này đã đầy (tối đa 6 người mỗi đội)!'
+      };
+    }
+
+    player.team = targetTeam;
+    player.color = targetTeam === 'bravo' ? 0xef4444 : 0x38bdf8;
+    if (player._staticMeta) {
+      player._staticMeta.color = player.color;
+      player._staticMeta.team = targetTeam;
+    }
+
+    player.ready = false;
+    const sp = this.pickSafeSpawnPoint(room, player.id, targetTeam);
+    player.x = sp.x;
+    player.y = sp.y || 0;
+    player.z = sp.z;
+    player.yaw = sp.yaw || 0;
+    this.resetPlayerMovement(player, Date.now());
+    this.broadcastTeamLobby(room);
+
+    return { ok: true, team: player.team };
+  }
+
+  handleSetTeamReady(room, player, payload = {}) {
+    if (!room || !player || room.gameMode !== 'tdm' || room.state !== 'WAITING') {
+      return { ok: false, error: 'invalid_state', message: 'Không thể thay đổi trạng thái sẵn sàng lúc này.' };
+    }
+    player.ready = payload?.ready !== undefined ? Boolean(payload.ready) : !player.ready;
+    this.broadcastTeamLobby(room);
+
+    let started = false;
+    if (this.shouldAutoStartTeamMatch(room)) {
+      this.startNewMatch(room);
+      started = true;
+    }
+    return { ok: true, ready: player.ready, started };
+  }
+
+  handleStartTeamMatch(room, player) {
+    if (!room || !player || room.gameMode !== 'tdm') {
+      return { ok: false, error: 'invalid_mode' };
+    }
+    if (room.state !== 'WAITING') {
+      return { ok: false, error: 'already_started' };
+    }
+    if (!this.isRoomHost(room, player.id)) {
+      return {
+        ok: false,
+        error: 'not_host',
+        message: 'Chỉ chủ phòng mới được bắt đầu trận đấu!'
+      };
+    }
+    if (!this.canStartTeamMatch(room)) {
+      return {
+        ok: false,
+        error: 'unbalanced_teams',
+        message: 'Cần ít nhất 1 người chơi ở mỗi phe (Alpha & Bravo) để bắt đầu!'
+      };
+    }
+    this.startNewMatch(room);
+    return { ok: true, started: true };
+  }
+
   /** Host-only: switch the room's map (emits `mapChanged` itself). Returns { ok, error? }. */
   handleChangeMap(room, player, payload = {}) {
     if (!room || !player) return { ok: false, error: 'invalid' };
@@ -763,7 +965,7 @@ export class RoomManager {
    * A player may only use weapons from their server-side loadout (primary / secondary / melee).
    */
   isWeaponAllowed(player, weaponId) {
-    if (!WEAPONS[weaponId]) return false;
+    if (typeof weaponId !== 'string' || !Object.hasOwn(WEAPONS, weaponId)) return false;
     if (!player) return true;
     const lo = player.loadout;
     return weaponId === lo?.primary || weaponId === lo?.secondary || weaponId === (lo?.melee || 'knife');
@@ -829,8 +1031,9 @@ export class RoomManager {
     const nextMapId = sanitizeMapId(rawMapId);
     if (room.mapId === nextMapId) return;
 
+    const nextPickups = this.createPickupsForMap(nextMapId);
     room.mapId = nextMapId;
-    room.pickups = this.createPickupsForMap(nextMapId);
+    room.pickups = nextPickups;
     room.droppedWeapons = [];
     room.grenades = [];
     room.recentSpawns = [];
@@ -840,10 +1043,22 @@ export class RoomManager {
       p.alive = false;
     }
 
-    // Respawn all players on the new map's spawn points
+    // Respawn all players on the new map's spawn points (or update preview spawn if WAITING)
     const mapCfg = getMapConfig(nextMapId);
+    const isWaiting = room.gameMode === 'tdm' && room.state === 'WAITING';
     for (const p of room.players.values()) {
-      this.respawnPlayer(room, p);
+      if (isWaiting) {
+        const sp = this.pickSafeSpawnPoint(room, p.id, p.team);
+        p.x = sp.x;
+        p.y = sp.y || 0;
+        p.z = sp.z;
+        p.yaw = sp.yaw || 0;
+        p.alive = false;
+        p.respawnAt = Infinity;
+        this.resetPlayerMovement(p, Date.now());
+      } else {
+        this.respawnPlayer(room, p);
+      }
     }
 
     this.io.to(room.code).emit('mapChanged', {
@@ -854,6 +1069,9 @@ export class RoomManager {
       activeGrenades: this.serializeGrenades(room),
       players: this.serializePlayers(room)
     });
+    if (isWaiting) {
+      this.broadcastTeamLobby(room);
+    }
   }
 
   removePlayer(socketId) {
@@ -869,9 +1087,17 @@ export class RoomManager {
 
         if (this.getHumanCount(room) === 0) {
           this.rooms.delete(code);
-        } else if (this.ensureRoomHost(room)) {
-          const host = room.players.get(room.hostId);
-          this.io.to(code).emit('hostChanged', { hostId: room.hostId, name: host?.name || 'Player' });
+        } else {
+          if (this.ensureRoomHost(room)) {
+            const host = room.players.get(room.hostId);
+            this.io.to(code).emit('hostChanged', { hostId: room.hostId, name: host?.name || 'Player' });
+          }
+          if (room.gameMode === 'tdm' && room.state === 'WAITING') {
+            this.broadcastTeamLobby(room);
+            if (this.shouldAutoStartTeamMatch(room)) {
+              this.startNewMatch(room);
+            }
+          }
         }
         return;
       }
@@ -1372,6 +1598,8 @@ export class RoomManager {
     player.vz = state.vz;
     player.crouching = state.crouching;
     player.prone = state.prone;
+    player.sliding = Boolean(state.isSliding);
+    player.isSliding = Boolean(state.isSliding);
     player.yaw = cmd.yaw;
     player.pitch = cmd.pitch;
     player.lean = cmd.lean;
@@ -1646,6 +1874,7 @@ export class RoomManager {
         let bestHit = null;
         for (const candidate of room.players.values()) {
           if (!candidate || !candidate.alive || candidate.id === shooter.id) continue;
+          if (room.gameMode === 'tdm' && shooter.team && candidate.team === shooter.team) continue;
           const hit = this.raycastPlayerPoses(origin, dir, candidate, reach, savedStates);
           if (hit && (!bestHit || hit.distance < bestHit.distance)) {
             bestTarget = candidate;
@@ -1689,7 +1918,8 @@ export class RoomManager {
       weapon: weaponId,
       origin: roundVec(origin, 1000),
       dir: roundVec(dir0 || dirs[0], 10000),
-      hitPoint: roundVec(firstEnd, 1000)
+      hitPoint: roundVec(firstEnd, 1000),
+      isPlayerHit: hits.length > 0
     };
     if (dirs.length > 1) shotEvent.dirs = dirs.map((d) => roundVec(d, 10000));
     this.io.to(room.code).emit('shotFired', shotEvent);
@@ -1982,9 +2212,15 @@ export class RoomManager {
       }
     }
 
-    let eyeX = player.x + rightX * leanVal;
-    let eyeY = Math.max(0.22, (player.y || 0) + eyeH);
-    let eyeZ = player.z + rightZ * leanVal;
+    const serverEyeX = player.x + rightX * leanVal;
+    const serverEyeY = Math.max(0.22, (player.y || 0) + eyeH);
+    const serverEyeZ = player.z + rightZ * leanVal;
+    let eyeX = serverEyeX;
+    let eyeY = serverEyeY;
+    let eyeZ = serverEyeZ;
+
+    const mapCfg = getMapConfig(room.mapId);
+    const obstacles = mapCfg.obstacles || [];
 
     if (
       payload?.origin &&
@@ -1997,15 +2233,22 @@ export class RoomManager {
         payload.origin.y - ((player.y || 0) + eyeH),
         payload.origin.z - player.z
       );
-      if (originDist <= 1.8 && Number.isFinite(originDist)) {
+      const clientOriginY = Math.max(0.22, payload.origin.y);
+      if (
+        originDist <= 1.8 &&
+        Number.isFinite(originDist) &&
+        hasLineOfSight(
+          { x: serverEyeX, y: serverEyeY, z: serverEyeZ },
+          { x: payload.origin.x, y: clientOriginY, z: payload.origin.z },
+          obstacles
+        )
+      ) {
         eyeX = payload.origin.x;
-        eyeY = Math.max(0.22, payload.origin.y);
+        eyeY = clientOriginY;
         eyeZ = payload.origin.z;
       }
     }
 
-    const mapCfg = getMapConfig(room.mapId);
-    const obstacles = mapCfg.obstacles || [];
     const arenaLimit = (mapCfg.arenaHalfSize || MATCH_CONFIG.ARENA_HALF_SIZE) - 0.3;
     const radius = 0.18;
 
@@ -2031,17 +2274,25 @@ export class RoomManager {
     startX = Math.max(-arenaLimit, Math.min(arenaLimit, startX));
     startZ = Math.max(-arenaLimit, Math.min(arenaLimit, startZ));
 
-    const throwSpeed = 19.5;
-    const upwardArc = 4.2;
-    const vx = dirX * throwSpeed + (player.vx || 0) * 0.25;
-    const vy = dirY * throwSpeed + upwardArc;
-    const vz = dirZ * throwSpeed + (player.vz || 0) * 0.25;
-    const fuseMs = 2200;
+    const isOvercooked = Boolean(payload?.overcooked);
+    const throwSpeed = isOvercooked ? 0 : (MATCH_CONFIG.GRENADE_THROW_SPEED || 19.5);
+    const upwardArc = isOvercooked ? 0 : (MATCH_CONFIG.GRENADE_UPWARD_ARC || 4.2);
+    const vx = isOvercooked ? 0 : (dirX * throwSpeed + (player.vx || 0) * 0.25);
+    const vy = isOvercooked ? 0 : (dirY * throwSpeed + upwardArc);
+    const vz = isOvercooked ? 0 : (dirZ * throwSpeed + (player.vz || 0) * 0.25);
+    const defaultFuseMs = MATCH_CONFIG.GRENADE_DEFAULT_THROW_FUSE_MS || 2200;
+    const maxFuseMs = MATCH_CONFIG.GRENADE_FUSE_MS || 3000;
+    const rawFuseMs = typeof payload?.fuseMs === 'number' && Number.isFinite(payload.fuseMs)
+      ? Math.round(payload.fuseMs)
+      : defaultFuseMs;
+    const fuseMs = isOvercooked ? 60 : Math.max(80, Math.min(maxFuseMs, rawFuseMs));
+    const fuseSec = round2(fuseMs / 1000);
 
     const grenade = {
       id: `gren_${now}_${Math.random().toString(36).slice(2, 7)}`,
       ownerId: player.id,
       ownerName: player.name,
+      ownerTeam: player.team || null,
       x: round2(startX),
       y: round2(startY),
       z: round2(startZ),
@@ -2050,7 +2301,7 @@ export class RoomManager {
       vz: round2(vz),
       createdAt: now,
       explodeAt: now + fuseMs,
-      fuseRemaining: 2.2
+      fuseRemaining: fuseSec
     };
 
     room.grenades.push(grenade);
@@ -2061,6 +2312,10 @@ export class RoomManager {
       playerId: player.id,
       grenades: player.grenades
     });
+
+    if (isOvercooked) {
+      this.detonateGrenade(room, grenade, now);
+    }
 
     return grenade;
   }
@@ -2131,17 +2386,19 @@ export class RoomManager {
     const mapCfg = getMapConfig(room.mapId);
     const obstacles = mapCfg.obstacles || [];
     const attacker = room.players.get(grenade.ownerId) || null;
+    const ownerTeam = grenade.ownerTeam || attacker?.team || null;
     const blastOrigin = {
       x: grenade.x,
       y: Math.max(0.35, grenade.y + 0.25),
       z: grenade.z
     };
 
-    // Evaluate enemy targets first, then owner if standing inside blast radius
+    // Evaluate enemy targets first, then owner if standing inside blast radius (no friendly fire on teammates in TDM)
     const candidates = [];
     for (const p of room.players.values()) {
       if (!p || !p.alive) continue;
       if (p.id !== grenade.ownerId) {
+        if (room.gameMode === 'tdm' && ownerTeam && p.team === ownerTeam) continue;
         candidates.push(p);
       }
     }
@@ -2244,10 +2501,15 @@ export class RoomManager {
     victim.lastDeathZ = victim.z;
     victim.respawnAt = Date.now() + MATCH_CONFIG.RESPAWN_DELAY_MS;
 
+    const isTdm = room.gameMode === 'tdm';
     let adrenalineHeal = 0;
-    if (killer && killer.id !== victim.id) {
+    if (killer && killer.id !== victim.id && (!isTdm || !killer.team || killer.team !== victim.team)) {
       killer.kills += 1;
       killer.streak += 1;
+      if (isTdm && (killer.team === 'alpha' || killer.team === 'bravo')) {
+        if (!room.teamScores) room.teamScores = { alpha: 0, bravo: 0 };
+        room.teamScores[killer.team] = (room.teamScores[killer.team] || 0) + 1;
+      }
       if (killer.alive) {
         const prevHp = Number(killer.hp) || 0;
         const maxHp = MATCH_CONFIG.MAX_HP || 100;
@@ -2262,43 +2524,54 @@ export class RoomManager {
       ? 'FRAG GRENADE'
       : (WEAPONS[weaponId]?.name || String(weaponId || 'rifle').toUpperCase());
 
-      this.io.to(room.code).emit('killEvent', {
-        killerId: killer ? killer.id : null,
-        killerName: killer ? killer.name : 'Arena',
-        killerColor: killer ? killer.color : 0xffffff,
-        victimId: victim.id,
-        victimName: victim.name,
-        victimColor: victim.color,
-        weapon: isGrenadeKill ? 'grenade' : resolvedWeaponName,
-        weaponName: resolvedWeaponName,
-        weaponId,
-        isHeadshot: Boolean(isHeadshot),
-        killerStreak: killer ? killer.streak : 0,
-        killerHp: killer ? killer.hp : 0,
-        newKillerHp: killer ? killer.hp : 0,
-        adrenalineHeal,
-        healedHp: adrenalineHeal,
-        healAmount: adrenalineHeal > 0 ? adrenalineHeal : (KILL_ADRENALINE_HEAL || 25),
-        droppedWeapon
-      });
+    this.io.to(room.code).emit('killEvent', {
+      killerId: killer ? killer.id : null,
+      killerName: killer ? killer.name : 'Arena',
+      killerColor: killer ? killer.color : 0xffffff,
+      killerTeam: killer ? (killer.team || null) : null,
+      victimId: victim.id,
+      victimName: victim.name,
+      victimColor: victim.color,
+      victimTeam: victim.team || null,
+      weapon: isGrenadeKill ? 'grenade' : resolvedWeaponName,
+      weaponName: resolvedWeaponName,
+      weaponId,
+      isHeadshot: Boolean(isHeadshot),
+      killerStreak: killer ? killer.streak : 0,
+      killerHp: killer ? killer.hp : 0,
+      newKillerHp: killer ? killer.hp : 0,
+      adrenalineHeal,
+      healedHp: adrenalineHeal,
+      healAmount: adrenalineHeal > 0 ? adrenalineHeal : (KILL_ADRENALINE_HEAL || 25),
+      teamScores: isTdm ? { ...(room.teamScores || { alpha: 0, bravo: 0 }) } : undefined,
+      droppedWeapon
+    });
 
-      if (victim) {
-        this.sendSelfState(victim, Date.now(), true);
-      }
-      if (killer && killer.id !== victim.id && adrenalineHeal > 0) {
-        this.sendSelfState(killer, Date.now(), true);
-      }
+    if (victim) {
+      this.sendSelfState(victim, Date.now(), true);
+    }
+    if (killer && killer.id !== victim.id && adrenalineHeal > 0) {
+      this.sendSelfState(killer, Date.now(), true);
+    }
 
-      // Check win condition (20 kills)
-      if (killer && killer.kills >= MATCH_CONFIG.KILL_LIMIT && room.state === 'PLAYING') {
+    // Check win condition (TDM: 30 team kills; FFA: 20 individual kills)
+    if (room.state === 'PLAYING' && killer && killer.id !== victim.id) {
+      if (isTdm) {
+        const tdmLimit = room.killLimit || MATCH_CONFIG.TDM_KILL_LIMIT || 30;
+        const teamKills = killer.team ? (room.teamScores?.[killer.team] || 0) : 0;
+        if (teamKills >= tdmLimit) {
+          this.endMatch(room, killer, killer.team);
+        }
+      } else if (killer.kills >= (room.killLimit || MATCH_CONFIG.KILL_LIMIT || 20)) {
         this.endMatch(room, killer);
       }
     }
+  }
 
   respawnPlayer(room, player) {
     const now = Date.now();
     const protectionMs = MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500;
-    const sp = this.pickSafeSpawnPoint(room, player.id);
+    const sp = this.pickSafeSpawnPoint(room, player.id, player.team);
     if (player.pendingLoadout) {
       player.loadout = player.pendingLoadout;
       player.savedLoadoutPrimary = player.pendingLoadout.primary;
@@ -2322,6 +2595,8 @@ export class RoomManager {
     player.pitch = 0;
     player.crouching = false;
     player.prone = false;
+    player.sliding = false;
+    player.isSliding = false;
     player.isAiming = false;
     player.lean = 0;
     player.hp = MATCH_CONFIG.MAX_HP;
@@ -2356,6 +2631,7 @@ export class RoomManager {
 
     this.io.to(room.code).emit('playerRespawned', {
       playerId: player.id,
+      team: player.team || null,
       x: player.x,
       y: player.y,
       z: player.z,
@@ -2418,6 +2694,7 @@ export class RoomManager {
         id: p.id,
         name: p.name,
         color: p.color,
+        team: p.team || null,
         kills: p.kills,
         deaths: p.deaths,
         streak: p.streak
@@ -2428,25 +2705,66 @@ export class RoomManager {
       });
   }
 
-  endMatch(room, explicitWinner = null) {
+  endMatch(room, explicitWinner = null, explicitWinningTeam = null) {
     if (room.state === 'ENDED') return;
     room.state = 'ENDED';
     const now = Date.now();
     room.nextMatchAt = now + MATCH_CONFIG.INTERMISSION_SEC * 1000;
 
     const leaderboard = this.getLeaderboard(room);
-    const winner = explicitWinner
-      ? {
-          id: explicitWinner.id,
-          name: explicitWinner.name,
-          kills: explicitWinner.kills,
-          deaths: explicitWinner.deaths,
-          color: explicitWinner.color
-        }
-      : leaderboard[0] || { name: 'Draw', kills: 0, deaths: 0 };
+    const isTdm = room.gameMode === 'tdm';
+    let winner;
+    let winningTeam = null;
+
+    if (isTdm) {
+      const alphaKills = room.teamScores?.alpha || 0;
+      const bravoKills = room.teamScores?.bravo || 0;
+      winningTeam = explicitWinningTeam || (alphaKills > bravoKills ? 'alpha' : bravoKills > alphaKills ? 'bravo' : 'draw');
+      if (winningTeam === 'alpha') {
+        winner = {
+          id: 'team_alpha',
+          name: 'PHE XANH (ALPHA)',
+          team: 'alpha',
+          kills: alphaKills,
+          deaths: bravoKills,
+          color: 0x38bdf8
+        };
+      } else if (winningTeam === 'bravo') {
+        winner = {
+          id: 'team_bravo',
+          name: 'PHE ĐỎ (BRAVO)',
+          team: 'bravo',
+          kills: bravoKills,
+          deaths: alphaKills,
+          color: 0xef4444
+        };
+      } else {
+        winner = {
+          id: 'team_draw',
+          name: 'HÒA (DRAW)',
+          team: 'draw',
+          kills: alphaKills,
+          deaths: bravoKills,
+          color: 0x94a3b8
+        };
+      }
+    } else {
+      winner = explicitWinner
+        ? {
+            id: explicitWinner.id,
+            name: explicitWinner.name,
+            kills: explicitWinner.kills,
+            deaths: explicitWinner.deaths,
+            color: explicitWinner.color
+          }
+        : leaderboard[0] || { name: 'Draw', kills: 0, deaths: 0 };
+    }
 
     this.io.to(room.code).emit('matchEnded', {
       winner,
+      winningTeam,
+      gameMode: room.gameMode || 'ffa',
+      teamScores: isTdm ? { ...(room.teamScores || { alpha: 0, bravo: 0 }) } : undefined,
       leaderboard,
       nextMatchIn: MATCH_CONFIG.INTERMISSION_SEC
     });
@@ -2454,10 +2772,13 @@ export class RoomManager {
 
   startNewMatch(room) {
     const now = Date.now();
+    const isTdm = room.gameMode === 'tdm';
     room.state = 'PLAYING';
     room.matchStartedAt = now;
     room.matchEndsAt = now + MATCH_CONFIG.MATCH_DURATION_SEC * 1000;
     room.nextMatchAt = 0;
+    room.killLimit = isTdm ? (MATCH_CONFIG.TDM_KILL_LIMIT || 30) : (MATCH_CONFIG.KILL_LIMIT || 20);
+    room.teamScores = { alpha: 0, bravo: 0 };
     room.droppedWeapons = [];
     room.grenades = [];
     room.recentSpawns = [];
@@ -2471,6 +2792,7 @@ export class RoomManager {
     // Mark all players not yet placed so sequential respawn assigns non-overlapping points
     for (const p of room.players.values()) {
       p.alive = false;
+      p.ready = true;
       p.lastDeathX = null;
       p.lastDeathZ = null;
     }
@@ -2485,8 +2807,11 @@ export class RoomManager {
 
     this.io.to(room.code).emit('matchStarted', {
       mapId: room.mapId,
+      gameMode: room.gameMode || 'ffa',
+      state: room.state,
       timeRemaining: MATCH_CONFIG.MATCH_DURATION_SEC,
-      killLimit: MATCH_CONFIG.KILL_LIMIT,
+      killLimit: room.killLimit,
+      teamScores: isTdm ? { ...room.teamScores } : undefined,
       pickups: room.pickups,
       droppedWeapons: room.droppedWeapons,
       activeGrenades: this.serializeGrenades(room),
@@ -2532,11 +2857,12 @@ export class RoomManager {
         p.vz = 0;
       }
       let meta = p._staticMeta;
-      if (!meta || meta.id !== p.id || meta.name !== p.name || meta.color !== p.color) {
+      if (!meta || meta.id !== p.id || meta.name !== p.name || meta.color !== p.color || meta.team !== p.team) {
         meta = {
           id: p.id,
           name: p.name,
-          color: p.color
+          color: p.color,
+          team: p.team || null
         };
         p._staticMeta = meta;
       }
@@ -2545,6 +2871,8 @@ export class RoomManager {
         id: meta.id,
         name: meta.name,
         color: meta.color,
+        team: meta.team,
+        ready: Boolean(p.ready),
         x: round2(p.x),
         y: round2(p.y),
         z: round2(p.z),
@@ -2555,6 +2883,7 @@ export class RoomManager {
         pitch: round2(p.pitch),
         crouching: Boolean(p.crouching),
         prone: Boolean(p.prone),
+        sliding: Boolean(p.sliding || p.isSliding || p.moveState?.isSliding),
         lean: round2(p.lean),
         weapon: p.weapon,
         ammo: Number.isFinite(p.ammo) ? p.ammo : 0,
@@ -2588,76 +2917,88 @@ export class RoomManager {
     this._lastStateStampMs = stateStampMs;
 
     for (const room of this.rooms.values()) {
-      // Skip idle rooms with zero human players to save 100% CPU when no match is active
-      if (this.getHumanCount(room) === 0) continue;
-
-      if (room.state === 'ENDED') {
-        if (now >= room.nextMatchAt) {
-          this.startNewMatch(room);
-        }
-        continue;
-      }
-
-      // Check round time limit
-      const timeRemaining = Math.max(0, Math.ceil((room.matchEndsAt - now) / 1000));
-      if (timeRemaining <= 0) {
-        this.endMatch(room);
-        continue;
-      }
-
-      this._deferSelfState = true;
       try {
-        // Respawn human players whose 3s respawn delay has elapsed & advance reloads
-        for (const p of room.players.values()) {
-          if (!p.alive && now >= p.respawnAt) {
-            this.respawnPlayer(room, p);
-          } else if (p.alive && p.reloadingUntil) {
-            this.syncPlayerReloadState(p, now);
+        // Skip idle rooms with zero human players to save 100% CPU when no match is active
+        if (this.getHumanCount(room) === 0) continue;
+
+        if (room.state === 'WAITING') {
+          continue;
+        }
+
+        if (room.state === 'ENDED') {
+          if (now >= room.nextMatchAt) {
+            this.startNewMatch(room);
           }
-          // Authoritative movement: simulate the player's queued input commands (time-credit limited) and ack them
-          this.processPlayerInputs(room, p, now);
+          continue;
         }
 
-        // Record lag compensation position snapshots for all alive players
-        recordRoomSnapshots(room, now);
+        // Check round time limit
+        const timeRemaining = Math.max(0, Math.ceil((room.matchEndsAt - now) / 1000));
+        if (timeRemaining <= 0) {
+          this.endMatch(room);
+          continue;
+        }
 
-        // Update active Frag Grenades physics & 2.2s fuse detonation
-        this.updateGrenades(room, dt, now);
+        this._deferSelfState = true;
+        try {
+          // Respawn human players whose 3s respawn delay has elapsed & advance reloads
+          for (const p of room.players.values()) {
+            if (!p.alive && now >= p.respawnAt) {
+              this.respawnPlayer(room, p);
+            } else if (p.alive && p.reloadingUntil) {
+              this.syncPlayerReloadState(p, now);
+            }
+            // Authoritative movement: simulate the player's queued input commands (time-credit limited) and ack them
+            this.processPlayerInputs(room, p, now);
+          }
 
-        // Update Health Pack pickups & 5s Dropped Weapons expiration
-        this.updateHealthPacks(room, now);
-        this.updateDroppedWeapons(room, now);
-      } finally {
+          // Record lag compensation position snapshots for all alive players
+          recordRoomSnapshots(room, now);
+
+          // Update active Frag Grenades physics & 2.2s fuse detonation
+          this.updateGrenades(room, dt, now);
+
+          // Update Health Pack pickups & 5s Dropped Weapons expiration
+          this.updateHealthPacks(room, now);
+          this.updateDroppedWeapons(room, now);
+        } finally {
+          this._deferSelfState = false;
+        }
+
+        // Owner-only `selfState` reconciliation: immediate on state change (coalesced to at most 1 per tick), or periodic (~8.3 Hz)
+        for (const p of room.players.values()) {
+          if (
+            p._selfStateDirty ||
+            this._selfStateSignature(p) !== p._selfStateSig ||
+            now - (p.lastSelfStateAt || 0) >= SELF_STATE_INTERVAL_MS
+          ) {
+            this.sendSelfState(p, now, Boolean(p._selfStateReliable));
+          }
+        }
+
+        // Broadcast compact state snapshot (use volatile on Socket.IO to prevent TCP bufferbloat)
+        room.stateSeq = ((room.stateSeq || 0) + 1) | 0;
+        const roomTarget = this.io.to(room.code);
+        const emitter = process.env.SV_RELIABLE ? roomTarget : (roomTarget.volatile || roomTarget);
+        const statePayload = {
+          seq: room.stateSeq,
+          t: stateStampMs,
+          gameMode: room.gameMode || 'ffa',
+          state: room.state,
+          teamScores: room.gameMode === 'tdm' ? room.teamScores : undefined,
+          timeRemaining,
+          pickups: room.pickups,
+          droppedWeapons: room.droppedWeapons,
+          activeGrenades: this.serializeGrenades(room),
+          players: this.serializePlayers(room)
+        };
+        emitter.emit('stateUpdate', statePayload);
+        // size sample for /api/netstats (about once per second per room; the emit itself already encoded the packet)
+        if (room.stateSeq % 25 === 0) this.netStats.recordSnapshotBytes(JSON.stringify(statePayload).length);
+      } catch (err) {
         this._deferSelfState = false;
+        console.error(`[tick] error in room ${room?.code}:`, err);
       }
-
-      // Owner-only `selfState` reconciliation: immediate on state change (coalesced to at most 1 per tick), or periodic (~8.3 Hz)
-      for (const p of room.players.values()) {
-        if (
-          p._selfStateDirty ||
-          this._selfStateSignature(p) !== p._selfStateSig ||
-          now - (p.lastSelfStateAt || 0) >= SELF_STATE_INTERVAL_MS
-        ) {
-          this.sendSelfState(p, now, Boolean(p._selfStateReliable));
-        }
-      }
-
-      // Broadcast compact state snapshot (use volatile on Socket.IO to prevent TCP bufferbloat)
-      room.stateSeq = ((room.stateSeq || 0) + 1) | 0;
-      const roomTarget = this.io.to(room.code);
-      const emitter = process.env.SV_RELIABLE ? roomTarget : (roomTarget.volatile || roomTarget);
-      const statePayload = {
-        seq: room.stateSeq,
-        t: stateStampMs,
-        timeRemaining,
-        pickups: room.pickups,
-        droppedWeapons: room.droppedWeapons,
-        activeGrenades: this.serializeGrenades(room),
-        players: this.serializePlayers(room)
-      };
-      emitter.emit('stateUpdate', statePayload);
-      // size sample for /api/netstats (about once per second per room; the emit itself already encoded the packet)
-      if (room.stateSeq % 25 === 0) this.netStats.recordSnapshotBytes(JSON.stringify(statePayload).length);
     }
   }
 
@@ -2671,6 +3012,7 @@ export class RoomManager {
   getPublicRoomsSummary() {
     const list = [];
     for (const room of this.rooms.values()) {
+      if (!room.isPublic) continue;
       const humans = this.getHumanCount(room);
       const mapCfg = getMapConfig(room.mapId);
       list.push({
@@ -2678,11 +3020,15 @@ export class RoomManager {
         isPublic: room.isPublic,
         mapId: room.mapId,
         mapName: mapCfg.name,
+        gameMode: room.gameMode || 'ffa',
+        teamScores: room.gameMode === 'tdm' ? room.teamScores : undefined,
         humans,
         total: humans,
         maxPlayers: MATCH_CONFIG.MAX_PLAYERS,
         state: room.state,
-        timeRemaining: Math.max(0, Math.ceil((room.matchEndsAt - Date.now()) / 1000))
+        timeRemaining: room.state === 'WAITING'
+          ? MATCH_CONFIG.MATCH_DURATION_SEC
+          : Math.max(0, Math.ceil((room.matchEndsAt - Date.now()) / 1000))
       });
     }
     return list;

@@ -39,13 +39,13 @@ export const ZONE = Object.freeze({ HEAD: 'head', BODY: 'body', LEG: 'leg' });
  * `torso` box, so a ray through an arm reports the torso (zone `body`).
  */
 export const HITBOX_PART_DEFS = Object.freeze([
-  Object.freeze({ id: 'head',    zone: 'head', bone: 'head',    size: Object.freeze([0.42, 0.48, 0.42]), offset: Object.freeze([0, 0.17, -0.01]) }),
-  Object.freeze({ id: 'torso',   zone: 'body', bone: 'chest',   size: Object.freeze([0.72, 0.66, 0.52]), offset: Object.freeze([0, 0.31, -0.10]) }),
-  Object.freeze({ id: 'pelvis',  zone: 'body', bone: 'pelvis',  size: Object.freeze([0.50, 0.26, 0.38]), offset: Object.freeze([0, 0, 0]) }),
-  Object.freeze({ id: 'thigh_l', zone: 'leg',  bone: 'hip_l',   size: Object.freeze([0.26, 0.42, 0.26]), offset: Object.freeze([0, -0.19, 0]) }),
-  Object.freeze({ id: 'thigh_r', zone: 'leg',  bone: 'hip_r',   size: Object.freeze([0.26, 0.42, 0.26]), offset: Object.freeze([0, -0.19, 0]) }),
-  Object.freeze({ id: 'shin_l',  zone: 'leg',  bone: 'knee_l',  size: Object.freeze([0.22, 0.44, 0.28]), offset: Object.freeze([0, -0.21, -0.02]) }),
-  Object.freeze({ id: 'shin_r',  zone: 'leg',  bone: 'knee_r',  size: Object.freeze([0.22, 0.44, 0.28]), offset: Object.freeze([0, -0.21, -0.02]) })
+  Object.freeze({ id: 'head',    zone: 'head', bone: 'head',    size: Object.freeze([0.48, 0.54, 0.48]), offset: Object.freeze([0, 0.20, -0.01]) }),
+  Object.freeze({ id: 'torso',   zone: 'body', bone: 'chest',   size: Object.freeze([0.80, 0.66, 0.52]), offset: Object.freeze([0, 0.31, -0.10]) }),
+  Object.freeze({ id: 'pelvis',  zone: 'body', bone: 'pelvis',  size: Object.freeze([0.56, 0.26, 0.40]), offset: Object.freeze([0, 0, 0]) }),
+  Object.freeze({ id: 'thigh_l', zone: 'leg',  bone: 'hip_l',   size: Object.freeze([0.30, 0.42, 0.30]), offset: Object.freeze([0, -0.19, 0]) }),
+  Object.freeze({ id: 'thigh_r', zone: 'leg',  bone: 'hip_r',   size: Object.freeze([0.30, 0.42, 0.30]), offset: Object.freeze([0, -0.19, 0]) }),
+  Object.freeze({ id: 'shin_l',  zone: 'leg',  bone: 'knee_l',  size: Object.freeze([0.26, 0.44, 0.30]), offset: Object.freeze([0, -0.21, -0.02]) }),
+  Object.freeze({ id: 'shin_r',  zone: 'leg',  bone: 'knee_r',  size: Object.freeze([0.26, 0.44, 0.30]), offset: Object.freeze([0, -0.21, -0.02]) })
 ]);
 
 export const HITBOX_PART_IDS = Object.freeze(HITBOX_PART_DEFS.map((d) => d.id));
@@ -57,8 +57,8 @@ export const RIG = Object.freeze({
   CROUCH_HIP_DROP: 0.25,
   PRONE_HIP_DROP: 0.56,
   SPINE_Y: 0.10,               // upperBodyGroup above the pelvis
-  LEAN_SHIFT: 0.18,            // upperBodyGroup.position.x = lean * LEAN_SHIFT
-  LEAN_ROLL: 0.28,             // upperBodyGroup.rotation.z = -lean * LEAN_ROLL
+  LEAN_SHIFT: 0.30,            // upperBodyGroup.position.x = lean * LEAN_SHIFT
+  LEAN_ROLL: 0.38,             // upperBodyGroup.rotation.z = -lean * LEAN_ROLL
   HEAD_Y: 0.64,                // headGroup above the chest
   KNEE_Y: -0.38,               // knee pivot below the hip
   TORSO_PITCH_CROUCH: -0.18,

@@ -954,7 +954,7 @@ export class SoundEffects {
     osc.stop(now + 0.06);
   }
 
-  playFootstep(isSprint = false) {
+  playFootstep(isSprint = false, isCrouch = false) {
     const ctx = this.ensureContext();
     if (!ctx || !this.noiseBuffer) return;
     const now = ctx.currentTime;
@@ -963,10 +963,10 @@ export class SoundEffects {
     noise.buffer = this.noiseBuffer;
     const filter = ctx.createBiquadFilter();
     filter.type = 'lowpass';
-    filter.frequency.setValueAtTime(isSprint ? 360 : 250, now);
+    filter.frequency.setValueAtTime(isSprint ? 380 : isCrouch ? 175 : 250, now);
 
     const gain = ctx.createGain();
-    const vol = isSprint ? 0.11 : 0.065;
+    const vol = isSprint ? 0.115 : isCrouch ? 0.032 : 0.065;
     gain.gain.setValueAtTime(vol, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.065);
 
@@ -1078,15 +1078,16 @@ export class SoundEffects {
     osc.stop(now + 0.07);
   }
 
-  playSpatialFootstep(listener, sourcePos, isSprinting = false) {
-    const spatial = this.computeSpatialParams(listener, sourcePos, 24);
+  playSpatialFootstep(listener, sourcePos, isSprinting = false, isCrouching = false) {
+    const maxDist = isCrouching ? 7.5 : isSprinting ? 28 : 24;
+    const spatial = this.computeSpatialParams(listener, sourcePos, maxDist);
     if (spatial.outOfRange || spatial.gain <= 0.001) return null;
 
     const ctx = this.ensureContext();
     if (!ctx) return null;
     const now = ctx.currentTime;
 
-    const baseVol = isSprinting ? 0.30 : 0.18;
+    const baseVol = isCrouching ? 0.068 : isSprinting ? 0.34 : 0.18;
     const stepGain = baseVol * spatial.gain;
     const chain = this.createSpatialChain(ctx, spatial.pan, stepGain, now, spatial.muffledFreq);
 
@@ -1094,11 +1095,11 @@ export class SoundEffects {
     const thudOsc = ctx.createOscillator();
     const thudGain = ctx.createGain();
     thudOsc.type = 'sine';
-    const startFreq = isSprinting ? 148 : 116;
-    const dur = isSprinting ? 0.08 : 0.07;
+    const startFreq = isCrouching ? 88 : isSprinting ? 152 : 116;
+    const dur = isCrouching ? 0.055 : isSprinting ? 0.082 : 0.07;
     thudOsc.frequency.setValueAtTime(startFreq, now);
-    thudOsc.frequency.exponentialRampToValueAtTime(38, now + dur);
-    thudGain.gain.setValueAtTime(0.68, now);
+    thudOsc.frequency.exponentialRampToValueAtTime(36, now + dur);
+    thudGain.gain.setValueAtTime(isCrouching ? 0.42 : 0.68, now);
     thudGain.gain.exponentialRampToValueAtTime(0.001, now + dur + 0.008);
     thudOsc.connect(thudGain);
     thudGain.connect(chain.input);
@@ -1111,12 +1112,12 @@ export class SoundEffects {
       noise.buffer = this.noiseBuffer;
       const filter = ctx.createBiquadFilter();
       filter.type = 'lowpass';
-      const cutoff = Math.min(spatial.muffledFreq, isSprinting ? 520 : 340);
+      const cutoff = Math.min(spatial.muffledFreq, isCrouching ? 210 : isSprinting ? 540 : 340);
       filter.frequency.value = cutoff;
       filter.frequency.setValueAtTime?.(cutoff, now);
 
       const noiseGain = ctx.createGain();
-      noiseGain.gain.setValueAtTime(isSprinting ? 0.58 : 0.42, now);
+      noiseGain.gain.setValueAtTime(isCrouching ? 0.28 : isSprinting ? 0.60 : 0.42, now);
       noiseGain.gain.exponentialRampToValueAtTime(0.001, now + dur);
 
       noise.connect(filter);

@@ -3,6 +3,7 @@
 export const MATCH_CONFIG = {
   MAX_PLAYERS: 12,
   KILL_LIMIT: 20,
+  TDM_KILL_LIMIT: 30,
   MATCH_DURATION_SEC: 300, // 5 minutes
   RESPAWN_DELAY_MS: 3000,  // 3 seconds
   SPAWN_PROTECTION_MS: 1500, // 1.5 seconds of invincibility after spawn/respawn (ends early when the player fires/throws)
@@ -25,13 +26,13 @@ export const MATCH_CONFIG = {
   PLAYER_RADIUS: 0.45,
   ARENA_HALF_SIZE: 60, // Default 120x120m arena (expanded from 80x80m)
   // Tuned tactical movement speeds (Walk, Sprint, Crouch, Prone, Slide & Q/E Lean)
-  WALK_SPEED: 6.2,
-  SPRINT_SPEED: 8.6,
-  CROUCH_SPEED: 3.4,
-  PRONE_SPEED: 2.0,
-  ADS_SPEED: 4.0,
-  SLIDE_INITIAL_SPEED: 11.2,
-  SLIDE_MIN_SPEED: 4.5,
+  WALK_SPEED: 5.0,
+  SPRINT_SPEED: 6.8,
+  CROUCH_SPEED: 2.75,
+  PRONE_SPEED: 1.6,
+  ADS_SPEED: 3.2,
+  SLIDE_INITIAL_SPEED: 9.0,
+  SLIDE_MIN_SPEED: 3.6,
   SLIDE_DURATION_MS: 660,
   SLIDE_COOLDOWN_MS: 820,
   LEAN_OFFSET: 0.42,       // Lateral camera peek offset (meters) when pressing Q / E
@@ -43,7 +44,11 @@ export const MATCH_CONFIG = {
   GRAVITY: 22.0,
   JUMP_FORCE: 8.0,
   COYOTE_TIME_MS: 120,
-  JUMP_BUFFER_MS: 120
+  JUMP_BUFFER_MS: 120,
+  GRENADE_FUSE_MS: 3000,               // Total cooking fuse duration (3.0s) when holding [G]
+  GRENADE_DEFAULT_THROW_FUSE_MS: 2200, // Default fuse duration (2.2s) for un-cooked throws
+  GRENADE_THROW_SPEED: 19.5,
+  GRENADE_UPWARD_ARC: 4.2
 };
 
 // Snapshot-interpolation render delay (ms). SINGLE source of truth shared by the client (remote players are drawn at
@@ -77,3 +82,26 @@ export const PLAYER_COLORS = [
   0x06b6d4, // Sky
   0x84cc16  // Lime
 ];
+
+export const GAME_MODES = {
+  ffa: { id: 'ffa', name: 'ĐẤU ĐƠN (FFA)', shortName: 'FFA' },
+  tdm: { id: 'tdm', name: 'ĐẤU ĐỘI 2 PHE (TDM)', shortName: '2 ĐỘI' }
+};
+
+export const TEAMS = {
+  alpha: {
+    id: 'alpha',
+    name: 'PHE XANH (ALPHA)',
+    shortName: 'ALPHA',
+    color: 0x38bdf8,
+    hex: '#38bdf8'
+  },
+  bravo: {
+    id: 'bravo',
+    name: 'PHE ĐỎ (BRAVO)',
+    shortName: 'BRAVO',
+    color: 0xef4444,
+    hex: '#ef4444'
+  }
+};
+

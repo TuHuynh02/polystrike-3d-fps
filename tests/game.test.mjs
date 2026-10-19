@@ -2211,7 +2211,249 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
       sfx.playHeadshotDink(true);
       sfx.playGrenadeExplosion(listener, { x: 8, y: 0, z: -8 });
       sfx.playMultiKillTone(3);
+      sfx.playFootstep(false, true);
       sfx.flushPendingCleanups(true);
     });
   });
+
+  it('enforces Tactical FPS stance/ADS accuracy hierarchy, suppressed vs unsuppressed radar gunfire blips, and stealth crouch footsteps', async () => {
+    const { computeSpreadAmount } = await import('../shared/spread.js');
+    const cfg = WEAPONS.rifle;
+
+    // 1. Tactical stance & ADS spread hierarchy
+    const proneSpread = computeSpreadAmount(cfg, { horizSpeed: 1.2, onGround: true, prone: true, crouching: false, sliding: false, aiming: false, bloom: 0.004, shotIndex: 2 });
+    const crouchSpread = computeSpreadAmount(cfg, { horizSpeed: 2.2, onGround: true, prone: false, crouching: true, sliding: false, aiming: false, bloom: 0.004, shotIndex: 2 });
+    const standAdsMoveSpread = computeSpreadAmount(cfg, { horizSpeed: 3.0, onGround: true, prone: false, crouching: false, sliding: false, aiming: true, bloom: 0.004, shotIndex: 2 });
+    const standHipMoveSpread = computeSpreadAmount(cfg, { horizSpeed: 3.0, onGround: true, prone: false, crouching: false, sliding: false, aiming: false, bloom: 0.004, shotIndex: 2 });
+    const sprintHipSpread = computeSpreadAmount(cfg, { horizSpeed: 6.5, onGround: true, prone: false, crouching: false, sliding: false, aiming: false, bloom: 0.004, shotIndex: 2 });
+
+    assert.ok(proneSpread < crouchSpread, `prone (${proneSpread}) must be tighter than crouch (${crouchSpread})`);
+    assert.ok(crouchSpread < standAdsMoveSpread, `crouch (${crouchSpread}) must be tighter than standing ADS move (${standAdsMoveSpread})`);
+    assert.ok(standAdsMoveSpread < standHipMoveSpread, `ADS moving (${standAdsMoveSpread}) must be tighter than hipfire moving (${standHipMoveSpread})`);
+    assert.ok(standHipMoveSpread < sprintHipSpread, `walking hipfire (${standHipMoveSpread}) must be tighter than sprinting hipfire (${sprintHipSpread})`);
+
+    // 2. Minimap gunfire sonar blips: unsuppressed weapons register, suppressed m4a1 & knife stay stealthy
+    const minimap = new TacticalMinimap();
+    assert.equal(minimap.recordGunfireBlip('enemy_1', 12, -18, 'rifle', 1000), true);
+    assert.equal(minimap.gunfireBlips.has('enemy_1'), true);
+    assert.equal(minimap.recordGunfireBlip('enemy_2', 5, 5, 'm4a1', 1000), false, 'Suppressed M4A1-S must not reveal shooter on radar');
+    assert.equal(minimap.recordGunfireBlip('enemy_3', 2, 2, 'knife', 1000), false, 'Knife melee must not trigger gunfire radar');
+
+    // Gunfire blip expires after 2200ms during minimap.update()
+    minimap.update({ inMatch: true, position: { x: 0, z: 0 }, yaw: 0 }, 3500);
+    assert.equal(minimap.gunfireBlips.has('enemy_1'), false, 'Expired gunfire blip must be pruned');
+  });
+
+  it('supports 2-Team Deathmatch (TDM): symmetrical fixed bases, pre-match waiting lobby, switchTeam, ready auto-start, no friendly fire, and team victory', () => {
+    // 1. Verify all 4 maps have symmetrical fixed team spawn bases (Alpha North z < 0 facing South, Bravo South z > 0 facing North)
+    for (const mapId of MAP_ORDER) {
+      const mCfg = getMapConfig(mapId);
+      assert.ok(mCfg.teamSpawns, `Map ${mapId} must define teamSpawns`);
+      assert.ok(Array.isArray(mCfg.teamSpawns.alpha) && mCfg.teamSpawns.alpha.length >= 4, `Map ${mapId} must have alpha team spawns`);
+      assert.ok(Array.isArray(mCfg.teamSpawns.bravo) && mCfg.teamSpawns.bravo.length >= 4, `Map ${mapId} must have bravo team spawns`);
+      for (const sp of mCfg.teamSpawns.alpha) {
+        assert.ok(sp.z < 0, `Alpha spawn on ${mapId} must be in North half (z < 0)`);
+        assert.equal(sp.yaw, Math.PI, `Alpha spawn on ${mapId} must face South (Math.PI)`);
+      }
+      for (const sp of mCfg.teamSpawns.bravo) {
+        assert.ok(sp.z > 0, `Bravo spawn on ${mapId} must be in South half (z > 0)`);
+        assert.equal(sp.yaw, 0, `Bravo spawn on ${mapId} must face North (0)`);
+      }
+    }
+
+    // 2. Create a TDM room -> starts in WAITING lobby state
+    const ioEvents = [];
+    const mockIo = {
+      to: (code) => ({
+        emit: (event, data) => ioEvents.push({ code, event, data })
+      })
+    };
+    const rm = new RoomManager(mockIo);
+    if (rm.tickInterval) {
+      clearInterval(rm.tickInterval);
+      rm.tickInterval = null;
+    }
+
+    const sock1 = { id: 'p1', emit: () => {} };
+    const sock2 = { id: 'p2', emit: () => {} };
+    const sock3 = { id: 'p3', emit: () => {} };
+
+    const join1 = rm.addHumanPlayer(sock1, { name: 'AlphaLead', mode: 'private', gameMode: 'tdm', mapId: 'cyber_citadel' });
+    assert.ok(join1.room, 'TDM room should be created');
+    const room = join1.room;
+    const p1 = join1.player;
+
+    assert.equal(room.gameMode, 'tdm');
+    assert.equal(room.state, 'WAITING', 'New TDM room must start in WAITING lobby state');
+    assert.equal(room.killLimit, MATCH_CONFIG.TDM_KILL_LIMIT || 30);
+    assert.equal(p1.team, 'alpha');
+    assert.equal(p1.ready, false);
+    assert.equal(p1.alive, false, 'Player in WAITING lobby must not be alive yet');
+    assert.ok(p1.z < 0, 'Alpha player must be placed at North fixed base');
+
+    const join2 = rm.addHumanPlayer(sock2, { name: 'BravoLead', mode: 'private', roomCode: room.code, gameMode: 'tdm' });
+    const p2 = join2.player;
+    assert.equal(p2.team, 'bravo', 'Second player must be auto-balanced to Bravo');
+    assert.ok(p2.z > 0, 'Bravo player must be placed at South fixed base');
+
+    // 3. Switch team in WAITING lobby resets ready and moves player to the other base
+    const swRes = rm.handleSwitchTeam(room, p2, { team: 'alpha' });
+    assert.equal(swRes.ok, true);
+    assert.equal(p2.team, 'alpha');
+    assert.ok(p2.z < 0, 'Switched player must move to Alpha North base');
+
+    // With both players on Alpha (Bravo = 0), match cannot start yet
+    assert.equal(rm.canStartTeamMatch(room), false, 'Cannot start 2+ player TDM match when one team is empty');
+    const deniedStart = rm.handleStartTeamMatch(room, p1);
+    assert.equal(deniedStart.ok, false);
+    assert.equal(deniedStart.error, 'unbalanced_teams');
+
+    // Switch p2 back to Bravo
+    rm.handleSwitchTeam(room, p2, { team: 'bravo' });
+    assert.equal(p2.team, 'bravo');
+    assert.equal(rm.canStartTeamMatch(room), true);
+
+    // 4. Both players toggle ready -> match auto-starts immediately!
+    rm.handleSetTeamReady(room, p1, { ready: true });
+    assert.ok(ioEvents.some((e) => e.event === 'teamLobbyState'), 'broadcastTeamLobby must emit teamLobbyState matching main.js listener');
+    assert.equal(room.state, 'WAITING', 'Still waiting for p2 to be ready');
+    rm.handleSetTeamReady(room, p2, { ready: true });
+    assert.equal(room.state, 'PLAYING', 'TDM match must auto-start when all players are ready and both teams have >= 1 player');
+    assert.equal(p1.alive, true);
+    assert.equal(p2.alive, true);
+    assert.ok(ioEvents.some((e) => e.event === 'matchStarted' && e.data.gameMode === 'tdm'));
+
+    // 4b. Switching team during PLAYING is forbidden (prevents instant respawn / full HP heal exploit)
+    p1.hp = 25;
+    const midMatchSwitch = rm.handleSwitchTeam(room, p1, { team: 'bravo' });
+    assert.equal(midMatchSwitch.ok, false, 'Switching teams during PLAYING must be rejected');
+    assert.equal(midMatchSwitch.error, 'match_in_progress');
+    assert.equal(p1.team, 'alpha');
+    assert.equal(p1.hp, 25, 'Rejected team switch must not heal or respawn player');
+
+    // 5. Late joiner during PLAYING state joins smaller/balanced team and spawns immediately
+    const join3 = rm.addHumanPlayer(sock3, { name: 'AlphaAlly', mode: 'private', roomCode: room.code, gameMode: 'tdm' });
+    const p3 = join3.player;
+    assert.equal(p3.team, 'alpha');
+    assert.equal(p3.alive, true, 'Late joiner in PLAYING TDM room spawns immediately');
+
+    // 6. No Friendly Fire: p1 (alpha) shooting p3 (alpha) or throwing grenade at p3 deals 0 damage
+    p1.hp = 100;
+    p1.invulnerableUntil = 0;
+    p2.invulnerableUntil = 0;
+    p3.invulnerableUntil = 0;
+    placeServerSide(p1, 0, 0, -16);
+    placeServerSide(p3, 0, 0, -20);
+    placeServerSide(p2, 0, 0, -24);
+    const snapNow = Date.now();
+    recordPlayerSnapshot(p1, snapNow);
+    recordPlayerSnapshot(p3, snapNow);
+    recordPlayerSnapshot(p2, snapNow);
+
+    // Shoot North (-Z) where teammate p3 is at z=-20 and enemy p2 is at z=-24
+    rm.handleShoot(room, p1, {
+      weapon: 'rifle',
+      dir: { x: 0, y: -0.05, z: -1 }
+    });
+    assert.equal(p3.hp, 100, 'Teammate p3 must take 0 friendly-fire bullet damage');
+    assert.ok(p2.hp < 100, 'Enemy p2 behind teammate must take bullet damage');
+
+    // Grenade friendly fire check (including when ownerTeam is snapshotted at throw time even if attacker disconnects):
+    p2.hp = 100;
+    placeServerSide(p2, 0, 0, -20.5);
+    rm.detonateGrenade(room, {
+      id: 'g_test',
+      ownerId: 'disconnected_alpha_player',
+      ownerTeam: 'alpha',
+      x: 0,
+      y: 0.5,
+      z: -20,
+      exploded: false
+    });
+    assert.equal(p3.hp, 100, 'Teammate p3 must take 0 friendly-fire grenade damage even if thrower disconnected');
+    assert.ok(p2.hp < 100, 'Enemy p2 must take grenade explosion damage');
+
+    // 7. Team score tracking & time-limit / kill-limit victory
+    room.teamScores.alpha = 29;
+    room.teamScores.bravo = 14;
+    rm.handlePlayerKilled(room, p1, p2, 'rifle', true, 100);
+    assert.equal(room.teamScores.alpha, 30, 'Alpha team score must increment to 30');
+    assert.equal(room.state, 'ENDED', 'Reaching TDM_KILL_LIMIT (30) must end the match');
+    const matchEndEvt = ioEvents.find((e) => e.event === 'matchEnded');
+    assert.ok(matchEndEvt, 'matchEnded event must be broadcast');
+    assert.equal(matchEndEvt.data.winningTeam, 'alpha');
+    assert.deepEqual(matchEndEvt.data.teamScores, { alpha: 30, bravo: 14 });
+
+    if (room.restartTimer) clearTimeout(room.restartTimer);
+  });
+
+  it('enforces hotfix security invariants: private rooms hidden from /api/rooms, prototype keys rejected, tick error isolation, and client-server event contract', () => {
+    const mainJs = fs.readFileSync(path.join(ROOT_DIR, 'public/js/main.js'), 'utf8');
+    assert.ok(mainJs.includes("socket.on('teamLobbyState'"), 'main.js must listen for teamLobbyState');
+
+    const ioEvents = [];
+    const mockIo = {
+      to: (code) => ({
+        emit: (event, data) => ioEvents.push({ code, event, data })
+      })
+    };
+    const rm = new RoomManager(mockIo);
+    rm.stop();
+
+    // 1. Prototype keys ('constructor', '__proto__', 'toString') rejected in map & weapon lookups
+    assert.equal(getMapConfig('constructor').id, 'cyber_citadel');
+    assert.equal(getMapConfig('__proto__').id, 'cyber_citadel');
+    const sPriv = { id: 'sec_p1', emit: () => {} };
+    const sPub = { id: 'sec_p2', emit: () => {} };
+
+    const privJoin = rm.addHumanPlayer(sPriv, {
+      name: 'ProtoTester',
+      mode: 'private',
+      mapId: 'constructor',
+      weapon: 'constructor',
+      loadout: { primary: 'toString', secondary: '__proto__' }
+    });
+    assert.equal(privJoin.room.mapId, 'cyber_citadel', 'Prototype mapId must fall back to default map');
+    assert.equal(privJoin.player.weapon, 'rifle', 'Prototype weapon must fall back to loadout primary');
+    assert.equal(privJoin.player.loadout.primary, 'rifle');
+    assert.equal(privJoin.player.loadout.secondary, 'pistol');
+
+    // Attempt to change map to 'constructor'
+    rm.changeRoomMap(privJoin.room, 'constructor');
+    assert.equal(privJoin.room.mapId, 'cyber_citadel');
+    assert.ok(Array.isArray(getMapConfig(privJoin.room.mapId).obstacles) && getMapConfig(privJoin.room.mapId).obstacles.length > 0);
+
+    // Initial weapon must belong to the sanitized loadout (cannot spawn with sniper while loadout primary is rifle)
+    const mismatchJoin = rm.addHumanPlayer({ id: 'sec_p3', emit: () => {} }, {
+      name: 'MismatchWep',
+      mode: 'private',
+      weapon: 'sniper',
+      loadout: { primary: 'rifle', secondary: 'pistol' }
+    });
+    assert.equal(mismatchJoin.player.weapon, 'rifle', 'Initial weapon outside loadout must fall back to loadout primary');
+
+    // 2. Private rooms excluded from getPublicRoomsSummary()
+    const pubJoin = rm.addHumanPlayer(sPub, { name: 'PubPlayer', mode: 'public', mapId: 'cargo_dock' });
+    const summary = rm.getPublicRoomsSummary();
+    assert.ok(summary.some((r) => r.code === pubJoin.room.code), 'Public room must appear in summary');
+    assert.ok(!summary.some((r) => r.code === privJoin.room.code), 'Private room must NOT appear in public summary');
+
+    // 3. Per-room error isolation in tick(): a broken room must not throw out of tick() or block healthy rooms
+    privJoin.room.players.set('corrupt', null); // force an error if iterated naively or corrupt state
+    Object.defineProperty(privJoin.room, 'matchEndsAt', {
+      get() {
+        throw new Error('simulated room failure');
+      }
+    });
+    const prevSeq = pubJoin.room.stateSeq || 0;
+    const origError = console.error;
+    console.error = () => {};
+    try {
+      assert.doesNotThrow(() => rm.tick(0.04), 'tick() must catch per-room errors without crashing');
+    } finally {
+      console.error = origError;
+    }
+    assert.equal(pubJoin.room.stateSeq, prevSeq + 1, 'Healthy room must still advance and broadcast stateUpdate');
+  });
 });
+
