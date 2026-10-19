@@ -1523,6 +1523,15 @@ renderQualityUi();
     });
 }
 
+function escapeHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // Active Rooms Browser Fetcher
 async function fetchActiveRooms() {
   try {
@@ -1535,15 +1544,21 @@ async function fetchActiveRooms() {
 
     activeRoomsList.innerHTML = rooms
       .map(
-        (r) => `
+        (r) => {
+          const safeCode = escapeHtml(r.code);
+          const safeMap = escapeHtml(r.mapName || 'CYBER CITADEL');
+          const safeTotal = Number(r.total) || 0;
+          const safeMax = Number(r.maxPlayers) || 16;
+          return `
         <div class="room-item">
           <div>
-            <span class="room-item-code">#${ r.code }</span>
-            <span> • ${ r.mapName || 'CYBER CITADEL' } (${ r.total }/${ r.maxPlayers })</span>
+            <span class="room-item-code">#${ safeCode }</span>
+            <span> • ${ safeMap } (${ safeTotal }/${ safeMax })</span>
           </div>
-          <button class="room-item-join" data-code="${ r.code }">VÀO</button>
+          <button class="room-item-join" data-code="${ safeCode }">VÀO</button>
         </div>
-      `
+      `;
+        }
       )
       .join('');
   } catch {
@@ -1560,6 +1575,8 @@ activeRoomsList.addEventListener('click', (e) => {
 btnRefreshRooms.addEventListener('click', fetchActiveRooms);
 fetchActiveRooms();
 
+let lastScoreboardSig = '';
+
 // Render Scoreboard Table
 function renderScoreboard(players) {
   const sorted = [...players].sort((a, b) => {
@@ -1567,18 +1584,27 @@ function renderScoreboard(players) {
     return a.deaths - b.deaths;
   });
 
+  const sig = sorted
+    .map((p) => `${p.id}:${p.name}:${p.kills}:${p.deaths}:${p.streak}`)
+    .join('|');
+  if (sig === lastScoreboardSig) return;
+  lastScoreboardSig = sig;
+
   scoreboardBody.innerHTML = sorted
     .map((p, i) => {
-      const kd = p.deaths === 0 ? p.kills.toFixed(1) : (p.kills / p.deaths).toFixed(2);
+      const kills = Number(p.kills) || 0;
+      const deaths = Number(p.deaths) || 0;
+      const streak = Number(p.streak) || 0;
+      const kd = deaths === 0 ? kills.toFixed(1) : (kills / deaths).toFixed(2);
       const isMe = p.id === game.localId;
       return `
         <tr class="${ isMe ? 'sb-row-me' : '' }">
           <td>${ i + 1 }</td>
-          <td>${ p.name } ${ isMe ? '(Bạn)' : '' }</td>
-          <td>${ p.kills }</td>
-          <td>${ p.deaths }</td>
+          <td>${ escapeHtml(p.name) } ${ isMe ? '(Bạn)' : '' }</td>
+          <td>${ kills }</td>
+          <td>${ deaths }</td>
           <td>${ kd }</td>
-          <td>${ p.streak }🔥</td>
+          <td>${ streak }🔥</td>
         </tr>
       `;
     })
@@ -1924,15 +1950,6 @@ socket.on('stateUpdate', (snapshot) => {
 socket.on('shotFired', (data) => {
   if (!game.inMatch || data.shooterId === game.localId) return;
 
-  // Compute distance attenuation for 3D sound
-  const dist = Math.hypot(
-    data.origin.x - game.position.x,
-    data.origin.y - game.position.y,
-    data.origin.z - game.position.z
-  );
-  const vol = Math.max(0.06, 1 - dist / 85);
-  sfx.playShot(data.weapon, vol * 0.58);
-
   const endPt = data.hitPoint || {
     x: data.origin.x + data.dir.x * 55,
     y: data.origin.y + data.dir.y * 55,
@@ -2237,13 +2254,15 @@ socket.on('matchEnded', (data) => {
   victoryLeaderboardBody.innerHTML = (data.leaderboard || [])
     .slice(0, 8)
     .map((p, idx) => {
-      const kd = p.deaths === 0 ? p.kills.toFixed(1) : (p.kills / p.deaths).toFixed(2);
+      const kills = Number(p.kills) || 0;
+      const deaths = Number(p.deaths) || 0;
+      const kd = deaths === 0 ? kills.toFixed(1) : (kills / deaths).toFixed(2);
       return `
         <tr class="${ p.id === game.localId ? 'sb-row-me' : '' }">
           <td>#${ idx + 1 }</td>
-          <td>${ p.name } ${ p.id === game.localId ? '(Bạn)' : '' }</td>
-          <td>${ p.kills }</td>
-          <td>${ p.deaths }</td>
+          <td>${ escapeHtml(p.name) } ${ p.id === game.localId ? '(Bạn)' : '' }</td>
+          <td>${ kills }</td>
+          <td>${ deaths }</td>
           <td>${ kd }</td>
         </tr>
       `;

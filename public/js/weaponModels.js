@@ -1970,25 +1970,172 @@ export function buildFirstPersonViewmodel(groupOrWeaponId = 'rifle', weaponId, m
   return group;
 }
 
-export function createWeaponMesh(weaponId, isFirstPerson = false) {
-  const { group, magMesh, boltMesh, muzzleZ } = buildDetailedWeaponModel(weaponId);
+const _mergePos = new THREE.Vector3();
+const _mergeNorm = new THREE.Vector3();
+const _mergeNormMat = new THREE.Matrix3();
 
+export function mergeTransformedGeometries(entries) {
+  let totalVerts = 0;
+  let totalIndices = 0;
+  for (let i = 0; i < entries.length; i++) {
+    const geo = entries[i].geometry;
+    const pos = geo?.attributes?.position;
+    if (!pos) continue;
+    totalVerts += pos.count;
+    totalIndices += geo.index ? geo.index.count : pos.count;
+  }
+
+  const positions = new Float32Array(totalVerts * 3);
+  const normals = new Float32Array(totalVerts * 3);
+  const uvs = new Float32Array(totalVerts * 2);
+  const indices = totalVerts > 65535 ? new Uint32Array(totalIndices) : new Uint16Array(totalIndices);
+
+  let vertOffset = 0;
+  let idxOffset = 0;
+
+  for (let i = 0; i < entries.length; i++) {
+    const { geometry: geo, matrix } = entries[i];
+    const posAttr = geo?.attributes?.position;
+    if (!posAttr) continue;
+    const normAttr = geo.attributes.normal;
+    const uvAttr = geo.attributes.uv;
+    const vCount = posAttr.count;
+
+    _mergeNormMat.getNormalMatrix(matrix);
+
+    for (let v = 0; v < vCount; v++) {
+      _mergePos.fromBufferAttribute(posAttr, v).applyMatrix4(matrix);
+      const pBase = (vertOffset + v) * 3;
+      positions[pBase] = _mergePos.x;
+      positions[pBase + 1] = _mergePos.y;
+      positions[pBase + 2] = _mergePos.z;
+
+      if (normAttr) {
+        _mergeNorm.fromBufferAttribute(normAttr, v).applyMatrix3(_mergeNormMat).normalize();
+        normals[pBase] = _mergeNorm.x;
+        normals[pBase + 1] = _mergeNorm.y;
+        normals[pBase + 2] = _mergeNorm.z;
+      } else {
+        normals[pBase + 1] = 1;
+      }
+
+      if (uvAttr) {
+        const uBase = (vertOffset + v) * 2;
+        uvs[uBase] = uvAttr.getX(v);
+        uvs[uBase + 1] = uvAttr.getY(v);
+      }
+    }
+
+    if (geo.index) {
+      const idxArray = geo.index.array;
+      const iCount = geo.index.count;
+      for (let k = 0; k < iCount; k++) {
+        indices[idxOffset + k] = idxArray[k] + vertOffset;
+      }
+      idxOffset += iCount;
+    } else {
+      for (let k = 0; k < vCount; k++) {
+        indices[idxOffset + k] = vertOffset + k;
+      }
+      idxOffset += vCount;
+    }
+
+    vertOffset += vCount;
+  }
+
+  const merged = new THREE.BufferGeometry();
+  merged.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  merged.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  merged.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  merged.setIndex(new THREE.BufferAttribute(indices, 1));
+  merged.computeBoundingBox();
+  merged.computeBoundingSphere();
+  merged.userData = { shared: true };
+  return merged;
+}
+
+const TP_WEAPON_TEMPLATE_CACHE = new Map();
+let TP_FLASH_GEO = null;
+let TP_FLASH_MAT = null;
+
+function getThirdPersonWeaponTemplate(weaponId = 'rifle') {
+  let tpl = TP_WEAPON_TEMPLATE_CACHE.get(weaponId);
+  if (tpl) return tpl;
+
+  const { group: rawGroup, muzzleZ } = buildDetailedWeaponModel(weaponId);
+  rawGroup.updateMatrixWorld(true);
+
+  const byMat = new Map();
+  rawGroup.traverse((child) => {
+    if (child.isMesh && child.geometry && child.material) {
+      let list = byMat.get(child.material);
+      if (!list) {
+        list = [];
+        byMat.set(child.material, list);
+      }
+      list.push({ geometry: child.geometry, matrix: child.matrixWorld.clone() });
+    }
+  });
+
+  const batches = [];
+  for (const [material, entries] of byMat.entries()) {
+    material.userData = { ...(material.userData || {}), shared: true };
+    const mergedGeo = mergeTransformedGeometries(entries);
+    batches.push({ geometry: mergedGeo, material });
+  }
+
+  rawGroup.traverse((child) => {
+    if (child.isMesh && child.geometry && !child.geometry.userData?.shared) {
+      child.geometry.dispose();
+    }
+  });
+
+  tpl = { batches, muzzleZ };
+  TP_WEAPON_TEMPLATE_CACHE.set(weaponId, tpl);
+  return tpl;
+}
+
+export function createWeaponMesh(weaponId, isFirstPerson = false) {
   if (isFirstPerson) {
+    const { group, magMesh, boltMesh, muzzleZ } = buildDetailedWeaponModel(weaponId);
     return buildFirstPersonViewmodel(group, weaponId, magMesh, boltMesh, muzzleZ);
+  }
+
+  const resolvedId = weaponId || 'rifle';
+  const tpl = getThirdPersonWeaponTemplate(resolvedId);
+  const group = new THREE.Group();
+
+  for (let i = 0; i < tpl.batches.length; i++) {
+    const b = tpl.batches[i];
+    const m = new THREE.Mesh(b.geometry, b.material);
+    m.castShadow = false;
+    m.frustumCulled = true;
+    group.add(m);
+  }
+
+  if (!TP_FLASH_GEO) {
+    TP_FLASH_GEO = new THREE.SphereGeometry(0.14, 8, 8);
+    TP_FLASH_GEO.computeBoundingSphere();
+    TP_FLASH_GEO.userData = { shared: true };
+  }
+  if (!TP_FLASH_MAT) {
+    TP_FLASH_MAT = new THREE.MeshBasicMaterial({ color: 0xfef08a });
+    TP_FLASH_MAT.userData = { shared: true };
   }
 
   // Third-person world model scale & muzzle flash
   group.scale.setScalar(1.12);
-  const tpFlash = new THREE.Mesh(
-    new THREE.SphereGeometry(0.14, 8, 8),
-    new THREE.MeshBasicMaterial({ color: 0xfef08a })
-  );
-  tpFlash.position.set(0, 0.02, muzzleZ);
+  const tpFlash = new THREE.Mesh(TP_FLASH_GEO, TP_FLASH_MAT);
+  tpFlash.position.set(0, 0.02, tpl.muzzleZ);
   tpFlash.visible = false;
+  tpFlash.frustumCulled = true;
   group.add(tpFlash);
+  group.userData.weaponId = resolvedId;
+  group.userData.muzzleZ = tpl.muzzleZ;
   group.userData.flashMesh = tpFlash;
-  group.userData.magMesh = magMesh;
-  group.userData.boltMesh = boltMesh;
+  group.userData.magMesh = null;
+  group.userData.boltMesh = null;
 
   return group;
 }
+

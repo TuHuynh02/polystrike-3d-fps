@@ -276,7 +276,7 @@ export async function runFirefight({
   seconds = 4,
   warmupSeconds = 1.5,
   audio = false,
-  mainShotSound = true,
+  mainShotSound = false,
   realRenderer = false,
   gameHook = null
 } = {}) {

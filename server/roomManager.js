@@ -1190,10 +1190,17 @@ export class RoomManager {
   /** Sends the owner-only `selfState` snapshot to `player.id` (never broadcast to the room). */
   sendSelfState(player, now = Date.now(), reliable = false) {
     if (!player) return null;
+    if (this._deferSelfState) {
+      player._selfStateDirty = true;
+      if (reliable) player._selfStateReliable = true;
+      return null;
+    }
     const state = this.buildSelfState(player, now);
     if (!state) return null;
     player.lastSelfStateAt = now;
     player._selfStateSig = this._selfStateSignature(player);
+    player._selfStateDirty = false;
+    player._selfStateReliable = false;
     const target = this.io.to(player.id);
     (reliable ? target : (target.volatile || target)).emit('selfState', state);
     return state;
@@ -1551,26 +1558,44 @@ export class RoomManager {
       }
     }
     if (!live) return null;
-    return raycastPlayerHitbox(
-      origin,
-      dir,
-      {
+    if (
+      Math.abs(live.x - candidate.x) < 1e-4 &&
+      Math.abs(live.y - candidate.y) < 1e-4 &&
+      Math.abs(live.z - candidate.z) < 1e-4 &&
+      Boolean(live.crouch) === Boolean(candidate.crouching || candidate.crouch) &&
+      Boolean(live.prone) === Boolean(candidate.prone)
+    ) {
+      return null;
+    }
+    if (!this._livePoseScratch) {
+      this._livePoseScratch = {
         alive: true,
-        x: live.x,
-        y: live.y,
-        z: live.z,
-        yaw: candidate.yaw,
-        pitch: candidate.pitch,
-        lean: candidate.lean,
-        crouching: Boolean(live.crouch),
-        crouch: Boolean(live.crouch),
-        prone: Boolean(live.prone),
-        sliding: candidate.sliding,
-        isSliding: candidate.isSliding
-      },
-      maxRange,
-      PART_PADDING
-    );
+        x: 0,
+        y: 0,
+        z: 0,
+        yaw: 0,
+        pitch: 0,
+        lean: 0,
+        crouching: false,
+        crouch: false,
+        prone: false,
+        sliding: false,
+        isSliding: false
+      };
+    }
+    const scratch = this._livePoseScratch;
+    scratch.x = live.x;
+    scratch.y = live.y;
+    scratch.z = live.z;
+    scratch.yaw = candidate.yaw;
+    scratch.pitch = candidate.pitch;
+    scratch.lean = candidate.lean;
+    scratch.crouching = Boolean(live.crouch);
+    scratch.crouch = Boolean(live.crouch);
+    scratch.prone = Boolean(live.prone);
+    scratch.sliding = candidate.sliding;
+    scratch.isSliding = candidate.isSliding;
+    return raycastPlayerHitbox(origin, dir, scratch, maxRange, PART_PADDING);
   }
 
   /**
@@ -2580,34 +2605,40 @@ export class RoomManager {
         continue;
       }
 
-      // Respawn human players whose 3s respawn delay has elapsed & advance reloads
-      for (const p of room.players.values()) {
-        if (!p.alive && now >= p.respawnAt) {
-          this.respawnPlayer(room, p);
-        } else if (p.alive && p.reloadingUntil) {
-          this.syncPlayerReloadState(p, now);
+      this._deferSelfState = true;
+      try {
+        // Respawn human players whose 3s respawn delay has elapsed & advance reloads
+        for (const p of room.players.values()) {
+          if (!p.alive && now >= p.respawnAt) {
+            this.respawnPlayer(room, p);
+          } else if (p.alive && p.reloadingUntil) {
+            this.syncPlayerReloadState(p, now);
+          }
+          // Authoritative movement: simulate the player's queued input commands (time-credit limited) and ack them
+          this.processPlayerInputs(room, p, now);
         }
-        // Authoritative movement: simulate the player's queued input commands (time-credit limited) and ack them
-        this.processPlayerInputs(room, p, now);
+
+        // Record lag compensation position snapshots for all alive players
+        recordRoomSnapshots(room, now);
+
+        // Update active Frag Grenades physics & 2.2s fuse detonation
+        this.updateGrenades(room, dt, now);
+
+        // Update Health Pack pickups & 5s Dropped Weapons expiration
+        this.updateHealthPacks(room, now);
+        this.updateDroppedWeapons(room, now);
+      } finally {
+        this._deferSelfState = false;
       }
 
-      // Record lag compensation position snapshots for all alive players
-      recordRoomSnapshots(room, now);
-
-      // Update active Frag Grenades physics & 2.2s fuse detonation
-      this.updateGrenades(room, dt, now);
-
-      // Update Health Pack pickups & 5s Dropped Weapons expiration
-      this.updateHealthPacks(room, now);
-      this.updateDroppedWeapons(room, now);
-
-      // Owner-only `selfState` reconciliation: immediate on state change, or periodic (~8.3 Hz)
+      // Owner-only `selfState` reconciliation: immediate on state change (coalesced to at most 1 per tick), or periodic (~8.3 Hz)
       for (const p of room.players.values()) {
         if (
+          p._selfStateDirty ||
           this._selfStateSignature(p) !== p._selfStateSig ||
           now - (p.lastSelfStateAt || 0) >= SELF_STATE_INTERVAL_MS
         ) {
-          this.sendSelfState(p, now, false);
+          this.sendSelfState(p, now, Boolean(p._selfStateReliable));
         }
       }
 

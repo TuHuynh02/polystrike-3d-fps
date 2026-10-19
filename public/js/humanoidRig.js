@@ -2,7 +2,7 @@
 // Styled after CS2 / Call of Duty Modern Warfare / Ready or Not Special Forces Operators
 
 import * as THREE from '../vendor/three/three.module.js';
-import { createWeaponMesh } from './weaponModels.js';
+import { createWeaponMesh, mergeTransformedGeometries } from './weaponModels.js';
 import { HITBOX_PART_DEFS } from '../shared/hitboxes.js';
 
 const PROCEDURAL_TEX_CACHE = new Map();
@@ -18,6 +18,78 @@ export function getCachedGeo(key, factoryFn) {
     RIG_GEO_CACHE.set(key, geo);
   }
   return geo;
+}
+
+const _identMat4 = new THREE.Matrix4();
+
+function batchBoneScope(scopeRoot, boneScopeId, stopNodes, primaryMesh = null) {
+  const byMat = new Map();
+  const meshesToRemove = [];
+
+  const addEntry = (mesh, relMatrix) => {
+    const mat = mesh.material;
+    if (!mat || !mesh.geometry) return;
+    let bucket = byMat.get(mat);
+    if (!bucket) {
+      bucket = {
+        matSlotKey: mat.userData?.matSlotKey || mat.uuid,
+        entries: [],
+        castShadow: false
+      };
+      byMat.set(mat, bucket);
+    }
+    if (mesh.castShadow) bucket.castShadow = true;
+    bucket.entries.push({ geometry: mesh.geometry, matrix: relMatrix.clone() });
+  };
+
+  if (scopeRoot.isMesh && primaryMesh === scopeRoot) {
+    addEntry(scopeRoot, _identMat4);
+  }
+
+  const walkChildren = (parentObj, parentRelMatrix) => {
+    for (let i = 0; i < parentObj.children.length; i++) {
+      const child = parentObj.children[i];
+      if (stopNodes && stopNodes.has(child)) continue;
+      child.updateMatrix();
+      const childRelMatrix = parentRelMatrix.clone().multiply(child.matrix);
+      if (child.isMesh) {
+        addEntry(child, childRelMatrix);
+        if (child !== primaryMesh) {
+          meshesToRemove.push(child);
+        }
+      }
+      if (child.children && child.children.length > 0) {
+        walkChildren(child, childRelMatrix);
+      }
+    }
+  };
+
+  walkChildren(scopeRoot, _identMat4);
+
+  for (let i = 0; i < meshesToRemove.length; i++) {
+    const m = meshesToRemove[i];
+    if (m.parent) m.parent.remove(m);
+  }
+
+  for (const [mat, bucket] of byMat.entries()) {
+    const cacheKey = `merged_rig_${boneScopeId}_${bucket.matSlotKey}`;
+    const mergedGeo = getCachedGeo(cacheKey, () => mergeTransformedGeometries(bucket.entries));
+    if (primaryMesh && primaryMesh.material === mat) {
+      primaryMesh.geometry = mergedGeo;
+      if (primaryMesh !== scopeRoot) {
+        primaryMesh.position.set(0, 0, 0);
+        primaryMesh.rotation.set(0, 0, 0);
+        primaryMesh.scale.set(1, 1, 1);
+      }
+      primaryMesh.castShadow = bucket.castShadow;
+      primaryMesh.frustumCulled = true;
+    } else {
+      const mergedMesh = new THREE.Mesh(mergedGeo, mat);
+      mergedMesh.castShadow = bucket.castShadow;
+      mergedMesh.frustumCulled = true;
+      scopeRoot.add(mergedMesh);
+    }
+  }
 }
 
 /**
@@ -221,7 +293,7 @@ function getCachedMat(key, factoryFn) {
   let mat = RIG_MAT_CACHE.get(key);
   if (!mat) {
     mat = factoryFn();
-    mat.userData = { ...(mat.userData || {}), shared: true };
+    mat.userData = { ...(mat.userData || {}), shared: true, matSlotKey: key };
     RIG_MAT_CACHE.set(key, mat);
   }
   return mat;
@@ -239,6 +311,7 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     roughness: 0.38,
     metalness: 0.28
   });
+  mainMat.userData = { matSlotKey: 'main' };
 
   // 2. Ripstop BDU Combat Shirt & Cargo Pants (Dark Charcoal / Olive-Slate)
   const bduMat = getCachedMat('bdu_0x262e36', () =>
@@ -307,6 +380,7 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     roughness: 0.10,
     metalness: 0.88
   });
+  visorMat.userData = { matSlotKey: 'visor' };
 
   // 10. Coated NVG Objective Glass Lens (Subtle Phosphor Teal Reflection)
   const nvgLensMat = getCachedMat('nvgLens_0x064e3b', () =>
@@ -1322,6 +1396,16 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
   const rightLegHitboxProxy = hitboxProxyById.thigh_r;
   const leftShinHitboxProxy = hitboxProxyById.shin_l;
   const rightShinHitboxProxy = hitboxProxyById.shin_r;
+
+  // Batch static sub-meshes per material within each animated bone scope to cut per-player draw calls
+  batchBoneScope(pelvisGroup, 'pelvis', new Set([upperBodyGroup, pelvisHitboxProxy]), pelvisCore);
+  batchBoneScope(upperBodyGroup, 'chest', new Set([headGroup, armPivot, torsoHitboxProxy]), torsoMesh);
+  batchBoneScope(headGroup, 'head', new Set([headHitboxProxy]), headMesh);
+  batchBoneScope(armPivot, 'arms', new Set([gunHolder]), null);
+  batchBoneScope(leftLeg, 'leg_l', new Set([leftKneePivot, leftLegHitboxProxy]), leftLeg);
+  batchBoneScope(rightLeg, 'leg_r', new Set([rightKneePivot, rightLegHitboxProxy]), rightLeg);
+  batchBoneScope(leftKneePivot, 'shin_l', new Set([leftShinHitboxProxy]), leftLegData.shinMesh);
+  batchBoneScope(rightKneePivot, 'shin_r', new Set([rightShinHitboxProxy]), rightLegData.shinMesh);
 
   if (!isShowcase && options.scene) {
     options.scene.add(group);

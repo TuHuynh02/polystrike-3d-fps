@@ -381,6 +381,50 @@ export class Game3D {
     this.citadelLight = new THREE.PointLight(0xe5a024, 2.2, 42, 1.4);
     this.citadelLight.position.set(0, 8.5, 0);
     this.scene.add(this.citadelLight);
+
+    // Permanent pooled grenade explosion point light (keeps NUM_POINT_LIGHTS constant to avoid PBR shader recompilation)
+    this.explosionLight = new THREE.PointLight(0xf97316, 0, 26, 1.5);
+    this.explosionLight.position.set(0, -100, 0);
+    this.scene.add(this.explosionLight);
+  }
+
+  _recycleExplosionEffect(fx) {
+    if (!fx) return;
+    this.scene.remove(fx.coreSphere);
+    this.scene.remove(fx.fireballSphere);
+    this.scene.remove(fx.blastWaveSphere);
+    this.scene.remove(fx.shockwaveRing);
+    this.scene.remove(fx.torusRing);
+    if (fx.flashLight && fx.flashLight === this.explosionLight) {
+      fx.flashLight.intensity = 0;
+    } else if (fx.flashLight) {
+      this.scene.remove(fx.flashLight);
+    }
+    if (fx.particles) {
+      for (let p = 0; p < fx.particles.length; p++) {
+        const pt = fx.particles[p];
+        const pm = pt.mesh;
+        this.scene.remove(pm);
+        if (this.sparkMeshPool && this.sparkMeshPool.length < 64) {
+          this.sparkMeshPool.push(pm);
+        }
+        if (this.tracerParticlePool && this.tracerParticlePool.length < 64) {
+          this.tracerParticlePool.push(pt);
+        }
+      }
+      fx.particles.length = 0;
+    }
+    if (!this.explosionPool) this.explosionPool = [];
+    if (this.explosionPool.length < 8) {
+      this.explosionPool.push(fx);
+    } else {
+      fx.coreMat?.dispose();
+      fx.fireballMat?.dispose();
+      fx.blastWaveMat?.dispose();
+      fx.shockwaveMat?.dispose();
+      fx.torusMat?.dispose();
+      fx.sparkMat?.dispose();
+    }
   }
 
   disposeMapResources() {
@@ -426,6 +470,45 @@ export class Game3D {
       tex.dispose();
     }
     this.arenaTextures.clear();
+
+    // Clear transient map-bound decals, shells, and effects on map switch
+    if (Array.isArray(this.bulletDecals)) {
+      for (let i = 0; i < this.bulletDecals.length; i++) {
+        this.scene.remove(this.bulletDecals[i]);
+      }
+      this.bulletDecals.length = 0;
+    }
+    if (Array.isArray(this.activeShells)) {
+      for (let i = 0; i < this.activeShells.length; i++) {
+        const sh = this.activeShells[i];
+        this.scene.remove(sh.mesh);
+        if (this.shellMeshPool && this.shellMeshPool.length < 32) {
+          this.shellMeshPool.push(sh.mesh);
+        }
+        if (this.shellPool && this.shellPool.length < 32) {
+          this.shellPool.push(sh);
+        }
+      }
+      this.activeShells.length = 0;
+    }
+    if (Array.isArray(this.activeEffects)) {
+      for (let i = this.activeEffects.length - 1; i >= 0; i--) {
+        const fx = this.activeEffects[i];
+        if (fx.type === 'popup') {
+          fx.sprite.visible = false;
+          if (!this.damagePopupPool) this.damagePopupPool = [];
+          this.damagePopupPool.push(fx);
+        } else if (fx.type === 'explosion') {
+          this._recycleExplosionEffect(fx);
+        } else {
+          this._recycleTracerEffect(fx);
+        }
+      }
+      this.activeEffects.length = 0;
+    }
+    if (this.explosionLight) {
+      this.explosionLight.intensity = 0;
+    }
 
     this._pbrToken++;
     this.pbrSlots = [];
@@ -1085,77 +1168,114 @@ export class Game3D {
       this.removeGrenadeMesh(data.id);
     }
 
-    const coreMat = new THREE.MeshBasicMaterial({
-      color: 0xfef08a,
-      transparent: true,
-      opacity: 1.0,
-      depthWrite: false
-    });
-    const coreSphere = new THREE.Mesh(this.sharedExplosionSphereGeo, coreMat);
+    if (!this.explosionPool) this.explosionPool = [];
+    let fxObj = this.explosionPool.pop();
+    let coreSphere, coreMat, fireballSphere, fireballMat, blastWaveSphere, blastWaveMat, shockwaveRing, shockwaveMat, torusRing, torusMat, sparkMat, particles;
+
+    if (fxObj) {
+      ({
+        coreSphere,
+        coreMat,
+        fireballSphere,
+        fireballMat,
+        blastWaveSphere,
+        blastWaveMat,
+        shockwaveRing,
+        shockwaveMat,
+        torusRing,
+        torusMat,
+        sparkMat,
+        particles
+      } = fxObj);
+      coreMat.opacity = 1.0;
+      fireballMat.opacity = 0.92;
+      blastWaveMat.opacity = 0.42;
+      shockwaveMat.opacity = 0.95;
+      torusMat.opacity = 0.88;
+      sparkMat.opacity = 1.0;
+      particles.length = 0;
+    } else {
+      coreMat = new THREE.MeshBasicMaterial({
+        color: 0xfef08a,
+        transparent: true,
+        opacity: 1.0,
+        depthWrite: false
+      });
+      coreSphere = new THREE.Mesh(this.sharedExplosionSphereGeo, coreMat);
+
+      fireballMat = new THREE.MeshBasicMaterial({
+        color: 0xf97316,
+        transparent: true,
+        opacity: 0.92,
+        depthWrite: false
+      });
+      fireballSphere = new THREE.Mesh(this.sharedExplosionSphereGeo, fireballMat);
+
+      blastWaveMat = new THREE.MeshBasicMaterial({
+        color: 0xef4444,
+        transparent: true,
+        opacity: 0.42,
+        wireframe: true,
+        depthWrite: false
+      });
+      blastWaveSphere = new THREE.Mesh(this.sharedExplosionSphereGeo, blastWaveMat);
+
+      shockwaveMat = new THREE.MeshBasicMaterial({
+        color: 0xfb923c,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.95,
+        depthWrite: false
+      });
+      shockwaveRing = new THREE.Mesh(this.sharedShockwaveRingGeo, shockwaveMat);
+      shockwaveRing.rotation.x = -Math.PI / 2;
+
+      torusMat = new THREE.MeshBasicMaterial({
+        color: 0xfacc15,
+        transparent: true,
+        opacity: 0.88,
+        depthWrite: false
+      });
+      torusRing = new THREE.Mesh(this.sharedShockwaveTorusGeo, torusMat);
+
+      sparkMat = new THREE.MeshBasicMaterial({
+        color: 0xfde047,
+        transparent: true,
+        opacity: 1.0
+      });
+      particles = [];
+    }
+
     coreSphere.position.set(ex, ey + 0.18, ez);
     coreSphere.scale.setScalar(0.45);
     this.scene.add(coreSphere);
 
-    const fireballMat = new THREE.MeshBasicMaterial({
-      color: 0xf97316,
-      transparent: true,
-      opacity: 0.92,
-      depthWrite: false
-    });
-    const fireballSphere = new THREE.Mesh(this.sharedExplosionSphereGeo, fireballMat);
     fireballSphere.position.set(ex, ey + 0.22, ez);
     fireballSphere.scale.setScalar(0.75);
     this.scene.add(fireballSphere);
 
-    const blastWaveMat = new THREE.MeshBasicMaterial({
-      color: 0xef4444,
-      transparent: true,
-      opacity: 0.42,
-      wireframe: true,
-      depthWrite: false
-    });
-    const blastWaveSphere = new THREE.Mesh(this.sharedExplosionSphereGeo, blastWaveMat);
     blastWaveSphere.position.set(ex, ey + 0.2, ez);
     blastWaveSphere.scale.setScalar(1.0);
     this.scene.add(blastWaveSphere);
 
-    const shockwaveMat = new THREE.MeshBasicMaterial({
-      color: 0xfb923c,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 0.95,
-      depthWrite: false
-    });
-    const shockwaveRing = new THREE.Mesh(this.sharedShockwaveRingGeo, shockwaveMat);
-    shockwaveRing.rotation.x = -Math.PI / 2;
     shockwaveRing.position.set(ex, Math.max(0.05, ey - 0.08), ez);
     shockwaveRing.scale.setScalar(0.6);
     this.scene.add(shockwaveRing);
 
-    const torusMat = new THREE.MeshBasicMaterial({
-      color: 0xfacc15,
-      transparent: true,
-      opacity: 0.88,
-      depthWrite: false
-    });
-    const torusRing = new THREE.Mesh(this.sharedShockwaveTorusGeo, torusMat);
     torusRing.rotation.x = Math.PI / 2 + (Math.random() - 0.5) * 0.35;
     torusRing.rotation.y = (Math.random() - 0.5) * 0.35;
     torusRing.position.set(ex, ey + 0.28, ez);
     torusRing.scale.setScalar(0.5);
     this.scene.add(torusRing);
 
-    const flashLight = new THREE.PointLight(0xf97316, 8.5, 26, 1.5);
-    flashLight.position.set(ex, ey + 0.6, ez);
-    this.scene.add(flashLight);
+    const flashLight = this.explosionLight;
+    if (flashLight) {
+      flashLight.position.set(ex, ey + 0.6, ez);
+      flashLight.intensity = this.quality.dynamicLights >= 2 ? 8.5 : 0;
+    }
 
     if (!this.sparkMeshPool) this.sparkMeshPool = [];
-    const sparkMat = new THREE.MeshBasicMaterial({
-      color: 0xfde047,
-      transparent: true,
-      opacity: 1.0
-    });
-    const particles = [];
+    if (!this.tracerParticlePool) this.tracerParticlePool = [];
     const pCount = Math.max(4, Math.round(18 * this.quality.particleScale));
     for (let i = 0; i < pCount; i++) {
       const pMesh = this.sparkMeshPool.pop() || new THREE.Mesh(this.sharedSparkGeo, sparkMat);
@@ -1165,12 +1285,21 @@ export class Game3D {
       pMesh.position.set(ex, ey + 0.2, ez);
       const angle = (i / pCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.35;
       const hSpeed = 4.5 + Math.random() * 9.5;
-      particles.push({
-        mesh: pMesh,
-        vx: Math.cos(angle) * hSpeed,
-        vy: 3.8 + Math.random() * 8.5,
-        vz: Math.sin(angle) * hSpeed
-      });
+      let pt = this.tracerParticlePool.pop();
+      if (pt) {
+        pt.mesh = pMesh;
+        pt.vx = Math.cos(angle) * hSpeed;
+        pt.vy = 3.8 + Math.random() * 8.5;
+        pt.vz = Math.sin(angle) * hSpeed;
+      } else {
+        pt = {
+          mesh: pMesh,
+          vx: Math.cos(angle) * hSpeed,
+          vy: 3.8 + Math.random() * 8.5,
+          vz: Math.sin(angle) * hSpeed
+        };
+      }
+      particles.push(pt);
       this.scene.add(pMesh);
     }
 
@@ -1178,25 +1307,33 @@ export class Game3D {
       this.spawnBulletDecal({ x: ex, y: 0.01, z: ez }, { x: 0, y: 1, z: 0 });
     }
 
-    this.activeEffects.push({
-      type: 'explosion',
-      coreSphere,
-      coreMat,
-      fireballSphere,
-      fireballMat,
-      blastWaveSphere,
-      blastWaveMat,
-      shockwaveRing,
-      shockwaveMat,
-      torusRing,
-      torusMat,
-      flashLight,
-      particles,
-      sparkMat,
-      maxRadius: radius,
-      createdAt: now,
-      duration: 540
-    });
+    if (fxObj) {
+      fxObj.flashLight = flashLight;
+      fxObj.maxRadius = radius;
+      fxObj.createdAt = now;
+      fxObj.duration = 540;
+      this.activeEffects.push(fxObj);
+    } else {
+      this.activeEffects.push({
+        type: 'explosion',
+        coreSphere,
+        coreMat,
+        fireballSphere,
+        fireballMat,
+        blastWaveSphere,
+        blastWaveMat,
+        shockwaveRing,
+        shockwaveMat,
+        torusRing,
+        torusMat,
+        flashLight,
+        particles,
+        sparkMat,
+        maxRadius: radius,
+        createdAt: now,
+        duration: 540
+      });
+    }
   }
 
   createWeaponMesh(weaponId, isFirstPerson = false) {
@@ -1795,7 +1932,9 @@ export class Game3D {
   }
 
   spawnShellCasing() {
-    const shell = new THREE.Mesh(this.sharedShellGeo, this.sharedShellMat);
+    if (!this.shellPool) this.shellPool = [];
+    const entry = this.shellPool.pop();
+    const shell = entry ? entry.mesh : new THREE.Mesh(this.sharedShellGeo, this.sharedShellMat);
     this.tmpVec3A.set(0.24, -0.14, -0.35);
     this.tmpVec3A.applyQuaternion(this.camera.quaternion);
     shell.position.copy(this.camera.position).add(this.tmpVec3A);
@@ -1809,17 +1948,29 @@ export class Game3D {
     this.tmpVec3B.add(this.velocity);
 
     this.scene.add(shell);
-    this.activeShells.push({
-      mesh: shell,
-      vx: this.tmpVec3B.x,
-      vy: this.tmpVec3B.y,
-      vz: this.tmpVec3B.z,
-      rx: (Math.random() - 0.5) * 22,
-      ry: (Math.random() - 0.5) * 22,
-      rz: (Math.random() - 0.5) * 22,
-      createdAt: performance.now(),
-      duration: 650
-    });
+    if (entry) {
+      entry.vx = this.tmpVec3B.x;
+      entry.vy = this.tmpVec3B.y;
+      entry.vz = this.tmpVec3B.z;
+      entry.rx = (Math.random() - 0.5) * 22;
+      entry.ry = (Math.random() - 0.5) * 22;
+      entry.rz = (Math.random() - 0.5) * 22;
+      entry.createdAt = performance.now();
+      entry.duration = 650;
+      this.activeShells.push(entry);
+    } else {
+      this.activeShells.push({
+        mesh: shell,
+        vx: this.tmpVec3B.x,
+        vy: this.tmpVec3B.y,
+        vz: this.tmpVec3B.z,
+        rx: (Math.random() - 0.5) * 22,
+        ry: (Math.random() - 0.5) * 22,
+        rz: (Math.random() - 0.5) * 22,
+        createdAt: performance.now(),
+        duration: 650
+      });
+    }
   }
 
   spawnBulletDecal(point, normal) {
@@ -1861,13 +2012,22 @@ export class Game3D {
       }
     }
     if (Array.isArray(fx.particles)) {
+      if (!this.tracerParticlePool) this.tracerParticlePool = [];
       for (let p = 0; p < fx.particles.length; p++) {
-        const pm = fx.particles[p].mesh;
-        this.scene.remove(pm);
-        if (this.sparkMeshPool && this.sparkMeshPool.length < 64) {
-          this.sparkMeshPool.push(pm);
+        const pt = fx.particles[p];
+        const pm = pt.mesh;
+        if (pm) {
+          this.scene.remove(pm);
+          if (this.sparkMeshPool && this.sparkMeshPool.length < 64) {
+            this.sparkMeshPool.push(pm);
+          }
+          pt.mesh = null;
+        }
+        if (this.tracerParticlePool.length < 160) {
+          this.tracerParticlePool.push(pt);
         }
       }
+      fx.particles.length = 0;
     }
     if (fx.sparkMat) {
       if (!this.sparkMatPool) this.sparkMatPool = [];
@@ -1876,6 +2036,15 @@ export class Game3D {
       } else {
         fx.sparkMat.dispose();
       }
+    }
+    fx.line = null;
+    fx.spark = null;
+    fx.geo = null;
+    fx.mat = null;
+    fx.sparkMat = null;
+    if (!this.tracerEffectPool) this.tracerEffectPool = [];
+    if (this.tracerEffectPool.length < 32) {
+      this.tracerEffectPool.push(fx);
     }
   }
 
@@ -1951,7 +2120,23 @@ export class Game3D {
     spark.scale.setScalar(isPlayerHit ? 1.45 : 0.95);
     this.scene.add(spark);
 
-    const particles = [];
+    if (!this.tracerEffectPool) this.tracerEffectPool = [];
+    if (!this.tracerParticlePool) this.tracerParticlePool = [];
+    const fx = this.tracerEffectPool.pop() || {
+      type: 'tracer',
+      ss: 0,
+      line: null,
+      spark: null,
+      particles: [],
+      geo: null,
+      mat: null,
+      sparkMat: null,
+      createdAt: 0,
+      duration: 145
+    };
+    const particles = fx.particles;
+    particles.length = 0;
+
     const pCount = isPlayerHit ? 5 : 3;
     const nx = hitNormal ? hitNormal.x : 0;
     const ny = hitNormal ? hitNormal.y : 1;
@@ -1962,12 +2147,12 @@ export class Game3D {
       pMesh.material = sparkMat;
       pMesh.scale.setScalar(1);
       pMesh.position.copy(this.tmpVec3B);
-      particles.push({
-        mesh: pMesh,
-        vx: nx * 3.5 + (Math.random() - 0.5) * 5.5,
-        vy: ny * 3.5 + Math.random() * 4.2,
-        vz: nz * 3.5 + (Math.random() - 0.5) * 5.5
-      });
+      const pt = this.tracerParticlePool.pop() || { mesh: null, vx: 0, vy: 0, vz: 0 };
+      pt.mesh = pMesh;
+      pt.vx = nx * 3.5 + (Math.random() - 0.5) * 5.5;
+      pt.vy = ny * 3.5 + Math.random() * 4.2;
+      pt.vz = nz * 3.5 + (Math.random() - 0.5) * 5.5;
+      particles.push(pt);
       this.scene.add(pMesh);
     }
 
@@ -1975,18 +2160,16 @@ export class Game3D {
       this.spawnBulletDecal(hitPoint, hitNormal);
     }
 
-    this.activeEffects.push({
-      type: 'tracer',
-      ss,
-      line,
-      spark,
-      particles,
-      geo,
-      mat,
-      sparkMat,
-      createdAt: performance.now(),
-      duration: 145
-    });
+    fx.type = 'tracer';
+    fx.ss = ss;
+    fx.line = line;
+    fx.spark = spark;
+    fx.geo = geo;
+    fx.mat = mat;
+    fx.sparkMat = sparkMat;
+    fx.createdAt = performance.now();
+    fx.duration = 145;
+    this.activeEffects.push(fx);
   }
 
   getAudioListenerState() {
@@ -2079,6 +2262,13 @@ export class Game3D {
         ctx.fillText(text, 80, 44);
       }
       tex = new THREE.CanvasTexture(canvas);
+      if (this._damagePopupTexCache.size >= 64) {
+        const oldestKey = this._damagePopupTexCache.keys().next().value;
+        if (oldestKey !== undefined) {
+          this._damagePopupTexCache.get(oldestKey)?.dispose();
+          this._damagePopupTexCache.delete(oldestKey);
+        }
+      }
       this._damagePopupTexCache.set(cacheKey, tex);
     }
 
@@ -2272,7 +2462,7 @@ export class Game3D {
       activeVm.userData.flashMesh.scale.set(s, s, s);
     }
     this.muzzleLight.color.setHex(cfg.color || 0xfef08a);
-    this.muzzleLight.intensity = 3.2;
+    this.muzzleLight.intensity = this.quality.dynamicLights >= 1 ? 3.2 : 0;
 
     this.spawnShellCasing();
 
@@ -2321,13 +2511,18 @@ export class Game3D {
     if (this.rayTargets.length === 0) {
       this.rebuildHitboxList();
     }
+    const eyeOrigin = plan.origin;
+    const maxPlayerDistSq = (cfg.range + 2.5) * (cfg.range + 2.5);
     for (const rp of this.remotePlayers.values()) {
       if (rp.alive && rp.group) {
-        rp.group.updateMatrixWorld(true);
+        const dx = rp.group.position.x - eyeOrigin.x;
+        const dy = (rp.group.position.y + 0.9) - eyeOrigin.y;
+        const dz = rp.group.position.z - eyeOrigin.z;
+        if (dx * dx + dy * dy + dz * dz <= maxPlayerDistSq) {
+          rp.group.updateMatrixWorld(true);
+        }
       }
     }
-
-    const eyeOrigin = plan.origin;
     for (let p = 0; p < plan.dirs.length; p++) {
       const dir = plan.dirs[p];
       this.raycaster.ray.origin.set(eyeOrigin.x, eyeOrigin.y, eyeOrigin.z);
@@ -3554,6 +3749,10 @@ export class Game3D {
       if (elapsed >= sh.duration) {
         this.scene.remove(sh.mesh);
         this.activeShells.splice(i, 1);
+        if (!this.shellPool) this.shellPool = [];
+        if (this.shellPool.length < 24) {
+          this.shellPool.push(sh);
+        }
       } else {
         sh.vy -= 18.0 * dt;
         sh.mesh.position.x += sh.vx * dt;
@@ -3574,27 +3773,7 @@ export class Game3D {
           if (!this.damagePopupPool) this.damagePopupPool = [];
           this.damagePopupPool.push(fx);
         } else if (fx.type === 'explosion') {
-          this.scene.remove(fx.coreSphere);
-          this.scene.remove(fx.fireballSphere);
-          this.scene.remove(fx.blastWaveSphere);
-          this.scene.remove(fx.shockwaveRing);
-          this.scene.remove(fx.torusRing);
-          this.scene.remove(fx.flashLight);
-          if (fx.particles) {
-            for (let p = 0; p < fx.particles.length; p++) {
-              const pm = fx.particles[p].mesh;
-              this.scene.remove(pm);
-              if (this.sparkMeshPool && this.sparkMeshPool.length < 64) {
-                this.sparkMeshPool.push(pm);
-              }
-            }
-          }
-          fx.coreMat.dispose();
-          fx.fireballMat.dispose();
-          fx.blastWaveMat.dispose();
-          fx.shockwaveMat.dispose();
-          fx.torusMat.dispose();
-          fx.sparkMat.dispose();
+          this._recycleExplosionEffect(fx);
         } else {
           this._recycleTracerEffect(fx);
         }
@@ -3622,7 +3801,9 @@ export class Game3D {
           fx.torusRing.scale.setScalar(0.5 + easeOut * (fx.maxRadius * 0.72));
           fx.torusMat.opacity = alpha * 0.82;
 
-          fx.flashLight.intensity = 8.5 * alpha * alpha;
+          if (fx.flashLight) {
+            fx.flashLight.intensity = this.quality.dynamicLights >= 2 ? 8.5 * alpha * alpha : 0;
+          }
 
           if (fx.particles) {
             fx.sparkMat.opacity = alpha;

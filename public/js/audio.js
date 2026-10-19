@@ -1206,6 +1206,20 @@ export class SoundEffects {
       Math.round(5600 * Math.exp(-spatial.dist / 20))
     );
 
+    // Voice limit concurrent distant spatial gunshots to prevent audio thread saturation in 12-player firefights
+    const nowPerf = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (!this._activeSpatialShots) this._activeSpatialShots = [];
+    for (let i = this._activeSpatialShots.length - 1; i >= 0; i--) {
+      const s = this._activeSpatialShots[i];
+      if (nowPerf >= s.expPerf || (now > s.startCtx && now >= s.expCtx)) {
+        this._activeSpatialShots.splice(i, 1);
+      }
+    }
+    if (this._activeSpatialShots.length >= 8 && spatial.dist > 16) {
+      return { pan: spatial.pan, gain: shotGain, dist: spatial.dist, cutoff };
+    }
+    this._activeSpatialShots.push({ startCtx: now, expCtx: now + 0.09, expPerf: nowPerf + 90 });
+
     const chain = this.createSpatialChain(ctx, spatial.pan, shotGain, now, cutoff);
     this.playShot(weaponId, 0.72, chain.input);
     this.scheduleChainCleanup(chain, 0.55);

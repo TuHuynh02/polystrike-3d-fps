@@ -299,6 +299,22 @@ export function raycastPlayerParts(origin, dir, player, maxRange = 200, opts = {
   const nd = { x: dir.x / len, y: dir.y / len, z: dir.z / len };
   const pad = Math.max(0, finite(opts?.padding, PART_PADDING));
 
+  // Broadphase bounding-sphere check around the player's center before allocating 7 oriented bone boxes
+  const px = finite(player.x, 0);
+  const py = finite(player.y, 0) + 0.9;
+  const pz = finite(player.z, 0);
+  const radius = 2.1 + pad * 2;
+  const rSq = radius * radius;
+  const ocX = px - origin.x;
+  const ocY = py - origin.y;
+  const ocZ = pz - origin.z;
+  const distSq = ocX * ocX + ocY * ocY + ocZ * ocZ;
+  if (distSq > rSq) {
+    const tProj = ocX * nd.x + ocY * nd.y + ocZ * nd.z;
+    if (tProj < 0 || tProj - radius > maxRange) return null;
+    if (distSq - tProj * tProj > rSq) return null;
+  }
+
   let best = null;
   for (const box of playerParts(player, opts)) {
     const t = rayVsBox(origin, nd, box, pad, maxRange);
