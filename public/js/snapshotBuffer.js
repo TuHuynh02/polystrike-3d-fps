@@ -212,7 +212,8 @@ function copyEntity(raw, t) {
     alive: raw.alive === undefined ? true : Boolean(raw.alive),
     weapon: raw.weapon === undefined ? null : raw.weapon,
     // true => do not interpolate between the previous snapshot and this one (first / teleport / alive flip)
-    discontinuity: false
+    discontinuity: false,
+    smoothed: false
   };
 }
 
@@ -274,6 +275,37 @@ export class SnapshotBuffer {
     if (last) {
       const dist = Math.hypot(s.x - last.x, s.y - last.y, s.z - last.z);
       s.discontinuity = dist > this.teleportDistance || s.alive !== last.alive || raw.snap === true;
+      // Smooth single-tick command starvation / bunching (e.g. 0-cmd tick followed by 4-cmd catch-up tick when a
+      // 33ms inputBatch arrives just after a 40ms server tick while the remote player is moving steadily).
+      if (snaps.length >= 2 && !s.discontinuity && !last.discontinuity) {
+        const prev = snaps[snaps.length - 2];
+        if (prev.alive && last.alive && s.alive) {
+          const dt1 = last.t - prev.t;
+          const dt2 = s.t - last.t;
+          if (dt1 > 0 && dt1 <= 65 && dt2 > 0 && dt2 <= 65) {
+            const speedLast = Math.hypot(last.vx, last.vz);
+            const speedS = Math.hypot(s.vx, s.vz);
+            if (speedLast > 0.5 && speedS > 0.5 && Math.hypot(s.vx - last.vx, s.vz - last.vz) < 0.8) {
+              const d1 = Math.hypot(last.x - prev.x, last.z - prev.z);
+              const d2 = Math.hypot(s.x - last.x, s.z - last.z);
+              if (
+                (d1 < 1e-3 && d2 > 0.04) ||
+                (d2 > 2.2 * Math.max(d1, 1e-4) && d2 > 0.06 && Math.hypot(last.vx - prev.vx, last.vz - prev.vz) < 0.5)
+              ) {
+                const frac = dt1 / (dt1 + dt2);
+                const midX = prev.x + (s.x - prev.x) * frac;
+                const midZ = prev.z + (s.z - prev.z) * frac;
+                if (Math.hypot(last.x - midX, last.z - midZ) < 0.55) {
+                  last.x = midX;
+                  last.z = midZ;
+                  last.y = prev.y + (s.y - prev.y) * frac;
+                  last.smoothed = true;
+                }
+              }
+            }
+          }
+        }
+      }
     } else {
       s.discontinuity = true;
     }
@@ -300,6 +332,7 @@ export class SnapshotBuffer {
     if (n === 0 || !isNum(renderT)) return null;
     out.extrapolated = false;
     out.snapped = false;
+    out.smoothed = false;
 
     const first = snaps[0];
     if (renderT <= first.t) {
@@ -359,6 +392,7 @@ export class SnapshotBuffer {
     out.yaw = lerpAngle(a.yaw, b.yaw, k);
     out.pitch = a.pitch + (b.pitch - a.pitch) * k;
     out.lean = a.lean + (b.lean - a.lean) * k;
+    out.smoothed = Boolean(a.smoothed || b.smoothed);
     return out;
   }
 }
@@ -641,7 +675,7 @@ export class SnapshotInterpolator {
         st.ovz = (st.ovz - w * t * dt) * e;
         if (out.snapped) {
           st.ox = st.oy = st.oz = st.ovx = st.ovy = st.ovz = 0;
-        } else if (wasExtrap || out.extrapolated) {
+        } else if (wasExtrap || out.extrapolated || out.smoothed) {
           const jx = rawX - (st.rx + st.rvx * dt);
           const jy = rawY - (st.ry + st.rvy * dt);
           const jz = rawZ - (st.rz + st.rvz * dt);

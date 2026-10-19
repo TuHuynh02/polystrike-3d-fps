@@ -14,6 +14,7 @@ export function getCachedGeo(key, factoryFn) {
     geo = factoryFn();
     geo.userData = geo.userData || {};
     geo.userData.shared = true;
+    if (!geo.boundingSphere) geo.computeBoundingSphere();
     RIG_GEO_CACHE.set(key, geo);
   }
   return geo;
@@ -206,8 +207,8 @@ export function disposeObject3D(root) {
 }
 
 export const HITBOX_PROXY_MAT = new THREE.MeshBasicMaterial({
-  visible: true,
-  transparent: true,
+  visible: false,
+  transparent: false,
   opacity: 0,
   depthWrite: false,
   depthTest: false,

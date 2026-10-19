@@ -11,7 +11,8 @@ import {
   createRateLimiter,
   parseCorsOrigins,
   createCorsOriginCheck,
-  createAllowRequest
+  createAllowRequest,
+  installSmartVolatile
 } from './socketGuard.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -99,6 +100,7 @@ app.get('*', (_req, res) => {
 });
 
 io.on('connection', (socket) => {
+  installSmartVolatile(socket);
   let currentRoomCode = null;
 
   // Every event handler below is crash-proof (try/catch), rate limited per

@@ -96,12 +96,19 @@ export async function createNetworkClient() {
 
   const origEmit = rawSocket.emit.bind(rawSocket);
   rawSocket.emit = (event, payload, ack) => {
-    // Input batches are volatile: a late batch is useless (newer ones repeat the unacked commands anyway) - except a batch
-    // that carries a shot (FIRE bit): the shot only exists inside the command stream, so it must not be dropped
+    // Input batches repeat unacked commands, so only drop a batch under genuine socket backpressure — never when the
+    // transport is simply mid-flush from a concurrent pingCheck / latencyProbe ack (and never when it carries a shot).
     // NOTE: Socket.IO's `socket.volatile` getter sets the flag and returns the SAME socket, so calling `.emit` on it would
     // re-enter this wrapper forever (stack overflow, nothing ever sent). Set the flag, then call the ORIGINAL emit.
     if (event === 'inputBatch' && !batchHasFire(payload)) {
-      void rawSocket.volatile;
+      const eng = rawSocket.io?.engine;
+      const backpressured =
+        !eng ||
+        (Array.isArray(eng.writeBuffer) && eng.writeBuffer.length > 4) ||
+        (eng.transport?.ws?.bufferedAmount > 16384);
+      if (backpressured) {
+        void rawSocket.volatile;
+      }
     }
     return origEmit(event, payload, ack);
   };

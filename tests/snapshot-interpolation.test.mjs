@@ -709,4 +709,59 @@ describe('(i) headless Game3D draws remote players by snapshot interpolation', (
     game.clearAllRemotePlayers();
     assert.equal(game.snapshots.size, 0);
   });
+
+  it('smooths single-tick 0-command starvation + catch-up burst and pools tracer / remote weapon geometries', async () => {
+    const buf = new SnapshotBuffer();
+    // Simulate a remote player running at 6.2 m/s where tick 1040 had 0 commands processed and tick 1080 had 4 commands
+    buf.push(snap(1000, 0.0, { vx: 6.2, vz: 0 }));
+    buf.push(snap(1040, 0.0, { vx: 6.2, vz: 0 })); // 0-command starvation tick
+    buf.push(snap(1080, 0.496, { vx: 6.2, vz: 0 })); // 4-command catch-up tick
+    assert.equal(buf.snaps[1].smoothed, true, 'intermediate starvation tick is smoothed');
+    assert.ok(Math.abs(buf.snaps[1].x - 0.248) < 1e-6, 'intermediate snapshot moved to linear midpoint');
+    const mid = buf.sample(1020);
+    assert.ok(Math.abs(mid.x - 0.124) < 1e-6);
+    assert.ok(Math.abs(mid.vx - 6.2) < 0.05, 'segment velocity stays steady instead of dropping to 0');
+
+    const game = await createTestGame3D();
+    game.localId = 'me';
+    game.syncPlayersState(
+      [
+        { id: 'me', name: 'Me', x: 0, y: 0, z: 0, alive: true, hp: 100 },
+        { id: 'r2', name: 'R2', x: 5, y: 0, z: -8, vx: 0, vy: 0, vz: 0, weapon: 'rifle', alive: true, hp: 100 }
+      ],
+      2000,
+      2000
+    );
+    const rp2 = game.remotePlayers.get('r2');
+    assert.ok(rp2);
+    // Weapon swap reuses cached geometries and keeps frustumCulled = true
+    game.syncPlayersState(
+      [
+        { id: 'me', name: 'Me', x: 0, y: 0, z: 0, alive: true, hp: 100 },
+        { id: 'r2', name: 'R2', x: 5, y: 0, z: -8, vx: 0, vy: 0, vz: 0, weapon: 'smg', alive: true, hp: 100 }
+      ],
+      2040,
+      2040
+    );
+    let allSharedAndBounded = true;
+    rp2.gunMesh.traverse((o) => {
+      if (o.isMesh) {
+        if (!o.geometry?.userData?.shared || !o.geometry?.boundingSphere || o.frustumCulled !== true) {
+          allSharedAndBounded = false;
+        }
+      }
+    });
+    assert.equal(allSharedAndBounded, true, 'swapped remote weapon meshes use cached geometries with bounding spheres');
+
+    // Tracer pooling & cap
+    for (let i = 0; i < 30; i++) {
+      game.spawnTracerEffect({ x: 0, y: 1.5, z: 0 }, { x: 0, y: 1.5, z: -10 }, 0xfef08a, false, null, i + 1);
+    }
+    const maxBudget = game.quality?.maxShotEffects || 20;
+    const activeTracers = game.activeEffects.filter((fx) => fx.type === 'tracer');
+    assert.ok(activeTracers.length <= maxBudget, `active tracers (${activeTracers.length}) capped to <= ${maxBudget}`);
+    game._recycleTracerEffect(game.activeEffects.pop());
+    assert.equal(game.tracerLinePool?.length, 1, 'recycled tracer lines are pooled for reuse');
+  });
 });
+

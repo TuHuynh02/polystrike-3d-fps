@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { ServerNetStats } from './netStats.js';
+import { installSmartVolatile } from './socketGuard.js';
 import {
   DEFAULT_MAP_ID,
   MAPS,
@@ -48,7 +49,7 @@ const TICK_INTERVAL_MS = 40; // 25Hz server simulation / state broadcast
 export const INPUT_QUEUE_MAX = 64; // queued, not yet simulated commands per player
 export const INPUT_BATCH_MAX_CMDS = 32; // commands read from one `inputBatch`
 export const INPUT_CREDIT_CAP_S = 0.25; // largest real-time credit a player may bank (= max catch-up burst)
-export const INPUT_GAP_WAIT_MS = 100; // wait this long for a missing seq (reordering / lost batch) before skipping it
+export const INPUT_GAP_WAIT_MS = 45; // wait at most ~1 server tick for a missing seq before skipping it
 export const INPUT_SEQ_AHEAD_MAX = 3600; // reject seqs further than this (1 minute) beyond the last processed one
 export const STALE_EPOCH_ACK_INTERVAL_MS = 100; // throttle of the resync ack sent in reply to stale-epoch batches
 
@@ -612,6 +613,7 @@ export class RoomManager {
   }
 
   addHumanPlayer(socket, { name, roomCode, mode, weapon, loadout, mapId }) {
+    installSmartVolatile(socket);
     const cleanName = sanitizeName(name);
     const requestedCode = sanitizeRoomCode(roomCode);
     const cleanLoadout = sanitizeLoadout(loadout, weapon);

@@ -13,7 +13,8 @@ import {
   guardedOn,
   parseCorsOrigins,
   createCorsOriginCheck,
-  createAllowRequest
+  createAllowRequest,
+  installSmartVolatile
 } from '../server/socketGuard.js';
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -242,6 +243,53 @@ describe('socketGuard: CORS / origin policy', () => {
     assert.equal(run(['https://evil.example'], { host: 'game.example', origin: 'https://evil.example' }), true);
     assert.equal(run(['*'], { host: 'game.example', origin: 'https://x.example' }), true);
     assert.equal(run([], { host: 'game.example', origin: 'not a url' }), false);
+  });
+});
+
+describe('socketGuard: installSmartVolatile', () => {
+  it('queues same-tick volatile packets when !transport.writable and not backpressured, but drops when backpressured', () => {
+    const written = [];
+    const client = {
+      conn: {
+        writeBuffer: [],
+        transport: {
+          writable: true,
+          socket: { bufferedAmount: 0 }
+        }
+      },
+      writeToEngine(encodedPackets, opts = {}) {
+        if (opts.volatile && !this.conn.transport.writable) return;
+        for (const p of encodedPackets) {
+          this.conn.writeBuffer.push(p);
+          written.push({ p, volatile: Boolean(opts.volatile) });
+        }
+        this.conn.transport.writable = false;
+      }
+    };
+    const socket = { id: 's1', client };
+    installSmartVolatile(socket);
+    installSmartVolatile(socket); // idempotent
+
+    // First packet in the tick (e.g. moveAck) makes transport.writable = false
+    client.writeToEngine(['moveAck'], { volatile: true });
+    assert.equal(client.conn.transport.writable, false);
+    assert.equal(written.length, 1);
+
+    // Second and third packets in the same tick (selfState, stateUpdate) are NOT dropped because writeBuffer < 6
+    client.writeToEngine(['selfState'], { volatile: false });
+    client.writeToEngine(['stateUpdate'], { volatile: true });
+    assert.equal(written.length, 3);
+    assert.deepEqual(written.map((w) => w.p), ['moveAck', 'selfState', 'stateUpdate']);
+
+    // When genuinely backpressured (writeBuffer.length >= 6 or bufferedAmount >= 32768), volatile packets ARE dropped
+    client.conn.writeBuffer = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6'];
+    client.writeToEngine(['droppedByBufferLen'], { volatile: true });
+    assert.equal(written.length, 3);
+
+    client.conn.writeBuffer = ['p1'];
+    client.conn.transport.socket.bufferedAmount = 40_000;
+    client.writeToEngine(['droppedByBufferedAmount'], { volatile: true });
+    assert.equal(written.length, 3);
   });
 });
 

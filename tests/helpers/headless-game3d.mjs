@@ -42,7 +42,7 @@ export async function load(url, context, nextLoad) {
     const patched = src.replace(
       'WebGLRenderer,',
       '_HeadlessWebGLRenderer as WebGLRenderer,'
-    ) + '\\nconst _HeadlessWebGLRenderer = globalThis.__HeadlessWebGLRenderer || WebGLRenderer;\\n';
+    ) + '\\nconst _HeadlessWebGLRenderer = globalThis.__HeadlessWebGLRenderer || WebGLRenderer;\\nglobalThis.__RealWebGLRenderer = WebGLRenderer;\\n';
     return {
       format: 'module',
       shortCircuit: true,
@@ -194,6 +194,10 @@ globalThis.cancelAnimationFrame = () => {};
 
 globalThis.__HeadlessWebGLRenderer = class HeadlessWebGLRenderer {
   constructor(params = {}) {
+    // perf probe: swap in the REAL three.js renderer running on a fake GL context (see helpers/fake-gl.mjs)
+    if (typeof globalThis.__headlessRendererFactory === 'function') {
+      return globalThis.__headlessRendererFactory(params, createMockCanvas);
+    }
     this.params = params;
     this.domElement = createMockCanvas(1280, 720);
     this.shadowMap = {

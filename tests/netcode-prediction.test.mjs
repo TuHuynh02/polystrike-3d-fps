@@ -952,6 +952,8 @@ describe('live server: inputBatch -> moveAck over a real Socket.IO connection', 
 
       const acks = a.log.filter((m) => m.event === 'moveAck').map((m) => m.payload);
       assert.ok(acks.length >= 10, `received ${acks.length} acks`);
+      const aStates = a.log.filter((m) => m.event === 'stateUpdate');
+      assert.ok(aStates.length >= acks.length, `moving player A also receives stateUpdate on ticks with moveAck (${aStates.length} >= ${acks.length})`);
       for (let i = 1; i < acks.length; i++) assert.ok(acks[i].seq >= acks[i - 1].seq);
       const last = acks[acks.length - 1];
       assert.equal(last.epoch, epoch);

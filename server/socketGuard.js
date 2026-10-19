@@ -207,3 +207,45 @@ export function createAllowRequest(allowList) {
     return cb('Origin not allowed', false);
   };
 }
+
+/**
+ * Prevents Socket.IO's `socket.volatile.emit(...)` from falsely dropping packets
+ * when multiple events (`moveAck`, `selfState`, `shotFired`, `stateUpdate`) are emitted
+ * synchronously in the same server tick.
+ *
+ * By default, Socket.IO (`Client.writeToEngine`) drops volatile packets whenever
+ * `!conn.transport.writable`. In Engine.IO's WebSocket transport, `writable` is set to
+ * `false` immediately upon the FIRST `ws.send()` in a tick and only resets to `true`
+ * in the asynchronous `ws.send` completion callback — after `RoomManager.tick()` has
+ * already finished. Emitting `moveAck` or `selfState` first in `tick()` would therefore
+ * cause `io.to(roomCode).volatile.emit('stateUpdate', ...)` in the same tick to be
+ * silently discarded even when the WebSocket has zero backpressure.
+ *
+ * This wrapper preserves genuine backpressure protection (dropping volatile packets when
+ * `conn.writeBuffer.length >= 6` or `ws.bufferedAmount >= 32768`), while queueing
+ * same-tick volatile packets into Engine.IO's `writeBuffer` when the socket is simply
+ * mid-flush from an earlier packet in the same tick.
+ */
+export function installSmartVolatile(socket) {
+  const client = socket?.client;
+  if (!client || client._smartVolatileInstalled || typeof client.writeToEngine !== 'function') {
+    return;
+  }
+  client._smartVolatileInstalled = true;
+  const origWriteToEngine = client.writeToEngine.bind(client);
+  client.writeToEngine = function smartWriteToEngine(encodedPackets, opts) {
+    if (opts && opts.volatile) {
+      const conn = this.conn;
+      const transport = conn?.transport;
+      if (conn && transport && !transport.writable) {
+        const writeBufLen = Array.isArray(conn.writeBuffer) ? conn.writeBuffer.length : 0;
+        const wsBuffered = transport.socket?.bufferedAmount ?? 0;
+        if (writeBufLen < 6 && wsBuffered < 32768) {
+          return origWriteToEngine(encodedPackets, { ...opts, volatile: false });
+        }
+      }
+    }
+    return origWriteToEngine(encodedPackets, opts);
+  };
+}
+

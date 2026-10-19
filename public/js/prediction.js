@@ -14,7 +14,7 @@ import {
 /** Unacked commands kept for replay (~3 s at 60 Hz). */
 export const PREDICTION_HISTORY_MAX = 180;
 /** Already-sent but still unacked commands repeated in every batch (packet-loss redundancy). */
-export const INPUT_REDUNDANCY = 4;
+export const INPUT_REDUNDANCY = 6;
 /** Hard cap of commands in one batch. */
 export const INPUT_BATCH_MAX_CMDS = 24;
 /** Minimum interval between input batches (~30 Hz). */

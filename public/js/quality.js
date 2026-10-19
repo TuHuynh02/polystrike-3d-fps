@@ -16,6 +16,9 @@ export const QUALITY_CHOICES = ['auto', ...TIER_ORDER];
  *  - envMapSize: width of the procedural sky env map (0 = none, no PMREM at all)
  *  - cameraFar: far plane (kept at 360 on every tier: the sky dome has a 310 radius and must never be clipped)
  *  - maxBulletDecals / particleScale / ambientParticles: effect budgets
+ *  - maxShotEffects: size of the pre-built tracer + spark pool (shots beyond it recycle the oldest tracer: no per-shot allocation)
+ *  - dynamicLights: number of transient point lights that are PERMANENTLY in the scene (0 = none, 1 = local muzzle light,
+ *    2 = + one shared explosion flash). The light count never changes during a match, so the shaders never recompile on a shot
  *  - cylinderSegments / capsuleSegments: tessellation of the instanced decor (triangle budget)
  *  - glbProps (0/1): glTF props (crate toppers) instead of procedural boxes
  *  - mergeWorldMeshes (boolean, a SAVING flag so it is not part of the monotonic cost knobs): Low draws the obstacles as one
@@ -36,6 +39,8 @@ export const QUALITY = {
     envMapSize: 0,
     cameraFar: 360,
     maxBulletDecals: 12,
+    maxShotEffects: 10,
+    dynamicLights: 0,
     particleScale: 0.45,
     ambientParticles: 0,
     cylinderSegments: 8,
@@ -57,6 +62,8 @@ export const QUALITY = {
     envMapSize: 256,
     cameraFar: 360,
     maxBulletDecals: 24,
+    maxShotEffects: 16,
+    dynamicLights: 1,
     particleScale: 0.75,
     ambientParticles: 120,
     cylinderSegments: 12,
@@ -78,6 +85,8 @@ export const QUALITY = {
     envMapSize: 512,
     cameraFar: 360,
     maxBulletDecals: 36,
+    maxShotEffects: 24,
+    dynamicLights: 2,
     particleScale: 1,
     ambientParticles: 220,
     cylinderSegments: 14,

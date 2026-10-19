@@ -19,7 +19,8 @@ import { createWeaponMesh, setWeaponAdsCulling } from './weaponModels.js';
 import {
   createRemotePlayerMesh,
   animateHumanoidRig,
-  disposeObject3D
+  disposeObject3D,
+  getCachedGeo
 } from './humanoidRig.js';
 import { TacticalMinimap } from './minimap.js';
 import { sfx } from './audio.js';
@@ -1503,8 +1504,11 @@ export class Game3D {
     });
     if (rp?.group) {
       rp.group.traverse((obj) => {
-        if (obj.isMesh || obj.isSprite) {
-          obj.frustumCulled = false;
+        if (obj.isMesh) {
+          if (obj.geometry && !obj.geometry.boundingSphere) {
+            obj.geometry.computeBoundingSphere();
+          }
+          obj.frustumCulled = true;
         }
       });
     }
@@ -1679,8 +1683,19 @@ export class Game3D {
         rp.gunHolder.remove(rp.gunMesh);
         disposeObject3D(rp.gunMesh);
         rp.gunMesh = this.createWeaponMesh(p.weapon, false);
-        // like the rest of the rig (createRemotePlayerMesh): a swapped-in gun must never be frustum-culled away
-        rp.gunMesh.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
+        let gunPartIdx = 0;
+        rp.gunMesh.traverse((o) => {
+          if (o.isMesh && o.geometry) {
+            const cacheKey = `wep_${p.weapon}_${gunPartIdx++}`;
+            const cachedGeo = getCachedGeo(cacheKey, () => o.geometry);
+            if (cachedGeo !== o.geometry) {
+              o.geometry.dispose();
+              o.geometry = cachedGeo;
+            }
+            if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+            o.frustumCulled = true;
+          }
+        });
         rp.gunHolder.add(rp.gunMesh);
       }
 
@@ -1827,25 +1842,107 @@ export class Game3D {
     this.bulletDecals.push(decalMesh);
   }
 
+  _recycleTracerEffect(fx) {
+    if (!fx) return;
+    if (fx.line) {
+      this.scene.remove(fx.line);
+      if (!this.tracerLinePool) this.tracerLinePool = [];
+      if (this.tracerLinePool.length < 32) {
+        this.tracerLinePool.push(fx.line);
+      } else {
+        fx.geo?.dispose();
+        fx.mat?.dispose();
+      }
+    }
+    if (fx.spark) {
+      this.scene.remove(fx.spark);
+      if (this.sparkMeshPool && this.sparkMeshPool.length < 64) {
+        this.sparkMeshPool.push(fx.spark);
+      }
+    }
+    if (Array.isArray(fx.particles)) {
+      for (let p = 0; p < fx.particles.length; p++) {
+        const pm = fx.particles[p].mesh;
+        this.scene.remove(pm);
+        if (this.sparkMeshPool && this.sparkMeshPool.length < 64) {
+          this.sparkMeshPool.push(pm);
+        }
+      }
+    }
+    if (fx.sparkMat) {
+      if (!this.sparkMatPool) this.sparkMatPool = [];
+      if (this.sparkMatPool.length < 32) {
+        this.sparkMatPool.push(fx.sparkMat);
+      } else {
+        fx.sparkMat.dispose();
+      }
+    }
+  }
+
   spawnTracerEffect(origin, hitPoint, colorHex = 0xfef08a, isPlayerHit = false, hitNormal = null, ss = 0) {
     this.tmpVec3A.set(origin.x, origin.y, origin.z);
     this.tmpVec3B.set(hitPoint.x, hitPoint.y, hitPoint.z);
 
-    const geo = new THREE.BufferGeometry().setFromPoints([this.tmpVec3A, this.tmpVec3B]);
-    const mat = new THREE.LineBasicMaterial({
-      color: colorHex,
-      transparent: true,
-      opacity: 0.95
-    });
-    const line = new THREE.Line(geo, mat);
+    // Cap concurrent shot effects to the quality tier's maxShotEffects budget during multi-player firefights
+    const maxShotEffects = this.quality?.maxShotEffects || 20;
+    let activeTracers = 0;
+    let oldestTracerIdx = -1;
+    for (let i = 0; i < this.activeEffects.length; i++) {
+      if (this.activeEffects[i].type === 'tracer') {
+        activeTracers++;
+        if (oldestTracerIdx === -1) oldestTracerIdx = i;
+      }
+    }
+    if (activeTracers >= maxShotEffects && oldestTracerIdx !== -1) {
+      const oldest = this.activeEffects.splice(oldestTracerIdx, 1)[0];
+      this._recycleTracerEffect(oldest);
+    }
+
+    if (!this.tracerLinePool) this.tracerLinePool = [];
+    let line = this.tracerLinePool.pop();
+    let geo;
+    let mat;
+    if (line) {
+      geo = line.geometry;
+      mat = line.material;
+      const posAttr = geo.attributes.position;
+      const arr = posAttr.array;
+      arr[0] = this.tmpVec3A.x;
+      arr[1] = this.tmpVec3A.y;
+      arr[2] = this.tmpVec3A.z;
+      arr[3] = this.tmpVec3B.x;
+      arr[4] = this.tmpVec3B.y;
+      arr[5] = this.tmpVec3B.z;
+      posAttr.needsUpdate = true;
+      geo.computeBoundingSphere();
+      mat.color.setHex(colorHex);
+      mat.opacity = 0.95;
+    } else {
+      geo = new THREE.BufferGeometry();
+      const positions = new Float32Array([
+        this.tmpVec3A.x, this.tmpVec3A.y, this.tmpVec3A.z,
+        this.tmpVec3B.x, this.tmpVec3B.y, this.tmpVec3B.z
+      ]);
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.computeBoundingSphere();
+      mat = new THREE.LineBasicMaterial({
+        color: colorHex,
+        transparent: true,
+        opacity: 0.95
+      });
+      line = new THREE.Line(geo, mat);
+    }
     this.scene.add(line);
 
     const sparkColor = isPlayerHit ? 0xef4444 : colorHex;
-    const sparkMat = new THREE.MeshBasicMaterial({
+    if (!this.sparkMatPool) this.sparkMatPool = [];
+    const sparkMat = this.sparkMatPool.pop() || new THREE.MeshBasicMaterial({
       color: sparkColor,
       transparent: true,
       opacity: 1
     });
+    sparkMat.color.setHex(sparkColor);
+    sparkMat.opacity = 1;
     if (!this.sparkMeshPool) this.sparkMeshPool = [];
     const spark = this.sparkMeshPool.pop() || new THREE.Mesh(this.sharedHitOrbGeo, sparkMat);
     spark.geometry = this.sharedHitOrbGeo;
@@ -2546,20 +2643,7 @@ export class Game3D {
       for (let i = this.activeEffects.length - 1; i >= 0; i--) {
         const fx = this.activeEffects[i];
         if (fx.type === 'tracer' && fx.ss === ss) {
-          if (fx.line) this.scene.remove(fx.line);
-          if (fx.spark) {
-            this.scene.remove(fx.spark);
-            this.sparkMeshPool?.push(fx.spark);
-          }
-          if (Array.isArray(fx.particles)) {
-            for (const p of fx.particles) {
-              this.scene.remove(p.mesh);
-              this.sparkMeshPool?.push(p.mesh);
-            }
-          }
-          fx.geo?.dispose();
-          fx.mat?.dispose();
-          fx.sparkMat?.dispose();
+          this._recycleTracerEffect(fx);
           this.activeEffects.splice(i, 1);
         }
       }
@@ -3180,8 +3264,8 @@ export class Game3D {
     }
 
     // Send the input commands produced since the last batch (+ a few unacked ones as packet-loss redundancy) at ~30 Hz.
-    // Commands are produced every fixed step, so no separate keep-alive is needed while alive.
-    if (now - this.lastInputBatchAt >= INPUT_BATCH_INTERVAL_MS) {
+    // Subtracting 4 ms prevents 60 Hz 2-frame rAF intervals (~31.5-33.3 ms) from slipping to frame 3 (~50 ms).
+    if (now - this.lastInputBatchAt >= INPUT_BATCH_INTERVAL_MS - 4) {
       const batch = this.prediction.buildBatch();
       if (batch) {
         this.lastInputBatchAt = now;
@@ -3512,23 +3596,7 @@ export class Game3D {
           fx.torusMat.dispose();
           fx.sparkMat.dispose();
         } else {
-          this.scene.remove(fx.line);
-          this.scene.remove(fx.spark);
-          if (this.sparkMeshPool && this.sparkMeshPool.length < 64) {
-            this.sparkMeshPool.push(fx.spark);
-          }
-          if (fx.particles) {
-            for (let p = 0; p < fx.particles.length; p++) {
-              const pm = fx.particles[p].mesh;
-              this.scene.remove(pm);
-              if (this.sparkMeshPool && this.sparkMeshPool.length < 64) {
-                this.sparkMeshPool.push(pm);
-              }
-            }
-          }
-          fx.geo.dispose();
-          fx.mat.dispose();
-          fx.sparkMat.dispose();
+          this._recycleTracerEffect(fx);
         }
         this.activeEffects.splice(i, 1);
       } else {
