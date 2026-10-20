@@ -792,6 +792,44 @@ export class SoundEffects {
     }
   }
 
+  playArmorHit(armorBroken = false) {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+
+    // 1. Kevlar plate impact thump
+    const plate = ctx.createOscillator();
+    const plateGain = ctx.createGain();
+    plate.type = 'triangle';
+    plate.frequency.setValueAtTime(armorBroken ? 640 : 480, now);
+    plate.frequency.exponentialRampToValueAtTime(armorBroken ? 110 : 140, now + 0.09);
+    plateGain.gain.setValueAtTime(armorBroken ? 0.34 : 0.25, now);
+    plateGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+    plate.connect(plateGain);
+    plateGain.connect(ctx.destination);
+    this._bindSourceCleanup(plate, [plateGain], null, 0.11);
+    plate.start(now);
+    plate.stop(now + 0.105);
+
+    // 2. Ceramic/Shield high-tech harmonic ping (or shatter chord on break)
+    const freqs = armorBroken ? [1960, 2640, 1320] : [1640, 2180];
+    freqs.forEach((f, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = armorBroken ? 'sawtooth' : 'sine';
+      const t0 = now + idx * (armorBroken ? 0.018 : 0.01);
+      osc.frequency.setValueAtTime(f, t0);
+      osc.frequency.exponentialRampToValueAtTime(armorBroken ? f * 0.62 : f * 0.85, t0 + 0.12);
+      gain.gain.setValueAtTime(armorBroken ? 0.22 : 0.16, t0);
+      gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.13);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      this._bindSourceCleanup(osc, [gain], null, idx * 0.02 + 0.15);
+      osc.start(t0);
+      osc.stop(t0 + 0.14);
+    });
+  }
+
   playKillConfirm(streak = 1) {
     const ctx = this.ensureContext();
     if (!ctx) return;
@@ -1578,6 +1616,80 @@ export class SoundEffects {
       osc.start(startAt);
       osc.stop(startAt + dur + 0.02);
     }
+  }
+
+  /**
+   * Plays a rising metallic striker/bolt click when magazine ammo drops into the final 25%,
+   * giving tactile audio feedback before the magazine runs dry (CS2/Valorant/Apex style).
+   */
+  playLowAmmoClick(ratio = 0.2) {
+    const ctx = this.ensureContext();
+    if (!ctx) return null;
+    const now = ctx.currentTime;
+    const clampedRatio = Math.max(0, Math.min(1, Number(ratio) || 0));
+    const urgency = 1 - clampedRatio; // 0 at 25% mag -> 1 at last round
+    const baseFreq = 1650 + urgency * 950;
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(baseFreq, now);
+    osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.32, now + 0.038);
+    gain.gain.setValueAtTime(0.14 + urgency * 0.14, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.042);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    this._bindSourceCleanup(osc, [gain], null, 0.05);
+    osc.start(now);
+    osc.stop(now + 0.045);
+    return { baseFreq, urgency };
+  }
+
+  /**
+   * Plays a 3D spatial supersonic bullet snap/whizz when an enemy round passes close to the player's head.
+   */
+  playBulletWhizz(listener = null, sourcePos = null, closestDist = 1.2) {
+    const ctx = this.ensureContext();
+    if (!ctx) return null;
+    const now = ctx.currentTime;
+
+    const spatial = this.computeSpatialParams(listener, sourcePos, 6.0);
+    if (spatial.outOfRange) return null;
+
+    const proximity = Math.max(0.15, Math.min(1, 1 - (Number(closestDist) || 1.2) / 2.6));
+    const chain = this.createSpatialChain(ctx, spatial.pan, 0.42 * proximity, now, 6500);
+
+    // High-velocity Doppler air whizz (swept sine/triangle)
+    const whizzOsc = ctx.createOscillator();
+    const whizzGain = ctx.createGain();
+    whizzOsc.type = 'sine';
+    whizzOsc.frequency.setValueAtTime(2900, now);
+    whizzOsc.frequency.exponentialRampToValueAtTime(620, now + 0.085);
+    whizzGain.gain.setValueAtTime(0.55 * proximity, now);
+    whizzGain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+    whizzOsc.connect(whizzGain);
+    whizzGain.connect(chain.input);
+    this._bindSourceCleanup(whizzOsc, [whizzGain], chain, 0.11);
+    whizzOsc.start(now);
+    whizzOsc.stop(now + 0.095);
+
+    // Supersonic N-wave crack if passing very close (<= 1.45m)
+    if (closestDist <= 1.45) {
+      const snapOsc = ctx.createOscillator();
+      const snapGain = ctx.createGain();
+      snapOsc.type = 'sawtooth';
+      snapOsc.frequency.setValueAtTime(4200, now);
+      snapOsc.frequency.exponentialRampToValueAtTime(980, now + 0.025);
+      snapGain.gain.setValueAtTime(0.65 * proximity, now);
+      snapGain.gain.exponentialRampToValueAtTime(0.001, now + 0.028);
+      snapOsc.connect(snapGain);
+      snapGain.connect(chain.input);
+      this._bindSourceCleanup(snapOsc, [snapGain], null, 0.04);
+      snapOsc.start(now);
+      snapOsc.stop(now + 0.03);
+    }
+
+    return { pan: spatial.pan, proximity };
   }
 }
 

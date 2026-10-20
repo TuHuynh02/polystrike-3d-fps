@@ -1111,7 +1111,8 @@ export class Game3D {
   }
 
   setupGrenadePreview() {
-    this.grenadePreviewSteps = 36;
+    this.grenadePreviewSteps = 56;
+    this._grenadeRawPositions = new Float32Array((this.grenadePreviewSteps + 1) * 3);
     this.grenadePreviewPositions = new Float32Array((this.grenadePreviewSteps + 1) * 3);
     this.grenadePreviewGeo = new THREE.BufferGeometry();
     this.grenadePreviewGeo.setAttribute('position', new THREE.BufferAttribute(this.grenadePreviewPositions, 3));
@@ -1171,6 +1172,33 @@ export class Game3D {
     this.grenadePreviewBeacon.visible = false;
     this.grenadePreviewBeacon.renderOrder = 19;
     this.scene.add(this.grenadePreviewBeacon);
+
+    this.grenadePreviewBeadGroup = new THREE.Group();
+    this.grenadePreviewBeadGroup.visible = false;
+    this.grenadePreviewBeadGroup.renderOrder = 19;
+    this.grenadePreviewBeadMat = new THREE.MeshBasicMaterial({
+      color: 0xfdba74,
+      transparent: true,
+      opacity: 0.92,
+      depthWrite: false
+    });
+    this.grenadePreviewBeads = [];
+    for (let b = 0; b < 16; b++) {
+      const bead = new THREE.Mesh(this.sharedHitOrbGeo, this.grenadePreviewBeadMat);
+      bead.frustumCulled = false;
+      this.grenadePreviewBeadGroup.add(bead);
+      this.grenadePreviewBeads.push(bead);
+    }
+    this.scene.add(this.grenadePreviewBeadGroup);
+
+    this.grenadePreviewDropPositions = new Float32Array(6);
+    this.grenadePreviewDropGeo = new THREE.BufferGeometry();
+    this.grenadePreviewDropGeo.setAttribute('position', new THREE.BufferAttribute(this.grenadePreviewDropPositions, 3));
+    this.grenadePreviewDropLine = new THREE.Line(this.grenadePreviewDropGeo, this.grenadePreviewMat);
+    this.grenadePreviewDropLine.frustumCulled = false;
+    this.grenadePreviewDropLine.visible = false;
+    this.grenadePreviewDropLine.renderOrder = 18;
+    this.scene.add(this.grenadePreviewDropLine);
   }
 
   startGrenadeCooking() {
@@ -1205,6 +1233,8 @@ export class Game3D {
     if (this.grenadePreviewLine) this.grenadePreviewLine.visible = false;
     if (this.grenadePreviewTargetGroup) this.grenadePreviewTargetGroup.visible = false;
     if (this.grenadePreviewBeacon) this.grenadePreviewBeacon.visible = false;
+    if (this.grenadePreviewBeadGroup) this.grenadePreviewBeadGroup.visible = false;
+    if (this.grenadePreviewDropLine) this.grenadePreviewDropLine.visible = false;
     this.callbacks.onGrenadeCookUpdate?.(false, 0, (this.grenadeCookMaxMs || 3000) / 1000);
   }
 
@@ -1287,6 +1317,11 @@ export class Game3D {
     const simDuration = Math.max(0.15, remSec);
     const stepDt = simDuration / steps;
     const posArr = this.grenadePreviewPositions;
+    const rawArr = this._grenadeRawPositions || new Float32Array((steps + 1) * 3);
+    rawArr[0] = startX;
+    rawArr[1] = startY;
+    rawArr[2] = startZ;
+    let firstImpactIdx = steps;
 
     // Offset initial visual vertex slightly down-right toward throwing hand so it doesn't block center sight
     const rightX = Math.cos(yaw);
@@ -1305,6 +1340,7 @@ export class Game3D {
         impactX = sim.x;
         impactY = sim.y;
         impactZ = sim.z;
+        firstImpactIdx = i;
       }
       const idx = i * 3;
       posArr[idx] = sim.x;
@@ -1312,6 +1348,19 @@ export class Game3D {
       posArr[idx + 2] = sim.z;
     }
 
+    posArr[0] = startX;
+    posArr[1] = startY;
+    posArr[2] = startZ;
+    for (let i = 0; i <= firstImpactIdx; i++) {
+      const idx = i * 3;
+      const tArc = firstImpactIdx > 0 ? Math.min(1, i / firstImpactIdx) : 1;
+      const handWeight = i < firstImpactIdx ? Math.pow(1 - tArc, 1.35) : 0;
+      const handDownWeight = i < firstImpactIdx ? Math.pow(1 - tArc, 1.65) : 0;
+      const arcLift = i < firstImpactIdx ? Math.sin(tArc * Math.PI) * 0.08 : 0;
+      posArr[idx] += rightX * (0.32 * handWeight) + dirX * (0.12 * handWeight);
+      posArr[idx + 1] = Math.max(0.18, posArr[idx + 1] - 0.24 * handDownWeight + arcLift);
+      posArr[idx + 2] += rightZ * (0.32 * handWeight) + dirZ * (0.12 * handWeight);
+    }
     this.grenadePreviewGeo.attributes.position.needsUpdate = true;
     this.grenadePreviewLine.visible = true;
 
@@ -1332,6 +1381,68 @@ export class Game3D {
     this.grenadePreviewBeaconMat.color.setHex(isUrgent ? 0xff3b30 : 0xfef08a);
     this.grenadePreviewBeacon.scale.setScalar(isUrgent ? 1.55 : 1.25);
     this.grenadePreviewBeacon.visible = true;
+
+    const findSupportY = (wx, wy, wz) => {
+      let bestY = 0.03;
+      for (let k = 0; k < obstacles.length; k++) {
+        const b = obstacles[k];
+        const minX = b.minX !== undefined ? b.minX : b.x - b.w * 0.5;
+        const maxX = b.maxX !== undefined ? b.maxX : b.x + b.w * 0.5;
+        if (wx < minX || wx > maxX) continue;
+        const minZ = b.minZ !== undefined ? b.minZ : b.z - b.d * 0.5;
+        const maxZ = b.maxZ !== undefined ? b.maxZ : b.z + b.d * 0.5;
+        if (wz < minZ || wz > maxZ) continue;
+        const topY = (b.maxY !== undefined ? b.maxY : b.y + b.h * 0.5) + 0.03;
+        if (topY <= wy + 0.35 && topY > bestY) {
+          bestY = topY;
+        }
+      }
+      return bestY;
+    };
+
+    const ringSupportY = findSupportY(ringX, impactY !== null ? impactY : sim.y, ringZ);
+    this.grenadePreviewTargetGroup.position.set(ringX, ringSupportY, ringZ);
+
+    if (this.grenadePreviewBeadGroup && this.grenadePreviewBeads) {
+      this.grenadePreviewBeadMat.color.setHex(isUrgent ? 0xff4d4d : 0xfdba74);
+      const beadCount = this.grenadePreviewBeads.length;
+      const flowPhase = (now * 0.0022) % 1;
+      const arcSpan = Math.max(4, firstImpactIdx);
+      for (let b = 0; b < beadCount; b++) {
+        const u = (b + flowPhase) / beadCount;
+        const exactIdx = u * arcSpan;
+        const idx0 = Math.min(steps, Math.floor(exactIdx));
+        const idx1 = Math.min(steps, idx0 + 1);
+        const frac = exactIdx - idx0;
+        const i0 = idx0 * 3;
+        const i1 = idx1 * 3;
+        const bx = posArr[i0] + (posArr[i1] - posArr[i0]) * frac;
+        const by = posArr[i0 + 1] + (posArr[i1 + 1] - posArr[i0 + 1]) * frac;
+        const bz = posArr[i0 + 2] + (posArr[i1 + 2] - posArr[i0 + 2]) * frac;
+        const bead = this.grenadePreviewBeads[b];
+        bead.position.set(bx, by, bz);
+        const fade = Math.sin(u * Math.PI);
+        bead.scale.setScalar(0.38 + fade * 0.48);
+      }
+      this.grenadePreviewBeadGroup.visible = true;
+    }
+
+    if (this.grenadePreviewDropLine && this.grenadePreviewDropPositions) {
+      const beaconSupportY = findSupportY(sim.x, sim.y, sim.z);
+      if (sim.y - beaconSupportY > 0.22) {
+        const dArr = this.grenadePreviewDropPositions;
+        dArr[0] = sim.x;
+        dArr[1] = sim.y;
+        dArr[2] = sim.z;
+        dArr[3] = sim.x;
+        dArr[4] = beaconSupportY;
+        dArr[5] = sim.z;
+        this.grenadePreviewDropGeo.attributes.position.needsUpdate = true;
+        this.grenadePreviewDropLine.visible = true;
+      } else {
+        this.grenadePreviewDropLine.visible = false;
+      }
+    }
   }
 
   triggerLocalGrenadeThrow(outPayload = null) {
@@ -2046,7 +2157,6 @@ export class Game3D {
     this.cancelGrenadeCooking();
     this.isAiming = false;
     this.adsToggleActive = false;
-    this.isSprinting = false;
     setWeaponAdsCulling(this.viewmodelMeshes[this.currentWeapon], false);
     this.reloadStartedAt = now;
 
@@ -2785,9 +2895,14 @@ export class Game3D {
   _damagePopupTexCache = new Map();
   damagePopupPool = [];
 
-  spawnDamagePopup(targetId, damage, isHeadshot = false) {
+  spawnDamagePopup(targetId, damage, isHeadshot = false, opts = {}) {
     const rp = this.remotePlayers.get(targetId);
     if (!rp) return;
+
+    // Trigger a crisp 3D physical hit-react flinch on the enemy's upper body
+    if (rp.upperBodyGroup) {
+      rp.upperBodyGroup.rotation.x = isHeadshot ? -0.18 : -0.11;
+    }
 
     if (!this._damagePopupTexCache) {
       this._damagePopupTexCache = new Map();
@@ -2797,25 +2912,45 @@ export class Game3D {
     }
 
     const roundedDamage = Math.round(Number(damage) || 0);
-    const cacheKey = `${roundedDamage}_${isHeadshot ? 1 : 0}`;
+    const armorBroken = Boolean(opts?.armorBroken);
+    const armorHit = !armorBroken && Number(opts?.armorDamage) > 0;
+    const isKill = Boolean(opts?.isKill);
+    const styleTag = armorBroken ? 'ab' : isHeadshot ? 'hs' : armorHit ? 'ar' : isKill ? 'kl' : 'nm';
+    const cacheKey = `${roundedDamage}_${styleTag}`;
 
     let tex = this._damagePopupTexCache.get(cacheKey);
     if (!tex) {
       const canvas = typeof document !== 'undefined' && typeof document.createElement === 'function'
         ? document.createElement('canvas')
-        : { width: 160, height: 64, getContext: () => null };
-      canvas.width = 160;
+        : { width: 192, height: 64, getContext: () => null };
+      canvas.width = 192;
       canvas.height = 64;
       const ctx = canvas.getContext?.('2d');
       if (ctx) {
-        ctx.font = isHeadshot ? '900 34px Segoe UI, sans-serif' : '800 28px Segoe UI, sans-serif';
+        ctx.font = (isHeadshot || armorBroken || isKill) ? '900 33px Segoe UI, sans-serif' : '800 28px Segoe UI, sans-serif';
         ctx.textAlign = 'center';
-        ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.92)';
         ctx.lineWidth = 5;
-        const text = isHeadshot ? `🎯 -${roundedDamage}` : `-${roundedDamage}`;
-        ctx.strokeText(text, 80, 44);
-        ctx.fillStyle = isHeadshot ? '#facc15' : '#f8fafc';
-        ctx.fillText(text, 80, 44);
+        const text = armorBroken
+          ? `🛡️ VỠ -${roundedDamage}`
+          : isHeadshot
+            ? `🎯 -${roundedDamage}`
+            : armorHit
+              ? `🛡️ -${roundedDamage}`
+              : isKill
+                ? `💀 -${roundedDamage}`
+                : `-${roundedDamage}`;
+        ctx.strokeText(text, 96, 44);
+        ctx.fillStyle = armorBroken
+          ? '#38bdf8'
+          : isHeadshot
+            ? '#facc15'
+            : armorHit
+              ? '#67e8f9'
+              : isKill
+                ? '#f87171'
+                : '#f8fafc';
+        ctx.fillText(text, 96, 44);
       }
       tex = new THREE.CanvasTexture(canvas);
       if (this._damagePopupTexCache.size >= 64) {
@@ -2858,26 +2993,32 @@ export class Game3D {
         sprite,
         mat,
         tex,
-        vy: 1.65,
+        vy: 1.75,
         createdAt: 0,
-        duration: 650
+        duration: 680
       };
     }
 
+    const now = performance.now();
+    const stackStep = (rp._lastPopupAt && now - rp._lastPopupAt < 280) ? ((rp._popupStack = ((rp._popupStack || 0) + 1) % 4)) : (rp._popupStack = 0);
+    rp._lastPopupAt = now;
+    const spreadX = ((stackStep % 2 === 0 ? 1 : -1) * (0.14 + stackStep * 0.06)) + (Math.random() - 0.5) * 0.16;
+
+    const isBig = isHeadshot || armorBroken || isKill;
     sprite.position.set(
-      rp.group.position.x + (Math.random() - 0.5) * 0.45,
-      rp.group.position.y + (isHeadshot ? 2.15 : 1.55),
-      rp.group.position.z + (Math.random() - 0.5) * 0.45
+      rp.group.position.x + spreadX,
+      rp.group.position.y + (isHeadshot ? 2.15 : 1.58) + stackStep * 0.12,
+      rp.group.position.z + (Math.random() - 0.5) * 0.25
     );
-    sprite.scale.set(isHeadshot ? 1.45 : 1.1, isHeadshot ? 0.58 : 0.44, 1);
+    sprite.scale.set(isBig ? 1.52 : 1.15, isBig ? 0.60 : 0.46, 1);
 
     pooled.type = 'popup';
     pooled.sprite = sprite;
     pooled.mat = mat;
     pooled.tex = tex;
-    pooled.vy = 1.65;
-    pooled.createdAt = performance.now();
-    pooled.duration = 650;
+    pooled.vy = isBig ? 1.85 : 1.65;
+    pooled.createdAt = now;
+    pooled.duration = isBig ? 740 : 650;
     this.activeEffects.push(pooled);
   }
 
@@ -2981,7 +3122,7 @@ export class Game3D {
       autoReloaded: false
     };
     this.pendingFire = pendingShot;
-    this.callbacks.onLocalShot?.({ weapon: this.currentWeapon, isAiming: this.isAiming });
+    this.callbacks.onLocalShot?.({ weapon: this.currentWeapon, isAiming: this.isAiming, remainingAmmo: isMelee ? Infinity : this.ammoByWeapon[this.currentWeapon], magSize: cfg.magSize || 1 });
 
     if (isMelee) {
       return;
@@ -3234,8 +3375,7 @@ export class Game3D {
     }
     f.wantsCrouch = Boolean(this.keys.KeyC || this.keys.ControlLeft);
     f.wantsSprint = Boolean(this.keys.ShiftLeft || this.keys.ShiftRight) &&
-      this.reloadingUntil <= now &&
-      now - this.lastShotAt > 120;
+      now - this.lastShotAt > 110;
     f.wantsJump = Boolean(this.keys.Space) && this.isPointerLocked; // jumps are neither queued nor consumed while input is disabled
     f.isAdsHeld = this.isRightMouseDown;
     f.weapon = this.currentWeapon;
@@ -3767,7 +3907,7 @@ export class Game3D {
     const targetLean = this.isPointerLocked && !this.isSprinting && !this.isSliding
       ? (this.keys.KeyE ? 1 : 0) - (this.keys.KeyQ ? 1 : 0)
       : 0;
-    this.currentLean += (targetLean - this.currentLean) * Math.min(1, dt * 14);
+    this.currentLean += (targetLean - this.currentLean) * Math.min(1, dt * 18);
     if (Math.abs(this.currentLean) < 0.005) this.currentLean = 0;
 
     // Smooth eye height interpolation
@@ -3910,7 +4050,7 @@ export class Game3D {
           ? 74
           : 68;
     if (Math.abs(this.camera.fov - targetFov) > 0.05) {
-      this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * 16);
+      this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * 22);
       this.camera.updateProjectionMatrix();
     }
 
@@ -3920,6 +4060,8 @@ export class Game3D {
     const swayDecay = Math.exp(-10 * dt);
     this.swayX *= swayDecay;
     this.swayY *= swayDecay;
+    this.swayRotX = (this.swayRotX || 0) * swayDecay;
+    this.swayRotY = (this.swayRotY || 0) * swayDecay;
 
     const isReloading = this.reloadingUntil > now;
     const isEquipping = this.equipUntil > now;
@@ -3974,9 +4116,10 @@ export class Game3D {
     const isThroughScopeView = isAimingSteady && !isSniperScoped && distToAds < 0.085;
     setWeaponAdsCulling(activeVm, isThroughScopeView);
 
-    let targetRotX = isAimingSteady ? 0 : this.recoilOffset * 1.15;
+    let targetRotX = isAimingSteady ? 0 : this.recoilOffset * 1.15 + (this.swayRotX || 0);
     let targetRotY = 0;
-    let targetRotZ = isAimingSteady ? 0 : -this.cameraRoll * 0.85;
+    let targetRotZ = isAimingSteady ? 0 : -this.cameraRoll * 0.85 - (this.swayRotY || 0) * 0.35;
+    if (!isAimingSteady) targetRotY += (this.swayRotY || 0);
 
     if (isReloading) {
       const reloadPct = Math.max(0, Math.min(1, 1 - (this.reloadingUntil - now) / this.reloadDuration));
@@ -4626,7 +4769,7 @@ export class Game3D {
 
     window.addEventListener('mousemove', (e) => {
       if (!this.isPointerLocked || !this.inMatch || !this.alive) return;
-      const aimScale = this.isAiming && this.currentWeapon === 'sniper' ? 0.32 : this.isAiming ? 0.62 : 1.0;
+      const aimScale = this.isAiming && this.currentWeapon === 'sniper' ? 0.36 : this.isAiming ? 0.78 : 1.0;
       const sens = 0.0021 * this.sensitivity * aimScale;
       const dx = -e.movementX * sens;
       const dy = -e.movementY * sens;
@@ -4638,6 +4781,15 @@ export class Game3D {
 
       this.swayX = Math.max(-0.045, Math.min(0.045, -e.movementX * 0.00055));
       this.swayY = Math.max(-0.045, Math.min(0.045, e.movementY * 0.00055));
+      if (dx * this.accumulatedRecoilYaw < 0) {
+        const prevSign = Math.sign(this.accumulatedRecoilYaw);
+        this.accumulatedRecoilYaw += dx;
+        if (Math.sign(this.accumulatedRecoilYaw) !== prevSign) {
+          this.accumulatedRecoilYaw = 0;
+        }
+      }
+      this.swayRotY = Math.max(-0.085, Math.min(0.085, (this.swayRotY || 0) - e.movementX * 0.00075));
+      this.swayRotX = Math.max(-0.065, Math.min(0.065, (this.swayRotX || 0) - e.movementY * 0.00065));
     }, { passive: true });
 
     window.addEventListener('mousedown', (e) => {

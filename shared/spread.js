@@ -17,16 +17,16 @@ import { MATCH_CONFIG } from './config.js';
 export const EYE_HEIGHT = Object.freeze({ STAND: 1.62, CROUCH: 1.04, SLIDE: 0.78, PRONE: 0.52 });
 
 /** horizSpeed below this (and grounded) counts as stationary: first-shot accuracy bonus. */
-export const STATIONARY_SPEED = 0.85;
+export const STATIONARY_SPEED = 1.15;
 /** horizSpeed above this (or airborne) counts as "moving while shooting": radial spread pattern + bigger bloom. */
 export const MOVING_SPEED = 0.95;
 /** Bloom gain / cap multiplier while moving. */
 export const MOVE_BLOOM_MULT = 1.85;
 /** The first-shot bonus needs the bloom to be below this. */
-export const FIRST_SHOT_BLOOM_LIMIT = 0.0015;
+export const FIRST_SHOT_BLOOM_LIMIT = 0.0028;
 /** Spray index (shots in the current burst) that decays after `recoilRecoveryDelayMs` of silence. */
 export const SHOT_INDEX_MAX = 30;
-export const SHOT_INDEX_DECAY_PER_S = 28;
+export const SHOT_INDEX_DECAY_PER_S = 32;
 export const SHOT_INDEX_ZERO_BELOW = 0.2;
 
 const TWO_PI = Math.PI * 2;
@@ -145,8 +145,8 @@ export function computeSpreadAmount(cfg, ctx) {
     : isCrouchSteady
       ? 0.38
       : ctx.sliding
-        ? (aiming ? 0.88 : 1.25)
-        : (aiming ? 0.68 : 1.15);
+        ? (aiming ? 0.82 : 1.25)
+        : (aiming ? 0.58 : 1.15);
   const movePenalty = speedRatio > 0.12
     ? Math.pow(speedRatio, 1.15) * (cfg.moveSpread || 0.095) * moveStanceMult
     : 0;

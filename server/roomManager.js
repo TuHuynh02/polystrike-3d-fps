@@ -14,6 +14,7 @@ import {
   isPointClearOfObstacles,
   isPointInsideInflatedBoxes,
   rayIntersectsAABB,
+  raySegmentAABB,
   stepGrenade
 } from '../shared/constants.js';
 import {
@@ -1907,17 +1908,40 @@ export class RoomManager {
     const barrelHits = [];
     const activeBarrels = Array.isArray(room.barrels) ? room.barrels : [];
     let firstEnd = null;
+    const canWallbang =
+      !weaponCfg.isMelee &&
+      (weaponCfg.category === 'AR' ||
+        weaponCfg.category === 'LMG' ||
+        weaponCfg.category === 'SNIPER' ||
+        weaponId === 'deagle');
+    const MAX_WALLBANG_THICKNESS = 0.72;
+
     try {
       for (let p = 0; p < dirs.length; p++) {
         const dir = normalizeDir(dirs[p]);
         if (!dir) continue;
 
-        // Nearest obstacle along this ray
+        // Nearest obstacle along this ray + single-edge wallbang thickness check
         let wallDist = Infinity;
+        let secondWallDist = Infinity;
+        let firstWallThickness = Infinity;
         for (let i = 0; i < obstacles.length; i++) {
-          const t = rayIntersectsAABB(origin, dir, maxRange, obstacles[i]);
-          if (t !== null && t < wallDist) wallDist = t;
+          const seg = raySegmentAABB(origin, dir, maxRange, obstacles[i]);
+          if (seg !== null) {
+            if (seg.tEnter < wallDist) {
+              secondWallDist = wallDist;
+              wallDist = seg.tEnter;
+              firstWallThickness = seg.thickness;
+            } else if (seg.tEnter < secondWallDist) {
+              secondWallDist = seg.tEnter;
+            }
+          }
         }
+
+        const solidWallDist =
+          canWallbang && firstWallThickness <= MAX_WALLBANG_THICKNESS
+            ? secondWallDist
+            : wallDist;
 
         // Check active explosive barrels along this ray
         let bestBarrel = null;
@@ -1942,8 +1966,8 @@ export class RoomManager {
           }
         }
 
-        // Nearest player part in front of that obstacle and barrel
-        const reach = Math.min(barrelReach, barrelDist);
+        // Nearest player part in front of solid obstacle limit and barrel
+        const reach = Math.min(maxRange, solidWallDist, barrelDist);
         let bestTarget = null;
         let bestHit = null;
         for (const candidate of room.players.values()) {
@@ -1957,12 +1981,14 @@ export class RoomManager {
         }
 
         if (bestHit) {
+          const isWallbangHit = bestHit.distance > wallDist;
           hits.push({
             pellet: p,
             targetId: bestTarget.id,
             zone: bestHit.zone,
             distance: bestHit.distance,
-            point: bestHit.hitPoint
+            point: bestHit.hitPoint,
+            wallbang: isWallbangHit
           });
         } else if (bestBarrel && barrelDist <= barrelReach) {
           barrelHits.push({
@@ -2022,10 +2048,12 @@ export class RoomManager {
       }
       const falloffMult = computeDistanceFalloff(weaponCfg, hit.distance);
       const hitZoneMult = hit.zone === 'head' ? weaponCfg.headshotMult : hit.zone === 'leg' ? 0.78 : 1.0;
-      const pelletDmg = Math.max(1, Math.round(weaponCfg.damage * falloffMult * hitZoneMult * dmgBoostMult));
-      const prev = damageMap.get(target.id) || { totalDamage: 0, anyHeadshot: false };
+      const wallbangMult = hit.wallbang ? 0.55 : 1.0;
+      const pelletDmg = Math.max(1, Math.round(weaponCfg.damage * falloffMult * hitZoneMult * dmgBoostMult * wallbangMult));
+      const prev = damageMap.get(target.id) || { totalDamage: 0, anyHeadshot: false, anyWallbang: false };
       prev.totalDamage += pelletDmg;
       prev.anyHeadshot = prev.anyHeadshot || hit.zone === 'head';
+      prev.anyWallbang = prev.anyWallbang || Boolean(hit.wallbang);
       damageMap.set(target.id, prev);
     }
 
@@ -2054,7 +2082,8 @@ export class RoomManager {
     const hpLoss = total - absorbed;
     target.armor = curArmor - absorbed;
     target.hp = Math.max(0, (Number(target.hp) || 0) - hpLoss);
-    return { total, absorbed, hpLoss };
+    const armorBroken = curArmor > 0 && target.armor === 0;
+    return { total, absorbed, hpLoss, armorBroken };
   }
 
   /** Spawn-protection notices, HP/Armor loss, `damageDealt` and kills for the per-target damage of one shot. */
@@ -2076,20 +2105,24 @@ export class RoomManager {
       if (!target || !target.alive) continue;
       if (target.invulnerableUntil && now < target.invulnerableUntil) continue;
 
-      this.applyDamageWithArmor(target, info.totalDamage);
+      const dmgRes = this.applyDamageWithArmor(target, info.totalDamage);
 
       this.io.to(room.code).emit('damageDealt', {
         targetId: target.id,
         attackerId: shooter.id,
         attackerPos: { x: shooter.x, y: shooter.y, z: shooter.z },
         damage: info.totalDamage,
+        armorDamage: dmgRes.absorbed,
+        hpDamage: dmgRes.hpLoss,
+        armorBroken: dmgRes.armorBroken,
         hp: target.hp,
         armor: target.armor || 0,
-        isHeadshot: info.anyHeadshot
+        isHeadshot: info.anyHeadshot,
+        isWallbang: Boolean(info.anyWallbang)
       });
 
       if (target.hp <= 0) {
-        this.handlePlayerKilled(room, shooter, target, weaponId, info.anyHeadshot);
+        this.handlePlayerKilled(room, shooter, target, weaponId, info.anyHeadshot, Boolean(info.anyWallbang));
       } else {
         this.sendSelfState(target, now, true);
       }
@@ -2558,13 +2591,16 @@ export class RoomManager {
         damage = Math.max(1, Math.round(maxDamage * (1 - t)));
       }
 
-      this.applyDamageWithArmor(target, damage);
+      const dmgRes = this.applyDamageWithArmor(target, damage);
 
       this.io.to(room.code).emit('damageDealt', {
         targetId: target.id,
         attackerId: grenade.ownerId,
         attackerPos: { x: grenade.x, y: grenade.y, z: grenade.z },
         damage,
+        armorDamage: dmgRes.absorbed,
+        hpDamage: dmgRes.hpLoss,
+        armorBroken: dmgRes.armorBroken,
         hp: target.hp,
         armor: target.armor || 0,
         isHeadshot: false,
@@ -2692,13 +2728,16 @@ export class RoomManager {
         damage = Math.max(1, Math.round(maxDamage * (1 - t)));
       }
 
-      this.applyDamageWithArmor(target, damage);
+      const dmgRes = this.applyDamageWithArmor(target, damage);
 
       this.io.to(room.code).emit('damageDealt', {
         targetId: target.id,
         attackerId,
         attackerPos: { x: barrel.x, y: barrel.y || 0, z: barrel.z },
         damage,
+        armorDamage: dmgRes.absorbed,
+        hpDamage: dmgRes.hpLoss,
+        armorBroken: dmgRes.armorBroken,
         hp: target.hp,
         armor: target.armor || 0,
         isHeadshot: false,
@@ -2742,7 +2781,7 @@ export class RoomManager {
     }
   }
 
-  handlePlayerKilled(room, killer, victim, weaponId, isHeadshot) {
+  handlePlayerKilled(room, killer, victim, weaponId, isHeadshot, isWallbang = false) {
     // Drop victim's primary weapon with its remaining ammo + reserveAmmo at their death location for 5s
     const victimPrimary = (victim.loadout?.primary && WEAPONS[victim.loadout.primary]?.slot === 1)
       ? victim.loadout.primary
@@ -2917,6 +2956,7 @@ export class RoomManager {
       weaponName: resolvedWeaponName,
       weaponId,
       isHeadshot: Boolean(isHeadshot),
+      isWallbang: Boolean(isWallbang),
       killerStreak: killer ? killer.streak : 0,
       killerMultiKill: killer ? (killer.multiKillCount || 1) : 0,
       killerHp: killer ? killer.hp : 0,

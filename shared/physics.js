@@ -110,6 +110,61 @@ export function rayIntersectsAABB(origin, dir, maxDist, box) {
 }
 
 /**
+ * Computes both entry (`tEnter`) and exit (`tExit`) distances and traversed `thickness` (`tExit - tEnter`)
+ * of a ray through an AABB obstacle for server-authoritative Wallbang (edge penetration) evaluation.
+ */
+export function raySegmentAABB(origin, dir, maxDist, box) {
+  const minX = box.minX !== undefined ? box.minX : box.x - box.w * 0.5;
+  const maxX = box.maxX !== undefined ? box.maxX : box.x + box.w * 0.5;
+  const minY = box.minY !== undefined ? box.minY : box.y - box.h * 0.5;
+  const maxY = box.maxY !== undefined ? box.maxY : box.y + box.h * 0.5;
+  const minZ = box.minZ !== undefined ? box.minZ : box.z - box.d * 0.5;
+  const maxZ = box.maxZ !== undefined ? box.maxZ : box.z + box.d * 0.5;
+
+  let tmin = 0;
+  let tmax = Infinity;
+
+  if (Math.abs(dir.x) < 1e-6) {
+    if (origin.x < minX || origin.x > maxX) return null;
+  } else {
+    const invD = 1 / dir.x;
+    let t1 = (minX - origin.x) * invD;
+    let t2 = (maxX - origin.x) * invD;
+    if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+    if (t1 > tmin) tmin = t1;
+    if (t2 < tmax) tmax = t2;
+    if (tmin > tmax) return null;
+  }
+
+  if (Math.abs(dir.y) < 1e-6) {
+    if (origin.y < minY || origin.y > maxY) return null;
+  } else {
+    const invD = 1 / dir.y;
+    let t1 = (minY - origin.y) * invD;
+    let t2 = (maxY - origin.y) * invD;
+    if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+    if (t1 > tmin) tmin = t1;
+    if (t2 < tmax) tmax = t2;
+    if (tmin > tmax) return null;
+  }
+
+  if (Math.abs(dir.z) < 1e-6) {
+    if (origin.z < minZ || origin.z > maxZ) return null;
+  } else {
+    const invD = 1 / dir.z;
+    let t1 = (minZ - origin.z) * invD;
+    let t2 = (maxZ - origin.z) * invD;
+    if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+    if (t1 > tmin) tmin = t1;
+    if (t2 < tmax) tmax = t2;
+    if (tmin > tmax) return null;
+  }
+
+  if (tmin < 0 || tmin > maxDist || tmax < tmin) return null;
+  return { tEnter: tmin, tExit: tmax, thickness: Math.max(0, tmax - tmin) };
+}
+
+/**
  * Checks if a line segment between two 3D points is blocked by any obstacle on the active map.
  * Uses segment AABB broadphase culling + precomputed inverse ray directions for zero-allocation speed.
  */

@@ -2559,6 +2559,69 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
     rm.handlePlayerKilled(room, p2, p1, WEAPONS.rifle, false, 35);
     assert.equal(p2.armor, 25, 'Shutting down an enemy on a >=3 streak must grant +25 Armor bonus');
     assert.ok(ioEvents.some((e) => e.event === 'streakEvent' && e.data.type === 'shutdown'));
+
+    // 5. Gunfight Overhaul: Armor hit & Armor break telemetry, Sprint-while-reloading & Armor hit audio
+    const breakRes = rm.applyDamageWithArmor(p2, 40);
+    assert.equal(breakRes.absorbed, 25);
+    assert.equal(breakRes.hpLoss, 15);
+    assert.equal(breakRes.armorBroken, true, 'Depleting armor from >0 to 0 must flag armorBroken=true');
+
+    const game = createTestGame3D();
+    game.inMatch = true;
+    game.alive = true;
+    game.isPointerLocked = true;
+    game.spawnLocalPlayer({ x: 0, y: 0, z: 20, yaw: 0, weapon: 'rifle' });
+    game.ammoByWeapon.rifle = 10;
+    game.reserveAmmoByWeapon.rifle = 60;
+    game.isSprinting = true;
+    game.startReload();
+    assert.ok(game.reloadingUntil > 0, 'Reload should start');
+    assert.equal(game.isSprinting, true, 'Starting reload must not cancel active sprint');
+
+    const sfx = new SoundEffects();
+    assert.doesNotThrow(() => {
+      sfx.playArmorHit(false);
+      sfx.playArmorHit(true);
+      sfx.playLowAmmoClick(0.15);
+      sfx.playBulletWhizz({ x: 0, y: 1.5, z: 0, yaw: 0 }, { x: 0.8, y: 1.5, z: -1 }, 1.1);
+    });
+
+    // 6. Authentic FPS Gunfight: Server-authoritative Tactical Wallbang (<= 0.72m thin edge penetration at 55% dmg)
+    const wbMapCfg = getMapConfig(room.mapId);
+    const savedObstacles = wbMapCfg.obstacles;
+    wbMapCfg.obstacles = [{ x: 0, y: 1.0, z: 4, w: 2.0, h: 2.2, d: 0.5 }];
+    try {
+      p1.x = 0; p1.y = 0; p1.z = 8; p1.yaw = 0; p1.alive = true;
+      p2.x = 0; p2.y = 0; p2.z = 0; p2.yaw = 0; p2.alive = true; p2.hp = 100; p2.armor = 0; p2.invulnerableUntil = 0;
+      p2._snapshotRing = undefined;
+      recordPlayerSnapshot(p2, now);
+      const wbRes = rm.resolveShot(room, p1, {
+        weaponId: 'rifle',
+        origin: { x: 0, y: 1.3, z: 8 },
+        dirs: [{ x: 0, y: 0, z: -1 }],
+        now
+      });
+      assert.equal(wbRes.hits.length, 1, 'High-caliber rifle must penetrate thin cover (0.5m <= 0.72m)');
+      assert.equal(wbRes.hits[0].wallbang, true, 'Hit through thin cover must be marked wallbang=true');
+      assert.ok(p2.hp > 70 && p2.hp < 100, 'Wallbang hit must deal reduced (55%) damage');
+    } finally {
+      wbMapCfg.obstacles = savedObstacles;
+    }
+
+    // 7. Grenade Parabolic Trajectory Arc UI: smooth hand-to-impact curve + 3D arc beads + floor-clamped target ring
+    game.setGrenadeCount(2);
+    game.position.set(16, 0, 24);
+    game.camera.position.set(16, 1.62, 24);
+    game.yaw = 0;
+    game.pitch = 0;
+    assert.equal(game.startGrenadeCooking(), true);
+    assert.equal(game.grenadePreviewLine.visible, true);
+    assert.equal(game.grenadePreviewBeadGroup.visible, true);
+    assert.equal(game.grenadePreviewBeads.length, 16);
+    assert.ok(game.grenadePreviewPositions[0] > game.grenadePreviewPositions[3] && game.grenadePreviewPositions[3] > game.grenadePreviewPositions[6], 'Parabolic arc lateral hand offset must taper smoothly across vertices without kinking');
+    assert.ok(game.grenadePreviewTargetGroup.position.y >= 0.03, 'Target ring must clamp to horizontal floor/obstacle surface');
+    game.cancelGrenadeCooking();
+    assert.equal(game.grenadePreviewBeadGroup.visible, false);
   });
 });
 

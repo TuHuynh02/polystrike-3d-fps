@@ -407,6 +407,9 @@ const game = new Game3D(canvasContainer, {
   // `shoot` socket event. This callback only plays the local gunshot sound.
   onLocalShot: (shot) => {
     sfx.playShot(shot.weapon, 0.92);
+    if (Number.isFinite(shot.remainingAmmo) && shot.magSize >= 5 && shot.remainingAmmo <= Math.ceil(shot.magSize * 0.25)) {
+      sfx.playLowAmmoClick?.(shot.remainingAmmo / Math.max(1, shot.magSize));
+    }
   },
   onDryFire: () => {
     sfx.playDryFire();
@@ -795,34 +798,76 @@ function showCenterBanner(text) {
   }, 2200);
 }
 
-// Helper: Distinct Body / Headshot / Kill Hitmarker & Floating HUD Damage
-function triggerHitmarkerFeedback({ damage = 0, isHeadshot = false, isKill = false }) {
+// Helper: Distinct Body / Armor / Armor-Break / Headshot / Kill Hitmarker & Burst Combo HUD Damage
+let comboTargetId = null;
+let comboTotalDamage = 0;
+let comboHitCount = 0;
+let comboLastHitAt = 0;
+
+function triggerHitmarkerFeedback({
+  targetId = null,
+  damage = 0,
+  armorDamage = 0,
+  armorBroken = false,
+  isHeadshot = false,
+  isWallbang = false,
+  isKill = false
+}) {
+  const isArmorHit = !armorBroken && Number(armorDamage) > 0;
   if (hitmarker) {
-    hitmarker.classList.remove('hidden', 'headshot', 'kill');
+    hitmarker.classList.remove('hidden', 'headshot', 'kill', 'armor-hit', 'armor-break');
     void hitmarker.offsetWidth;
     if (isHeadshot) {
       hitmarker.classList.add('headshot');
+    } else if (armorBroken) {
+      hitmarker.classList.add('armor-break');
+    } else if (isArmorHit) {
+      hitmarker.classList.add('armor-hit');
     }
     if (isKill) {
       hitmarker.classList.add('kill');
     }
     if (hitmarkerTimer) clearTimeout(hitmarkerTimer);
-    const holdMs = isKill ? 280 : isHeadshot ? 210 : 140;
+    const holdMs = isKill ? 280 : (isHeadshot || armorBroken) ? 220 : 150;
     hitmarkerTimer = setTimeout(() => {
       hitmarker.classList.add('hidden');
-      hitmarker.classList.remove('headshot', 'kill');
+      hitmarker.classList.remove('headshot', 'kill', 'armor-hit', 'armor-break');
     }, holdMs);
   }
 
   if (damage > 0 && hudFloatingDmg) {
+    const now = performance.now();
     const cleanDmg = Math.max(1, Math.round(Number(damage) || 0));
-    hudFloatingDmg.textContent = isHeadshot ? `🎯 -${ cleanDmg } HS!` : `-${ cleanDmg }`;
+    if (targetId && targetId === comboTargetId && (now - comboLastHitAt) <= 1150) {
+      comboTotalDamage += cleanDmg;
+      comboHitCount += 1;
+    } else {
+      comboTargetId = targetId || null;
+      comboTotalDamage = cleanDmg;
+      comboHitCount = 1;
+    }
+    comboLastHitAt = now;
+
+    const comboSuffix = comboHitCount >= 2 ? ` (${comboHitCount}x • ${comboTotalDamage})` : '';
+    const wbTag = isWallbang ? '🧱 ' : '';
+    let label = `${wbTag}-${cleanDmg}${comboSuffix}`;
+    if (armorBroken) {
+      label = `${wbTag}🛡️ VỠ GIÁP -${cleanDmg}${comboSuffix}`;
+    } else if (isHeadshot) {
+      label = `${wbTag}🎯 -${cleanDmg} HS!${comboSuffix}`;
+    } else if (isArmorHit) {
+      label = `${wbTag}🛡️ -${cleanDmg}${comboSuffix}`;
+    }
+
+    hudFloatingDmg.textContent = label;
     hudFloatingDmg.classList.toggle('headshot', Boolean(isHeadshot));
+    hudFloatingDmg.classList.toggle('armor-break', Boolean(armorBroken && !isHeadshot));
+    hudFloatingDmg.classList.toggle('armor-hit', Boolean(isArmorHit && !isHeadshot));
     hudFloatingDmg.classList.remove('hidden');
     if (floatingDmgTimer) clearTimeout(floatingDmgTimer);
     floatingDmgTimer = setTimeout(() => {
       hudFloatingDmg.classList.add('hidden');
-    }, 520);
+    }, 640);
   }
 }
 
@@ -1905,7 +1950,7 @@ function renderScoreboard(players) {
 }
 
 // Add CS:GO-style Top-Right Kill Feed Entry
-function addKillFeedItem({ killerId, killerName, victimId, victimName, weapon, weaponName, isHeadshot }) {
+function addKillFeedItem({ killerId, killerName, victimId, victimName, weapon, weaponName, isHeadshot, isWallbang }) {
   const item = document.createElement('div');
   const involvesMe = killerId === game.localId || victimId === game.localId;
   item.className = `kill-item${ involvesMe ? ' kill-item-me' : '' }${ isHeadshot ? ' kill-item-hs' : '' }`;
@@ -1922,6 +1967,12 @@ function addKillFeedItem({ killerId, killerName, victimId, victimName, weapon, w
 
   item.appendChild(killerSpan);
   item.appendChild(weaponSpan);
+  if (isWallbang) {
+    const wbSpan = document.createElement('span');
+    wbSpan.className = 'kill-hs-tag';
+    wbSpan.textContent = '🧱 WB';
+    item.appendChild(wbSpan);
+  }
 
   if (isHeadshot) {
     const hsSpan = document.createElement('span');
@@ -2327,6 +2378,27 @@ socket.on('shotFired', (data) => {
     z: data.origin.z + data.dir.z * 55
   };
   game.triggerRemoteShotEffect(data.shooterId, data.weapon, data.origin, endPt, Boolean(data.isPlayerHit));
+  if (game.alive && !data.isPlayerHit && data.origin && endPt) {
+    const headX = game.position.x;
+    const headY = (game.position.y || 0) + 1.45;
+    const headZ = game.position.z;
+    const vx = endPt.x - data.origin.x;
+    const vy = endPt.y - data.origin.y;
+    const vz = endPt.z - data.origin.z;
+    const lenSq = vx * vx + vy * vy + vz * vz;
+    if (lenSq > 0.25) {
+      const t = Math.max(0, Math.min(1, ((headX - data.origin.x) * vx + (headY - data.origin.y) * vy + (headZ - data.origin.z) * vz) / lenSq));
+      if (t > 0.04) {
+        const cx = data.origin.x + vx * t;
+        const cy = data.origin.y + vy * t;
+        const cz = data.origin.z + vz * t;
+        const dist = Math.hypot(headX - cx, headY - cy, headZ - cz);
+        if (dist <= 2.4) {
+          sfx.playBulletWhizz?.({ x: headX, y: headY, z: headZ, yaw: game.yaw }, { x: cx, y: cy, z: cz }, dist);
+        }
+      }
+    }
+  }
 });
 
 socket.on('damageDealt', (data) => {
@@ -2339,36 +2411,45 @@ socket.on('damageDealt', (data) => {
     }
   }
 
-  // We hit an enemy -> Show Distinct Body/Headshot/Kill Hitmarker + Floating 3D/HUD Damage Popup
+  // We hit an enemy -> Show Distinct Body/Armor/Headshot/Kill Hitmarker + Floating 3D/HUD Damage Popup
   if (data.attackerId === game.localId && data.targetId !== game.localId) {
     const isHs = Boolean(data.isHeadshot);
     const isKillHit = typeof data.hp === 'number' && data.hp <= 0;
-
-    hitmarker.classList.remove('hidden');
-    if (isHs) {
-      hitmarker.classList.add('headshot');
-    } else {
-      hitmarker.classList.remove('headshot');
-    }
+    const armorDamage = Number(data.armorDamage) || 0;
+    const armorBroken = Boolean(data.armorBroken);
 
     triggerHitmarkerFeedback({
+      targetId: data.targetId,
       damage: data.damage,
+      armorDamage,
+      armorBroken,
       isHeadshot: isHs,
+      isWallbang: Boolean(data.isWallbang),
       isKill: isKillHit
     });
 
     if (isHs) {
       sfx.playHeadshotDink?.();
+    } else if (armorBroken || armorDamage > 0) {
+      sfx.playArmorHit?.(armorBroken);
     } else {
       sfx.playHitmarker?.(false);
     }
 
-    game.spawnDamagePopup(data.targetId, data.damage, isHs);
+    game.spawnDamagePopup(data.targetId, data.damage, isHs, {
+      armorDamage,
+      armorBroken,
+      isKill: isKillHit
+    });
   }
 
-  // Someone hit us -> Flash damage overlay, camera flinch, directional arc & update HP
+  // Someone hit us -> Flash damage overlay, camera flinch, directional arc & update HP/Armor
   if (data.targetId === game.localId) {
     if (typeof data.armor === 'number') updateArmorHud(data.armor);
+    if (data.armorBroken) {
+      sfx.playArmorHit?.(true);
+      showCenterBanner('🛡️ GIÁP KEVLAR ĐÃ VỠ!');
+    }
     updateHpHud(data.hp);
     game.applyDamageFlinch(data.damage);
     damageOverlay.style.opacity = '0.88';

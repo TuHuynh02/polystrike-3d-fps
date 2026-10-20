@@ -1670,6 +1670,27 @@ kbd {
   border-color: rgba(239, 68, 68, 0.9);
 }
 
+.hitmarker.armor-hit .hm-line {
+  background: #38bdf8;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.85);
+}
+
+.hitmarker.armor-break {
+  animation: hmKillPulse 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.hitmarker.armor-break .hm-line {
+  width: 12px;
+  height: 2.5px;
+  background: #67e8f9;
+  box-shadow: 0 0 12px #38bdf8;
+}
+
+.hitmarker.armor-break .hm-kill-ring {
+  opacity: 1;
+  border-color: rgba(56, 189, 248, 0.95);
+}
+
 @keyframes hmHeadshotPop {
   0% { transform: translate(-50%, -50%) scale(1.4); opacity: 1; }
   100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
@@ -1729,6 +1750,20 @@ kbd {
   color: #fde047;
   border-color: var(--danger);
   background: rgba(69, 10, 10, 0.88);
+}
+
+.hud-floating-dmg.armor-hit {
+  color: #67e8f9;
+  border-color: #38bdf8;
+  background: rgba(8, 47, 73, 0.88);
+}
+
+.hud-floating-dmg.armor-break {
+  font-size: 1.02rem;
+  color: #e0f2fe;
+  border-color: #38bdf8;
+  background: rgba(12, 74, 110, 0.94);
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.45);
 }
 
 .hud-adrenaline-pop {
@@ -1859,7 +1894,7 @@ kbd {
 /* PUBG-Style Grenade Cooking Countdown HUD */
 .grenade-cook-hud {
   position: absolute;
-  top: 64%;
+  top: 76%;
   left: 50%;
   transform: translateX(-50%);
   width: 248px;
