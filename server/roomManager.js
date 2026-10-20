@@ -362,11 +362,42 @@ export class RoomManager {
 
   createPickupsForMap(mapId) {
     const mapCfg = getMapConfig(mapId);
-    return mapCfg.healthPacks.map((p) => ({
-      id: p.id,
-      x: p.x,
-      y: p.y,
-      z: p.z,
+    const list = [];
+    for (const p of mapCfg.healthPacks || []) {
+      list.push({
+        id: p.id,
+        type: 'health',
+        x: p.x,
+        y: p.y || 0,
+        z: p.z,
+        active: true,
+        respawnAt: 0
+      });
+    }
+    for (const p of mapCfg.powerups || []) {
+      list.push({
+        id: p.id,
+        type: p.type || 'armor',
+        x: p.x,
+        y: p.y || 0,
+        z: p.z,
+        active: true,
+        respawnAt: 0
+      });
+    }
+    return list;
+  }
+
+  createBarrelsForMap(mapId) {
+    const mapCfg = getMapConfig(mapId);
+    const maxHp = MATCH_CONFIG.BARREL_MAX_HP || 60;
+    return (mapCfg.barrels || []).map((b) => ({
+      id: b.id,
+      x: b.x,
+      y: b.y || 0,
+      z: b.z,
+      hp: maxHp,
+      maxHp,
       active: true,
       respawnAt: 0
     }));
@@ -392,6 +423,7 @@ export class RoomManager {
       teamScores: { alpha: 0, bravo: 0 },
       players: new Map(),
       pickups: this.createPickupsForMap(cleanMapId),
+      barrels: this.createBarrelsForMap(cleanMapId),
       droppedWeapons: [],
       grenades: [],
       recentSpawns: [],
@@ -695,6 +727,7 @@ export class RoomManager {
         const nextPickups = this.createPickupsForMap(mapId);
         room.mapId = mapId;
         room.pickups = nextPickups;
+        room.barrels = this.createBarrelsForMap(mapId);
       }
       if (gameMode !== undefined && room.gameMode !== cleanGameMode) {
         room.gameMode = cleanGameMode;
@@ -745,6 +778,11 @@ export class RoomManager {
       reserveAmmo: weaponCfg.infiniteAmmo ? 0 : (weaponCfg.reserveAmmo ?? weaponCfg.magSize * 3),
       grenades: 1,
       hp: MATCH_CONFIG.MAX_HP,
+      armor: 0,
+      speedBoostUntil: 0,
+      damageBoostUntil: 0,
+      multiKillCount: 0,
+      lastKillAt: 0,
       alive: !isWaiting,
       kills: 0,
       deaths: 0,
@@ -1034,6 +1072,7 @@ export class RoomManager {
     const nextPickups = this.createPickupsForMap(nextMapId);
     room.mapId = nextMapId;
     room.pickups = nextPickups;
+    room.barrels = this.createBarrelsForMap(nextMapId);
     room.droppedWeapons = [];
     room.grenades = [];
     room.recentSpawns = [];
@@ -1065,6 +1104,7 @@ export class RoomManager {
       mapId: room.mapId,
       mapName: mapCfg.name,
       pickups: room.pickups,
+      barrels: room.barrels,
       droppedWeapons: room.droppedWeapons,
       activeGrenades: this.serializeGrenades(room),
       players: this.serializePlayers(room)
@@ -1393,6 +1433,9 @@ export class RoomManager {
       seq: player.lastProcessedSeq || 0,
       lastShotSeq: player.lastShotSeq || 0,
       hp: Number.isFinite(player.hp) ? player.hp : 0,
+      armor: Number.isFinite(player.armor) ? player.armor : 0,
+      speedBoostMs: (player.alive && player.speedBoostUntil > now) ? Math.max(0, Math.round(player.speedBoostUntil - now)) : 0,
+      damageBoostMs: (player.alive && player.damageBoostUntil > now) ? Math.max(0, Math.round(player.damageBoostUntil - now)) : 0,
       alive: Boolean(player.alive),
       weapon,
       ammo,
@@ -1410,7 +1453,7 @@ export class RoomManager {
     const ammo = player.ammoByWeapon?.[w] ?? player.ammo ?? 0;
     const res = player.reserveAmmoByWeapon?.[w] ?? player.reserveAmmo ?? 0;
     const rel = player.alive && player.reloadingUntil ? `${player.reloadWeapon || w}/${player.reloadingUntil | 0}` : '0';
-    return `${player.hp}:${player.alive ? 1 : 0}:${w}:${ammo}:${res}:${rel}:${player.grenades ?? 1}`;
+    return `${player.hp}:${player.armor || 0}:${player.speedBoostUntil || 0}:${player.damageBoostUntil || 0}:${player.alive ? 1 : 0}:${w}:${ammo}:${res}:${rel}:${player.grenades ?? 1}`;
   }
 
   /** Sends the owner-only `selfState` snapshot to `player.id` (never broadcast to the room). */
@@ -1586,8 +1629,14 @@ export class RoomManager {
     if (cmd.w && cmd.w !== player.weapon && this.isWeaponAllowed(player, cmd.w)) {
       this.switchPlayerWeapon(player, cmd.w);
     }
-    // Movement speed follows the weapon the server knows about, not whatever the command names
-    const stepCmd = cmd.w === player.weapon ? cmd : { ...cmd, w: player.weapon };
+    // Movement speed follows the weapon the server knows about, and BTN.SPEED_BOOST is only allowed when speedBoostUntil is active
+    const nowWall = Date.now();
+    const hasSpeedBuff = Boolean(player.speedBoostUntil && player.speedBoostUntil > nowWall - 250);
+    const wantsBoostBtn = (cmd.btn & BTN.SPEED_BOOST) !== 0;
+    const cleanBtn = (wantsBoostBtn && !hasSpeedBuff) ? (cmd.btn & ~BTN.SPEED_BOOST) : cmd.btn;
+    const stepCmd = (cmd.w === player.weapon && cleanBtn === cmd.btn)
+      ? cmd
+      : { ...cmd, w: player.weapon, btn: cleanBtn };
     const result = stepCommand(state, stepCmd, mapCfg, this._cmdScratchInput || (this._cmdScratchInput = {}));
 
     player.x = state.x;
@@ -1855,6 +1904,8 @@ export class RoomManager {
     const savedStates = rewindRoomPlayersForShot(room, shooter.id, rewindMs, rewindRef);
 
     const hits = [];
+    const barrelHits = [];
+    const activeBarrels = Array.isArray(room.barrels) ? room.barrels : [];
     let firstEnd = null;
     try {
       for (let p = 0; p < dirs.length; p++) {
@@ -1868,8 +1919,31 @@ export class RoomManager {
           if (t !== null && t < wallDist) wallDist = t;
         }
 
-        // Nearest player part in front of that obstacle
-        const reach = Math.min(maxRange, wallDist);
+        // Check active explosive barrels along this ray
+        let bestBarrel = null;
+        let barrelDist = Infinity;
+        const barrelReach = Math.min(maxRange, wallDist);
+        for (let i = 0; i < activeBarrels.length; i++) {
+          const brl = activeBarrels[i];
+          if (!brl || !brl.active) continue;
+          const by = brl.y || 0;
+          const brlBox = {
+            minX: brl.x - 0.52,
+            maxX: brl.x + 0.52,
+            minY: by,
+            maxY: by + 1.25,
+            minZ: brl.z - 0.52,
+            maxZ: brl.z + 0.52
+          };
+          const bt = rayIntersectsAABB(origin, dir, barrelReach, brlBox);
+          if (bt !== null && bt < barrelDist) {
+            barrelDist = bt;
+            bestBarrel = brl;
+          }
+        }
+
+        // Nearest player part in front of that obstacle and barrel
+        const reach = Math.min(barrelReach, barrelDist);
         let bestTarget = null;
         let bestHit = null;
         for (const candidate of room.players.values()) {
@@ -1890,10 +1964,17 @@ export class RoomManager {
             distance: bestHit.distance,
             point: bestHit.hitPoint
           });
+        } else if (bestBarrel && barrelDist <= barrelReach) {
+          barrelHits.push({
+            barrel: bestBarrel,
+            distance: barrelDist
+          });
         }
         if (p === 0) {
           if (bestHit) firstEnd = bestHit.hitPoint;
-          else if (wallDist <= maxRange) {
+          else if (bestBarrel && barrelDist <= barrelReach) {
+            firstEnd = { x: origin.x + dir.x * barrelDist, y: origin.y + dir.y * barrelDist, z: origin.z + dir.z * barrelDist };
+          } else if (wallDist <= maxRange) {
             firstEnd = { x: origin.x + dir.x * wallDist, y: origin.y + dir.y * wallDist, z: origin.z + dir.z * wallDist };
           }
         }
@@ -1924,6 +2005,10 @@ export class RoomManager {
     if (dirs.length > 1) shotEvent.dirs = dirs.map((d) => roundVec(d, 10000));
     this.io.to(room.code).emit('shotFired', shotEvent);
 
+    const dmgBoostMult = (shooter.damageBoostUntil && now < shooter.damageBoostUntil)
+      ? (MATCH_CONFIG.DAMAGE_BOOST_MULT || 1.35)
+      : 1.0;
+
     // Damage per target
     const damageMap = new Map();
     const blockedShieldTargets = new Set();
@@ -1937,7 +2022,7 @@ export class RoomManager {
       }
       const falloffMult = computeDistanceFalloff(weaponCfg, hit.distance);
       const hitZoneMult = hit.zone === 'head' ? weaponCfg.headshotMult : hit.zone === 'leg' ? 0.78 : 1.0;
-      const pelletDmg = Math.max(1, Math.round(weaponCfg.damage * falloffMult * hitZoneMult));
+      const pelletDmg = Math.max(1, Math.round(weaponCfg.damage * falloffMult * hitZoneMult * dmgBoostMult));
       const prev = damageMap.get(target.id) || { totalDamage: 0, anyHeadshot: false };
       prev.totalDamage += pelletDmg;
       prev.anyHeadshot = prev.anyHeadshot || hit.zone === 'head';
@@ -1945,10 +2030,34 @@ export class RoomManager {
     }
 
     this.applyShotDamage(room, shooter, weaponId, damageMap, blockedShieldTargets, now);
+
+    if (barrelHits.length > 0) {
+      const barrelDmgMap = new Map();
+      for (const bh of barrelHits) {
+        if (!bh.barrel || !bh.barrel.active) continue;
+        const falloffMult = computeDistanceFalloff(weaponCfg, bh.distance);
+        const pelletDmg = Math.max(1, Math.round(weaponCfg.damage * falloffMult * dmgBoostMult));
+        barrelDmgMap.set(bh.barrel, (barrelDmgMap.get(bh.barrel) || 0) + pelletDmg);
+      }
+      for (const [brl, totalBrlDmg] of barrelDmgMap.entries()) {
+        this.damageBarrel(room, brl, totalBrlDmg, shooter, now);
+      }
+    }
+
     return { origin, dirs, hitPoint: firstEnd, hits, damage: damageMap };
   }
 
-  /** Spawn-protection notices, HP loss, `damageDealt` and kills for the per-target damage of one shot. */
+  applyDamageWithArmor(target, rawDamage) {
+    const total = Math.max(0, Math.round(Number(rawDamage) || 0));
+    const curArmor = Math.max(0, Number(target.armor) || 0);
+    const absorbed = Math.min(curArmor, total);
+    const hpLoss = total - absorbed;
+    target.armor = curArmor - absorbed;
+    target.hp = Math.max(0, (Number(target.hp) || 0) - hpLoss);
+    return { total, absorbed, hpLoss };
+  }
+
+  /** Spawn-protection notices, HP/Armor loss, `damageDealt` and kills for the per-target damage of one shot. */
   applyShotDamage(room, shooter, weaponId, damageMap, blockedShieldTargets, now) {
     if (damageMap.size === 0 && blockedShieldTargets.size === 0) return;
 
@@ -1967,7 +2076,7 @@ export class RoomManager {
       if (!target || !target.alive) continue;
       if (target.invulnerableUntil && now < target.invulnerableUntil) continue;
 
-      target.hp = Math.max(0, target.hp - info.totalDamage);
+      this.applyDamageWithArmor(target, info.totalDamage);
 
       this.io.to(room.code).emit('damageDealt', {
         targetId: target.id,
@@ -1975,11 +2084,14 @@ export class RoomManager {
         attackerPos: { x: shooter.x, y: shooter.y, z: shooter.z },
         damage: info.totalDamage,
         hp: target.hp,
+        armor: target.armor || 0,
         isHeadshot: info.anyHeadshot
       });
 
       if (target.hp <= 0) {
         this.handlePlayerKilled(room, shooter, target, weaponId, info.anyHeadshot);
+      } else {
+        this.sendSelfState(target, now, true);
       }
     }
   }
@@ -2446,7 +2558,7 @@ export class RoomManager {
         damage = Math.max(1, Math.round(maxDamage * (1 - t)));
       }
 
-      target.hp = Math.max(0, target.hp - damage);
+      this.applyDamageWithArmor(target, damage);
 
       this.io.to(room.code).emit('damageDealt', {
         targetId: target.id,
@@ -2454,6 +2566,7 @@ export class RoomManager {
         attackerPos: { x: grenade.x, y: grenade.y, z: grenade.z },
         damage,
         hp: target.hp,
+        armor: target.armor || 0,
         isHeadshot: false,
         weapon: 'grenade',
         weaponName: 'FRAG GRENADE'
@@ -2461,6 +2574,170 @@ export class RoomManager {
 
       if (target.hp <= 0) {
         this.handlePlayerKilled(room, attacker, target, 'grenade', false);
+      } else {
+        this.sendSelfState(target, now, true);
+      }
+    }
+
+    // Grenade blast also detonates nearby active explosive barrels
+    if (Array.isArray(room.barrels)) {
+      for (const barrel of room.barrels) {
+        if (!barrel || !barrel.active) continue;
+        const bDist = Math.hypot(barrel.x - grenade.x, (barrel.y || 0) - grenade.y, barrel.z - grenade.z);
+        if (bDist <= outerRadius) {
+          this.detonateBarrel(room, barrel, attacker, now);
+        }
+      }
+    }
+  }
+
+  damageBarrel(room, barrel, amount, attacker = null, now = Date.now(), visited = new Set()) {
+    if (!room || !barrel || !barrel.active || room.state !== 'PLAYING') return false;
+    const dmg = Math.max(1, Math.round(Number(amount) || 0));
+    barrel.hp = Math.max(0, (Number(barrel.hp) || 0) - dmg);
+    if (barrel.hp <= 0) {
+      this.detonateBarrel(room, barrel, attacker, now, visited);
+      return true;
+    }
+    this.io.to(room.code).emit('barrelState', {
+      id: barrel.id,
+      barrelId: barrel.id,
+      active: true,
+      hp: barrel.hp,
+      maxHp: barrel.maxHp || MATCH_CONFIG.BARREL_MAX_HP || 60
+    });
+    return false;
+  }
+
+  detonateBarrel(room, barrel, attacker = null, now = Date.now(), visited = new Set()) {
+    if (!room || !barrel || !barrel.active || visited.has(barrel.id)) return;
+    visited.add(barrel.id);
+    barrel.active = false;
+    barrel.hp = 0;
+    barrel.respawnAt = now + (MATCH_CONFIG.BARREL_RESPAWN_MS || 25000);
+
+    const attackerId = attacker ? attacker.id : null;
+    const ownerTeam = attacker?.team || null;
+
+    this.io.to(room.code).emit('barrelExploded', {
+      id: barrel.id,
+      barrelId: barrel.id,
+      x: barrel.x,
+      y: barrel.y || 0,
+      z: barrel.z,
+      attackerId,
+      respawnAt: barrel.respawnAt
+    });
+
+    if (room.state !== 'PLAYING') return;
+
+    const maxDamage = MATCH_CONFIG.BARREL_MAX_DAMAGE || 85;
+    const innerRadius = 2.0;
+    const outerRadius = MATCH_CONFIG.BARREL_EXPLOSION_RADIUS || 6.5;
+    const mapCfg = getMapConfig(room.mapId);
+    const obstacles = mapCfg.obstacles || [];
+    const blastOrigin = {
+      x: barrel.x,
+      y: (barrel.y || 0) + 0.75,
+      z: barrel.z
+    };
+
+    const candidates = [];
+    for (const p of room.players.values()) {
+      if (!p || !p.alive) continue;
+      if (p.id !== attackerId) {
+        if (room.gameMode === 'tdm' && ownerTeam && p.team === ownerTeam) continue;
+        candidates.push(p);
+      }
+    }
+    if (attacker && attacker.alive) {
+      candidates.push(attacker);
+    }
+
+    for (let i = 0; i < candidates.length; i++) {
+      if (room.state !== 'PLAYING') break;
+      const target = candidates[i];
+      if (!target || !target.alive) continue;
+
+      const clampedY = Math.max(target.y || 0, Math.min((target.y || 0) + 1.5, blastOrigin.y));
+      const dist = Math.hypot(target.x - barrel.x, clampedY - blastOrigin.y, target.z - barrel.z);
+      if (dist > outerRadius) continue;
+
+      const targetTorso = {
+        x: target.x,
+        y: (target.y || 0) + (target.prone ? 0.35 : target.crouching ? 0.8 : 1.1),
+        z: target.z
+      };
+      const targetHead = {
+        x: target.x,
+        y: (target.y || 0) + (target.prone ? 0.48 : target.crouching ? 1.0 : 1.55),
+        z: target.z
+      };
+      if (!hasLineOfSight(blastOrigin, targetTorso, obstacles) && !hasLineOfSight(blastOrigin, targetHead, obstacles)) {
+        continue;
+      }
+
+      if (target.invulnerableUntil && now < target.invulnerableUntil) {
+        this.io.to(room.code).emit('spawnProtectedHit', {
+          targetId: target.id,
+          attackerId,
+          remainingMs: Math.max(0, target.invulnerableUntil - now)
+        });
+        continue;
+      }
+
+      let damage = maxDamage;
+      if (dist > innerRadius) {
+        const t = (dist - innerRadius) / (outerRadius - innerRadius);
+        damage = Math.max(1, Math.round(maxDamage * (1 - t)));
+      }
+
+      this.applyDamageWithArmor(target, damage);
+
+      this.io.to(room.code).emit('damageDealt', {
+        targetId: target.id,
+        attackerId,
+        attackerPos: { x: barrel.x, y: barrel.y || 0, z: barrel.z },
+        damage,
+        hp: target.hp,
+        armor: target.armor || 0,
+        isHeadshot: false,
+        weapon: 'barrel',
+        weaponName: 'EXPLOSIVE BARREL'
+      });
+
+      if (target.hp <= 0) {
+        this.handlePlayerKilled(room, attacker, target, 'barrel', false);
+      } else {
+        this.sendSelfState(target, now, true);
+      }
+    }
+
+    // Chain reaction to nearby active barrels within outerRadius
+    if (Array.isArray(room.barrels)) {
+      for (const other of room.barrels) {
+        if (!other || !other.active || other.id === barrel.id || visited.has(other.id)) continue;
+        const bDist = Math.hypot(other.x - barrel.x, (other.y || 0) - (barrel.y || 0), other.z - barrel.z);
+        if (bDist <= outerRadius) {
+          this.detonateBarrel(room, other, attacker, now, visited);
+        }
+      }
+    }
+  }
+
+  updateBarrels(room, now = Date.now()) {
+    if (!room || !Array.isArray(room.barrels)) return;
+    const maxHp = MATCH_CONFIG.BARREL_MAX_HP || 60;
+    for (const barrel of room.barrels) {
+      if (!barrel.active && now >= barrel.respawnAt) {
+        barrel.active = true;
+        barrel.hp = maxHp;
+        this.io.to(room.code).emit('barrelState', {
+          barrelId: barrel.id,
+          active: true,
+          hp: barrel.hp,
+          maxHp
+        });
       }
     }
   }
@@ -2488,8 +2765,15 @@ export class RoomManager {
       droppedBy: victim.name
     });
 
+    const now = Date.now();
+    const victimPrevStreak = victim.streak || 0;
     victim.alive = false;
     victim.hp = 0;
+    victim.armor = 0;
+    victim.speedBoostUntil = 0;
+    victim.damageBoostUntil = 0;
+    victim.multiKillCount = 0;
+    victim.lastKillAt = 0;
     victim.isAiming = false;
     victim.deaths += 1;
     victim.streak = 0;
@@ -2499,13 +2783,22 @@ export class RoomManager {
     victim.invulnerableUntil = 0;
     victim.lastDeathX = victim.x;
     victim.lastDeathZ = victim.z;
-    victim.respawnAt = Date.now() + MATCH_CONFIG.RESPAWN_DELAY_MS;
+    victim.respawnAt = now + MATCH_CONFIG.RESPAWN_DELAY_MS;
 
     const isTdm = room.gameMode === 'tdm';
     let adrenalineHeal = 0;
+    const streakEvents = [];
     if (killer && killer.id !== victim.id && (!isTdm || !killer.team || killer.team !== victim.team)) {
       killer.kills += 1;
       killer.streak += 1;
+      const multiWindow = MATCH_CONFIG.MULTI_KILL_WINDOW_MS || 4000;
+      if (killer.lastKillAt && (now - killer.lastKillAt) <= multiWindow) {
+        killer.multiKillCount = (killer.multiKillCount || 1) + 1;
+      } else {
+        killer.multiKillCount = 1;
+      }
+      killer.lastKillAt = now;
+
       if (isTdm && (killer.team === 'alpha' || killer.team === 'bravo')) {
         if (!room.teamScores) room.teamScores = { alpha: 0, bravo: 0 };
         room.teamScores[killer.team] = (room.teamScores[killer.team] || 0) + 1;
@@ -2517,12 +2810,99 @@ export class RoomManager {
         killer.hp = Math.min(maxHp, prevHp + healAmount);
         adrenalineHeal = killer.hp - prevHp;
       }
+
+      const maxArmor = MATCH_CONFIG.MAX_ARMOR || 50;
+      if (killer.multiKillCount === 2) {
+        streakEvents.push({
+          type: 'multikill',
+          badge: 'DOUBLE KILL',
+          subtitle: `${killer.name} hạ 2 mục tiêu liên tiếp!`,
+          rewardText: ''
+        });
+      } else if (killer.multiKillCount === 3) {
+        streakEvents.push({
+          type: 'multikill',
+          badge: 'TRIPLE KILL',
+          subtitle: `${killer.name} càn quét 3 mục tiêu liên tiếp!`,
+          rewardText: ''
+        });
+      } else if (killer.multiKillCount >= 4) {
+        streakEvents.push({
+          type: 'multikill',
+          badge: 'QUADRA KILL',
+          subtitle: `${killer.name} hủy diệt ${killer.multiKillCount} mục tiêu liên tiếp!`,
+          rewardText: ''
+        });
+      }
+
+      if (killer.streak === 3) {
+        if (killer.alive) {
+          killer.armor = Math.min(maxArmor, (killer.armor || 0) + 25);
+        }
+        streakEvents.push({
+          type: 'streak',
+          badge: 'KILLING SPREE',
+          subtitle: `${killer.name} đạt chuỗi 3 mạng!`,
+          rewardText: '+25 GIÁP KEVLAR'
+        });
+      } else if (killer.streak === 5) {
+        if (killer.alive) {
+          killer.grenades = Math.min(2, (killer.grenades || 0) + 1);
+          const wCfg = WEAPONS[killer.weapon] || WEAPONS.rifle;
+          if (!wCfg.isMelee && !wCfg.infiniteAmmo) {
+            killer.ammo = wCfg.magSize;
+            if (killer.ammoByWeapon) killer.ammoByWeapon[killer.weapon] = wCfg.magSize;
+          }
+        }
+        streakEvents.push({
+          type: 'streak',
+          badge: 'RAMPAGE',
+          subtitle: `${killer.name} đạt chuỗi 5 mạng!`,
+          rewardText: '+1 LỰU ĐẠN & ĐẦY BĂNG ĐẠN'
+        });
+      } else if (killer.streak === 7) {
+        if (killer.alive) {
+          killer.speedBoostUntil = Math.max(killer.speedBoostUntil || 0, now + 8000);
+        }
+        streakEvents.push({
+          type: 'streak',
+          badge: 'DOMINATING',
+          subtitle: `${killer.name} thống trị đấu trường (7 mạng)!`,
+          rewardText: 'TĂNG TỐC 8 GIÂY'
+        });
+      } else if (killer.streak >= 10 && (killer.streak === 10 || killer.streak % 5 === 0)) {
+        if (killer.alive) {
+          killer.armor = maxArmor;
+          killer.damageBoostUntil = Math.max(killer.damageBoostUntil || 0, now + 8000);
+        }
+        streakEvents.push({
+          type: 'streak',
+          badge: 'UNSTOPPABLE',
+          subtitle: `${killer.name} bất khả chiến bại (${killer.streak} mạng)!`,
+          rewardText: 'CUỒNG NỘ SÁT THƯƠNG + ĐẦY GIÁP'
+        });
+      }
+
+      if (victimPrevStreak >= 3) {
+        if (killer.alive) {
+          killer.armor = Math.min(maxArmor, (killer.armor || 0) + 25);
+        }
+        streakEvents.push({
+          type: 'shutdown',
+          badge: 'SHUTDOWN',
+          subtitle: `${killer.name} chấm dứt chuỗi ${victimPrevStreak} mạng của ${victim.name}!`,
+          rewardText: '+25 GIÁP THƯỞNG'
+        });
+      }
     }
 
     const isGrenadeKill = weaponId === 'grenade';
+    const isBarrelKill = weaponId === 'barrel';
     const resolvedWeaponName = isGrenadeKill
       ? 'FRAG GRENADE'
-      : (WEAPONS[weaponId]?.name || String(weaponId || 'rifle').toUpperCase());
+      : isBarrelKill
+        ? 'EXPLOSIVE BARREL'
+        : (WEAPONS[weaponId]?.name || String(weaponId || 'rifle').toUpperCase());
 
     this.io.to(room.code).emit('killEvent', {
       killerId: killer ? killer.id : null,
@@ -2533,12 +2913,14 @@ export class RoomManager {
       victimName: victim.name,
       victimColor: victim.color,
       victimTeam: victim.team || null,
-      weapon: isGrenadeKill ? 'grenade' : resolvedWeaponName,
+      weapon: isGrenadeKill ? 'grenade' : isBarrelKill ? 'barrel' : resolvedWeaponName,
       weaponName: resolvedWeaponName,
       weaponId,
       isHeadshot: Boolean(isHeadshot),
       killerStreak: killer ? killer.streak : 0,
+      killerMultiKill: killer ? (killer.multiKillCount || 1) : 0,
       killerHp: killer ? killer.hp : 0,
+      killerArmor: killer ? (killer.armor || 0) : 0,
       newKillerHp: killer ? killer.hp : 0,
       adrenalineHeal,
       healedHp: adrenalineHeal,
@@ -2547,11 +2929,23 @@ export class RoomManager {
       droppedWeapon
     });
 
-    if (victim) {
-      this.sendSelfState(victim, Date.now(), true);
+    for (const se of streakEvents) {
+      this.io.to(room.code).emit('streakEvent', {
+        playerId: killer.id,
+        playerName: killer.name,
+        playerColor: killer.color,
+        streak: killer.streak,
+        multiKill: killer.multiKillCount || 1,
+        label: se.badge,
+        ...se
+      });
     }
-    if (killer && killer.id !== victim.id && adrenalineHeal > 0) {
-      this.sendSelfState(killer, Date.now(), true);
+
+    if (victim) {
+      this.sendSelfState(victim, now, true);
+    }
+    if (killer && killer.id !== victim.id && (adrenalineHeal > 0 || streakEvents.length > 0)) {
+      this.sendSelfState(killer, now, true);
     }
 
     // Check win condition (TDM: 30 team kills; FFA: 20 individual kills)
@@ -2600,6 +2994,11 @@ export class RoomManager {
     player.isAiming = false;
     player.lean = 0;
     player.hp = MATCH_CONFIG.MAX_HP;
+    player.armor = 0;
+    player.speedBoostUntil = 0;
+    player.damageBoostUntil = 0;
+    player.multiKillCount = 0;
+    player.lastKillAt = 0;
     player.alive = true;
     player.reloadingUntil = 0;
     player.reloadWeapon = null;
@@ -2654,32 +3053,57 @@ export class RoomManager {
 
   updateHealthPacks(room, now) {
     if (!room || !Array.isArray(room.pickups)) return;
+    const maxHp = MATCH_CONFIG.MAX_HP || 100;
+    const maxArmor = MATCH_CONFIG.MAX_ARMOR || 50;
     for (const pack of room.pickups) {
+      const pType = pack.type || 'health';
       if (!pack.active) {
         if (now >= pack.respawnAt) {
           pack.active = true;
           this.io.to(room.code).emit('pickupState', {
             pickupId: pack.id,
+            type: pType,
             active: true
           });
         }
         continue;
       }
 
-      // Check if any injured alive player walks over the health pack
+      // Check if any eligible alive player walks over the pickup
       for (const player of room.players.values()) {
-        if (!player.alive || player.hp >= MATCH_CONFIG.MAX_HP) continue;
+        if (!player.alive) continue;
+        if (pType === 'health' && player.hp >= maxHp) continue;
+        if (pType === 'armor' && (player.armor || 0) >= maxArmor) continue;
+
         const dist = Math.hypot(player.x - pack.x, player.z - pack.z);
         if (dist <= 2.35 && Math.abs((player.y || 0) - (pack.y || 0)) <= 2.4) {
           pack.active = false;
-          pack.respawnAt = now + MATCH_CONFIG.HEALTH_PACK_RESPAWN_MS;
-          player.hp = Math.min(MATCH_CONFIG.MAX_HP, player.hp + MATCH_CONFIG.HEALTH_PACK_HEAL);
+          if (pType === 'health') {
+            pack.respawnAt = now + (MATCH_CONFIG.HEALTH_PACK_RESPAWN_MS || 15000);
+            player.hp = Math.min(maxHp, player.hp + (MATCH_CONFIG.HEALTH_PACK_HEAL || 50));
+          } else if (pType === 'armor') {
+            pack.respawnAt = now + (MATCH_CONFIG.POWERUP_RESPAWN_MS || 20000);
+            player.armor = Math.min(maxArmor, (player.armor || 0) + (MATCH_CONFIG.ARMOR_PACK_VALUE || 50));
+          } else if (pType === 'speed') {
+            pack.respawnAt = now + (MATCH_CONFIG.POWERUP_RESPAWN_MS || 20000);
+            player.speedBoostUntil = now + (MATCH_CONFIG.SPEED_BOOST_DURATION_MS || 10000);
+          } else if (pType === 'damage') {
+            pack.respawnAt = now + (MATCH_CONFIG.POWERUP_RESPAWN_MS || 20000);
+            player.damageBoostUntil = now + (MATCH_CONFIG.DAMAGE_BOOST_DURATION_MS || 10000);
+          } else {
+            pack.respawnAt = now + (MATCH_CONFIG.POWERUP_RESPAWN_MS || 20000);
+          }
 
           this.io.to(room.code).emit('pickupState', {
             pickupId: pack.id,
+            type: pType,
             active: false,
             pickerId: player.id,
-            newHp: player.hp
+            pickerName: player.name,
+            newHp: player.hp,
+            newArmor: player.armor || 0,
+            speedBoostMs: player.speedBoostUntil > now ? Math.round(player.speedBoostUntil - now) : 0,
+            damageBoostMs: player.damageBoostUntil > now ? Math.round(player.damageBoostUntil - now) : 0
           });
           this.sendSelfState(player, now, true);
           break;
@@ -2783,10 +3207,18 @@ export class RoomManager {
     room.grenades = [];
     room.recentSpawns = [];
 
-    // Reset all pickups
+    // Reset all pickups & explosive barrels
     for (const pack of room.pickups) {
       pack.active = true;
       pack.respawnAt = 0;
+    }
+    if (Array.isArray(room.barrels)) {
+      const maxBrlHp = MATCH_CONFIG.BARREL_MAX_HP || 60;
+      for (const barrel of room.barrels) {
+        barrel.active = true;
+        barrel.hp = barrel.maxHp || maxBrlHp;
+        barrel.respawnAt = 0;
+      }
     }
 
     // Mark all players not yet placed so sequential respawn assigns non-overlapping points
@@ -2813,6 +3245,7 @@ export class RoomManager {
       killLimit: room.killLimit,
       teamScores: isTdm ? { ...room.teamScores } : undefined,
       pickups: room.pickups,
+      barrels: room.barrels,
       droppedWeapons: room.droppedWeapons,
       activeGrenades: this.serializeGrenades(room),
       players: this.serializePlayers(room)
@@ -2890,6 +3323,9 @@ export class RoomManager {
         reserveAmmo: Number.isFinite(p.reserveAmmo) ? p.reserveAmmo : 0,
         grenades: Number.isFinite(p.grenades) ? p.grenades : 1,
         hp: Number.isFinite(p.hp) ? p.hp : 0,
+        ...(p.armor > 0 ? { armor: p.armor } : {}),
+        ...(p.alive && p.speedBoostUntil > now ? { speedBoostMs: Math.round(p.speedBoostUntil - now) } : {}),
+        ...(p.alive && p.damageBoostUntil > now ? { damageBoostMs: Math.round(p.damageBoostUntil - now) } : {}),
         alive: Boolean(p.alive),
         invulnerable,
         invulnerableUntil: invulnerable ? p.invulnerableUntil : 0,
@@ -2958,8 +3394,9 @@ export class RoomManager {
           // Update active Frag Grenades physics & 2.2s fuse detonation
           this.updateGrenades(room, dt, now);
 
-          // Update Health Pack pickups & 5s Dropped Weapons expiration
+          // Update Health Pack / Power-up pickups, Explosive Barrels & 5s Dropped Weapons expiration
           this.updateHealthPacks(room, now);
+          this.updateBarrels(room, now);
           this.updateDroppedWeapons(room, now);
         } finally {
           this._deferSelfState = false;

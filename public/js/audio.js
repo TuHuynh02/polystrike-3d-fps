@@ -1060,6 +1060,48 @@ export class SoundEffects {
     osc.stop(now + 0.11);
   }
 
+  playJumpPad() {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(160, now);
+    osc.frequency.exponentialRampToValueAtTime(680, now + 0.22);
+    gain.gain.setValueAtTime(0.2, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    this._bindSourceCleanup(osc, [gain], null, 0.27);
+    osc.start(now);
+    osc.stop(now + 0.26);
+  }
+
+  playPowerupPickup(type = 'armor') {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const chord = type === 'damage'
+      ? [440, 554.37, 659.25, 880]
+      : type === 'speed'
+        ? [587.33, 739.99, 880, 1174.66]
+        : [392.0, 493.88, 587.33, 783.99];
+    chord.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type === 'damage' ? 'sawtooth' : 'triangle';
+      osc.frequency.setValueAtTime(freq, now + idx * 0.04);
+      gain.gain.setValueAtTime(0.18, now + idx * 0.04);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.04 + 0.16);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      this._bindSourceCleanup(osc, [gain], null, idx * 0.04 + 0.18);
+      osc.start(now + idx * 0.04);
+      osc.stop(now + idx * 0.04 + 0.17);
+    });
+  }
+
   playWeaponDrop() {
     const ctx = this.ensureContext();
     if (!ctx) return;

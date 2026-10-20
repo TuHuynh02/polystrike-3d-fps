@@ -195,7 +195,7 @@ export function stepPlayerMovement(s, input, dt, mapCfg, nowMs) {
         s.vz += wishDirZ * accelStep;
       }
 
-      const maxAirSpeed = MATCH_CONFIG.SLIDE_INITIAL_SPEED * 1.05;
+      const maxAirSpeed = Math.max(MATCH_CONFIG.SLIDE_INITIAL_SPEED * 1.05, targetSpeed * 1.05);
       const curHoriz = Math.hypot(s.vx, s.vz);
       if (curHoriz > maxAirSpeed) {
         s.vx = (s.vx / curHoriz) * maxAirSpeed;
@@ -269,6 +269,32 @@ export function stepPlayerMovement(s, input, dt, mapCfg, nowMs) {
     }
   } else {
     s.onGround = false;
+  }
+
+  // Jump Pad launch pads (shared deterministic physics between client and server)
+  const jumpPads = mapCfg && mapCfg.jumpPads;
+  if (Array.isArray(jumpPads) && jumpPads.length > 0 && s.vy < (MATCH_CONFIG.JUMP_PAD_FORCE || 14.2) - 1.0) {
+    const defRadius = MATCH_CONFIG.JUMP_PAD_RADIUS || 1.35;
+    const defForce = MATCH_CONFIG.JUMP_PAD_FORCE || 14.2;
+    for (let i = 0; i < jumpPads.length; i++) {
+      const pad = jumpPads[i];
+      const padY = pad.y || 0;
+      if (Math.abs(s.y - padY) <= 0.45) {
+        const dx = s.x - pad.x;
+        const dz = s.z - pad.z;
+        const r = pad.radius || defRadius;
+        if (dx * dx + dz * dz <= r * r) {
+          s.vy = pad.jumpForce || defForce;
+          s.onGround = false;
+          s.isSliding = false;
+          s.lastGroundedAt = -Infinity;
+          s.jumpQueuedUntil = 0;
+          result.jumped = true;
+          result.jumpPadTriggered = pad.id || true;
+          break;
+        }
+      }
+    }
   }
 
   s.stepOffsetY = (s.stepOffsetY || 0) * Math.exp(-18 * dt);

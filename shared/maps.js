@@ -430,6 +430,26 @@ export const MAPS = {
       { id: 'hp_nw', x: -32, y: 0, z: -15 },
       { id: 'hp_se', x: 32, y: 0, z: 15 }
     ],
+    powerups: [
+      { id: 'pu_armor_n', type: 'armor', x: -16, y: 0, z: -29 },
+      { id: 'pu_armor_s', type: 'armor', x: 16, y: 0, z: 29 },
+      { id: 'pu_speed_w', type: 'speed', x: -29, y: 0, z: 16 },
+      { id: 'pu_damage_center', type: 'damage', x: 0, y: 2.4, z: 4.5 }
+    ],
+    jumpPads: [
+      { id: 'jp_nw', x: -18, y: 0, z: -18, radius: 1.35, jumpForce: 14.2 },
+      { id: 'jp_ne', x: 18, y: 0, z: -18, radius: 1.35, jumpForce: 14.2 },
+      { id: 'jp_sw', x: -18, y: 0, z: 18, radius: 1.35, jumpForce: 14.2 },
+      { id: 'jp_se', x: 18, y: 0, z: 18, radius: 1.35, jumpForce: 14.2 }
+    ],
+    barrels: [
+      { id: 'brl_1', x: -12, y: 0, z: -20 },
+      { id: 'brl_2', x: 12, y: 0, z: -20 },
+      { id: 'brl_3', x: -12, y: 0, z: 20 },
+      { id: 'brl_4', x: 12, y: 0, z: 20 },
+      { id: 'brl_5', x: -26, y: 0, z: 0 },
+      { id: 'brl_6', x: 26, y: 0, z: 0 }
+    ],
     spawnPoints: [
       { x: -52, y: 0.1, z: -52, yaw: -Math.PI * 0.75 },
       { x: 52, y: 0.1, z: -52, yaw: Math.PI * 0.75 },
@@ -500,6 +520,26 @@ export const MAPS = {
       { id: 'hp_east', x: 28, y: 0, z: 0 },
       { id: 'hp_nw', x: -36, y: 0, z: -22 },
       { id: 'hp_se', x: 36, y: 0, z: 22 }
+    ],
+    powerups: [
+      { id: 'pu_armor_n', type: 'armor', x: -16, y: 0, z: -28 },
+      { id: 'pu_armor_s', type: 'armor', x: 16, y: 0, z: 28 },
+      { id: 'pu_speed_w', type: 'speed', x: -28, y: 0, z: 16 },
+      { id: 'pu_damage_center', type: 'damage', x: 0, y: 2.4, z: 0 }
+    ],
+    jumpPads: [
+      { id: 'jp_nw', x: -22, y: 0, z: -18, radius: 1.35, jumpForce: 14.2 },
+      { id: 'jp_ne', x: 22, y: 0, z: -18, radius: 1.35, jumpForce: 14.2 },
+      { id: 'jp_sw', x: -22, y: 0, z: 18, radius: 1.35, jumpForce: 14.2 },
+      { id: 'jp_se', x: 22, y: 0, z: 18, radius: 1.35, jumpForce: 14.2 }
+    ],
+    barrels: [
+      { id: 'brl_1', x: -12, y: 0, z: -14 },
+      { id: 'brl_2', x: 12, y: 0, z: -14 },
+      { id: 'brl_3', x: -12, y: 0, z: 14 },
+      { id: 'brl_4', x: 12, y: 0, z: 14 },
+      { id: 'brl_5', x: -26, y: 0, z: 0 },
+      { id: 'brl_6', x: 26, y: 0, z: 0 }
     ],
     spawnPoints: [
       { x: -56, y: 0.1, z: -56, yaw: -Math.PI * 0.75 },
@@ -572,6 +612,26 @@ export const MAPS = {
       { id: 'hp_nw', x: -36, y: 2.4, z: -34 },
       { id: 'hp_se', x: 36, y: 2.4, z: 34 }
     ],
+    powerups: [
+      { id: 'pu_armor_n', type: 'armor', x: -18, y: 0, z: -20 },
+      { id: 'pu_armor_s', type: 'armor', x: 18, y: 0, z: 20 },
+      { id: 'pu_speed_w', type: 'speed', x: -24, y: 0, z: 14 },
+      { id: 'pu_damage_center', type: 'damage', x: 0, y: 2.4, z: 4.5 }
+    ],
+    jumpPads: [
+      { id: 'jp_nw', x: -20, y: 0, z: -26, radius: 1.35, jumpForce: 14.2 },
+      { id: 'jp_ne', x: 20, y: 0, z: -26, radius: 1.35, jumpForce: 14.2 },
+      { id: 'jp_sw', x: -20, y: 0, z: 26, radius: 1.35, jumpForce: 14.2 },
+      { id: 'jp_se', x: 20, y: 0, z: 26, radius: 1.35, jumpForce: 14.2 }
+    ],
+    barrels: [
+      { id: 'brl_1', x: -15, y: 0, z: -18 },
+      { id: 'brl_2', x: 15, y: 0, z: -18 },
+      { id: 'brl_3', x: -15, y: 0, z: 18 },
+      { id: 'brl_4', x: 15, y: 0, z: 18 },
+      { id: 'brl_5', x: -28, y: 0, z: 0 },
+      { id: 'brl_6', x: 28, y: 0, z: 0 }
+    ],
     spawnPoints: [
       { x: -54, y: 0.1, z: -54, yaw: -Math.PI * 0.75 },
       { x: 54, y: 0.1, z: -54, yaw: Math.PI * 0.75 },
@@ -642,6 +702,26 @@ export const MAPS = {
       { id: 'hp_east', x: 22, y: 0, z: 0 },
       { id: 'hp_north_deck', x: 0, y: 2.0, z: -40 },
       { id: 'hp_south_deck', x: 0, y: 2.0, z: 40 }
+    ],
+    powerups: [
+      { id: 'pu_armor_n', type: 'armor', x: -14, y: 0, z: -28 },
+      { id: 'pu_armor_s', type: 'armor', x: 14, y: 0, z: 28 },
+      { id: 'pu_speed_w', type: 'speed', x: -28, y: 0, z: 14 },
+      { id: 'pu_damage_center', type: 'damage', x: 0, y: 2.4, z: 3.5 }
+    ],
+    jumpPads: [
+      { id: 'jp_nw', x: -18, y: 0, z: -32, radius: 1.35, jumpForce: 14.2 },
+      { id: 'jp_ne', x: 18, y: 0, z: -32, radius: 1.35, jumpForce: 14.2 },
+      { id: 'jp_sw', x: -18, y: 0, z: 32, radius: 1.35, jumpForce: 14.2 },
+      { id: 'jp_se', x: 18, y: 0, z: 32, radius: 1.35, jumpForce: 14.2 }
+    ],
+    barrels: [
+      { id: 'brl_1', x: -12, y: 0, z: -20 },
+      { id: 'brl_2', x: 12, y: 0, z: -20 },
+      { id: 'brl_3', x: -12, y: 0, z: 20 },
+      { id: 'brl_4', x: 12, y: 0, z: 20 },
+      { id: 'brl_5', x: -28, y: 0, z: 0 },
+      { id: 'brl_6', x: 28, y: 0, z: 0 }
     ],
     spawnPoints: [
       { x: -52, y: 0.1, z: -52, yaw: -Math.PI * 0.75 },

@@ -159,6 +159,7 @@ io.on('connection', (socket) => {
           weapon: player.weapon,
           loadout: player.loadout,
           hp: player.hp,
+          armor: player.armor || 0,
           ammo: player.ammo,
           reserveAmmo: player.reserveAmmo,
           ammoByWeapon: player.ammoByWeapon,
@@ -173,6 +174,7 @@ io.on('connection', (socket) => {
         },
         players: roomManager.serializePlayers(room),
         pickups: room.pickups,
+        barrels: room.barrels || [],
         droppedWeapons: room.droppedWeapons || [],
         activeGrenades: room.grenades || []
       });

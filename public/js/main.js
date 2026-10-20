@@ -97,6 +97,10 @@ const hudStreak = document.getElementById('hud-streak');
 const hudStance = document.getElementById('hud-stance');
 const hudSpeed = document.getElementById('hud-speed');
 const hudHpValue = document.getElementById('hud-hp-value');
+const hudArmorRow = document.getElementById('hud-armor-row');
+const hudArmorValue = document.getElementById('hud-armor-value');
+const hudArmorBar = document.getElementById('hud-armor-bar');
+const hudActiveBuffs = document.getElementById('hud-active-buffs');
 const hudHpBar = document.getElementById('hud-hp-bar');
 const reloadIndicator = document.getElementById('reload-indicator');
 const reloadText = document.getElementById('reload-text');
@@ -452,6 +456,9 @@ const game = new Game3D(canvasContainer, {
   },
   onSelfState: (state) => {
     if (!game.inMatch || !state) return;
+    if (typeof state.armor === 'number') updateArmorHud(state.armor);
+    updateActiveBuffsHud();
+    if (!game.inMatch || !state) return;
     if (typeof state.hp === 'number') {
       updateHpHud(state.hp);
     }
@@ -558,6 +565,7 @@ const game = new Game3D(canvasContainer, {
     }
   },
   onMovementHudUpdate: (stance, speed) => {
+    updateActiveBuffsHud();
     const speedStr = speed.toFixed(1);
     if (hudSpeed && hudCache.speed !== speedStr) {
       hudCache.speed = speedStr;
@@ -578,6 +586,10 @@ const game = new Game3D(canvasContainer, {
       hudStance.classList.toggle('slide', stance === 'SLIDE');
       hudStance.classList.toggle('sprint', stance === 'SPRINT');
     }
+  },
+  onJumpPad: () => {
+    sfx.playJumpPad?.();
+    showCenterBanner('🚀 ĐỆM NHẢY PHẢN LỰC');
   },
   onJump: () => {
     sfx.playJump();
@@ -980,6 +992,49 @@ async function copyInviteLinkToClipboard() {
 }
 
 // Helper: Update HUD Health (diff-cached to avoid redundant style recalculations)
+function updateArmorHud(armor = 0) {
+  const maxArmor = MATCH_CONFIG.MAX_ARMOR || 50;
+  const cleanArmor = Math.max(0, Math.min(maxArmor, Math.round(Number(armor) || 0)));
+  if (game) game.armor = cleanArmor;
+  if (hudCache.armor === cleanArmor) return;
+  hudCache.armor = cleanArmor;
+  if (hudArmorRow) {
+    hudArmorRow.classList.toggle('hidden', cleanArmor <= 0);
+  }
+  if (hudArmorValue) {
+    hudArmorValue.textContent = String(cleanArmor);
+  }
+  if (hudArmorBar) {
+    hudArmorBar.style.width = `${Math.round((cleanArmor / maxArmor) * 100)}%`;
+  }
+}
+
+function updateActiveBuffsHud() {
+  if (!hudActiveBuffs || !game) return;
+  const now = performance.now();
+  const speedRemSec = game.speedBoostUntil > now ? Math.max(0, (game.speedBoostUntil - now) / 1000) : 0;
+  const dmgRemSec = game.damageBoostUntil > now ? Math.max(0, (game.damageBoostUntil - now) / 1000) : 0;
+  if (speedRemSec <= 0 && dmgRemSec <= 0) {
+    if (hudCache.buffSig !== '') {
+      hudCache.buffSig = '';
+      hudActiveBuffs.classList.add('hidden');
+      hudActiveBuffs.innerHTML = '';
+    }
+    return;
+  }
+  const sig = `${speedRemSec.toFixed(1)}|${dmgRemSec.toFixed(1)}`;
+  if (hudCache.buffSig === sig) return;
+  hudCache.buffSig = sig;
+  hudActiveBuffs.classList.remove('hidden');
+  let html = '';
+  if (speedRemSec > 0) {
+    html += `<div class="buff-badge buff-speed"><span>⚡ TỐC ĐỘ X1.3</span><strong>${speedRemSec.toFixed(1)}s</strong></div>`;
+  }
+  if (dmgRemSec > 0) {
+    html += `<div class="buff-badge buff-damage"><span>🔥 SÁT THƯƠNG X1.35</span><strong>${dmgRemSec.toFixed(1)}s</strong></div>`;
+  }
+  hudActiveBuffs.innerHTML = html;
+}
 function updateHpHud(hp) {
   const cleanHp = Math.max(0, Math.min(100, Math.round(hp)));
   if (hudCache.hp === cleanHp) return;
@@ -1862,7 +1917,7 @@ function addKillFeedItem({ killerId, killerName, victimId, victimName, weapon, w
 
   const weaponSpan = document.createElement('span');
   weaponSpan.className = 'kill-weapon-tag';
-  const weaponLabel = weaponName || (weapon === 'grenade' ? '💣 FRAG GRENADE' : weapon);
+  const weaponLabel = weaponName || (weapon === 'grenade' ? '💣 FRAG GRENADE' : weapon === 'barrel' ? '🛢️ THÙNG NỔ' : weapon);
   weaponSpan.textContent = `[${ weaponLabel }]`;
 
   item.appendChild(killerSpan);
@@ -1993,6 +2048,7 @@ socket.on('roomJoined', (data) => {
   );
 
   game.syncPickups(data.pickups || []);
+  game.syncBarrels?.(data.barrels || []);
   game.syncDroppedWeapons(data.droppedWeapons || []);
   game.syncGrenades?.(data.activeGrenades || []);
   latestPlayers = data.players || [];
@@ -2084,6 +2140,7 @@ socket.on('mapChanged', (data) => {
   game.loadMap(newMapId);
   updateMapHud(newMapId);
   game.syncPickups(data.pickups || []);
+  game.syncBarrels?.(data.barrels || []);
   game.syncDroppedWeapons(data.droppedWeapons || []);
   game.syncGrenades?.(data.activeGrenades || []);
   latestPlayers = data.players || [];
@@ -2200,6 +2257,9 @@ socket.on('stateUpdate', (snapshot) => {
   latestPlayers = snapshot.players || [];
   // `snapshot.t` = server timestamp (ms) of this tick: remote players are drawn by snapshot interpolation
   game.syncPlayersState(latestPlayers, snapshot.t);
+  if (Array.isArray(snapshot.barrels)) {
+    game.syncBarrels?.(snapshot.barrels);
+  }
   if (Array.isArray(snapshot.pickups)) {
     game.syncPickups(snapshot.pickups);
   }
@@ -2240,6 +2300,7 @@ socket.on('stateUpdate', (snapshot) => {
           updateGrenadeHud(snapGrenades);
         }
       }
+      updateArmorHud(p.armor || 0);
       updateHpHud(p.hp);
     }
   }
@@ -2307,6 +2368,7 @@ socket.on('damageDealt', (data) => {
 
   // Someone hit us -> Flash damage overlay, camera flinch, directional arc & update HP
   if (data.targetId === game.localId) {
+    if (typeof data.armor === 'number') updateArmorHud(data.armor);
     updateHpHud(data.hp);
     game.applyDamageFlinch(data.damage);
     damageOverlay.style.opacity = '0.88';
@@ -2522,9 +2584,72 @@ socket.on('pickupState', (data) => {
   }
 
   if (data.pickerId === game.localId && !data.active) {
+    const pType = data.type || 'health';
+    if (pType === 'armor') {
+      sfx.playPowerupPickup?.('armor');
+      updateArmorHud(data.newArmor ?? 50);
+      showCenterBanner('🛡️ +50 GIÁP KEVLAR');
+      return;
+    }
+    if (pType === 'speed') {
+      sfx.playPowerupPickup?.('speed');
+      game.speedBoostUntil = performance.now() + (data.speedBoostMs || 10000);
+      updateActiveBuffsHud();
+      showCenterBanner('⚡ TĂNG TỐC X1.3 (10S)');
+      return;
+    }
+    if (pType === 'damage') {
+      sfx.playPowerupPickup?.('damage');
+      game.damageBoostUntil = performance.now() + (data.damageBoostMs || 10000);
+      updateActiveBuffsHud();
+      showCenterBanner('🔥 QUÁ TẢI SÁT THƯƠNG X1.35 (10S)');
+      return;
+    }
     sfx.playPickup();
     updateHpHud(data.newHp);
     showCenterBanner('💚 +50 HP');
+  }
+});
+
+socket.on('barrelState', (data) => {
+  if (!game.inMatch || !data) return;
+  game.updateBarrelSingle?.(data);
+});
+
+socket.on('barrelExploded', (data) => {
+  if (!game.inMatch || !data) return;
+  const bx = data.x ?? 0;
+  const by = data.y ?? 0;
+  const bz = data.z ?? 0;
+  const listenerState = game.getAudioListenerState
+    ? game.getAudioListenerState()
+    : { x: game.position.x, y: game.position.y, z: game.position.z, yaw: game.yaw };
+  const sourcePos = { x: bx, y: by, z: bz };
+  if (typeof sfx.playGrenadeExplosion === 'function') {
+    sfx.playGrenadeExplosion(listenerState, sourcePos);
+  }
+  game.onBarrelExploded?.(data);
+});
+
+socket.on('streakEvent', (data) => {
+  if (!game.inMatch || !data) return;
+  const isMe = data.playerId === game.localId;
+  if (data.type === 'shutdown') {
+    if (isMe && typeof data.armor === 'number') {
+      updateArmorHud(data.armor);
+    }
+    showToast(`🛑 SHUTDOWN! ${data.killerName} đã chấm dứt chuỗi ${data.endedStreak} mạng của ${data.victimName}!`);
+    if (isMe) {
+      showCenterBanner(`🛑 CHẤM DỨT CHUỖI (${data.rewardText || '+25 GIÁP'})`);
+    }
+    return;
+  }
+  if (isMe) {
+    if (typeof data.armor === 'number') updateArmorHud(data.armor);
+    if (typeof data.grenades === 'number') updateGrenadeHud(data.grenades);
+    showCenterBanner(`🔥 ${data.label} (${data.streak} MẠNG) • ${data.rewardText || ''}`);
+  } else {
+    showToast(`🔥 ${data.playerName}: ${data.label} (${data.streak} mạng liên tiếp)!`);
   }
 });
 
@@ -2656,6 +2781,7 @@ socket.on('matchStarted', (data) => {
     updateMapHud(data.mapId);
   }
   game.syncPickups(data.pickups || []);
+  game.syncBarrels?.(data.barrels || []);
   game.syncDroppedWeapons(data.droppedWeapons || []);
   game.syncGrenades?.(data.activeGrenades || []);
   latestPlayers = data.players || [];

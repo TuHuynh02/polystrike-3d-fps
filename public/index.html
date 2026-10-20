@@ -456,6 +456,7 @@
         <span>🛡️ BẤT TỬ</span>
         <strong id="spawn-shield-timer">1.5s</strong>
       </div>
+      <div id="hud-active-buffs" class="hud-active-buffs hidden"></div>
       <div class="player-stats-row">
         <div class="mini-stat">K <strong id="hud-kills">0</strong></div>
         <div class="mini-stat">D <strong id="hud-deaths">0</strong></div>
@@ -466,6 +467,15 @@
         <span class="speed-badge"><strong id="hud-speed">0.0</strong> M/S</span>
       </div>
       <div class="hp-card" id="hud-hp-card">
+        <div id="hud-armor-row" class="armor-row hidden">
+          <div class="armor-header">
+            <span class="armor-label">🛡️ GIÁP KEVLAR</span>
+            <span class="armor-value" id="hud-armor-value">0</span>
+          </div>
+          <div class="armor-bar-track">
+            <div class="armor-bar-fill" id="hud-armor-bar" style="width: 0%;"></div>
+          </div>
+        </div>
         <div class="hp-header">
           <span class="hp-label">HP</span>
           <span id="hud-hp-adrenaline-tag" class="hp-adrenaline-tag hidden">+25 HP</span>

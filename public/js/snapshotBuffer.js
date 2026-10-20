@@ -212,6 +212,9 @@ function copyEntity(raw, t) {
     vz: num(raw.vz),
     alive: raw.alive === undefined ? true : Boolean(raw.alive),
     weapon: raw.weapon === undefined ? null : raw.weapon,
+    armor: num(raw.armor),
+    speedBoostMs: num(raw.speedBoostMs),
+    damageBoostMs: num(raw.damageBoostMs),
     // true => do not interpolate between the previous snapshot and this one (first / teleport / alive flip)
     discontinuity: false,
     smoothed: false
@@ -230,6 +233,9 @@ function fillOut(out, s, vx, vy, vz) {
   out.sliding = Boolean(s.sliding);
   out.alive = s.alive;
   out.weapon = s.weapon;
+  out.armor = s.armor || 0;
+  out.speedBoostMs = s.speedBoostMs || 0;
+  out.damageBoostMs = s.damageBoostMs || 0;
   out.vx = vx;
   out.vy = vy;
   out.vz = vz;

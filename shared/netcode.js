@@ -6,6 +6,7 @@
 // client-side replay all feed identical `nowMs` values to stepPlayerMovement and therefore compute identical results.
 // A command carries input only (never a position): the server integrates it, the owner gets a `moveAck` back.
 
+import { MATCH_CONFIG } from './config.js';
 import { WEAPONS } from './weapons.js';
 import { FIXED_DT, createMovementState, stepPlayerMovement } from './movement.js';
 
@@ -25,9 +26,10 @@ export const BTN = Object.freeze({
   JUMP: 8,
   AIM: 16,
   ADS_HELD: 32,
-  FIRE: 64 // the weapon fires on this step; the command then carries the shot sequence `ss`
+  FIRE: 64, // the weapon fires on this step; the command then carries the shot sequence `ss`
+  SPEED_BOOST: 128 // active speed boost power-up multiplier (validated server-side)
 });
-export const BTN_MASK = 127;
+export const BTN_MASK = 255;
 
 // ---- Shots inside the command stream (server-resolved, see shared/spread.js + RoomManager.processFireCommand) ----
 /** A shot is accepted when the SIM time since the previous accepted shot is at least this fraction of the fire interval. */
@@ -91,6 +93,7 @@ export function buildInputCommand(seq, f) {
   if (f.wantsJump) btn |= BTN.JUMP;
   if (f.isAiming) btn |= BTN.AIM;
   if (f.isAdsHeld) btn |= BTN.ADS_HELD;
+  if (f.speedBoost) btn |= BTN.SPEED_BOOST;
   const fire = Boolean(f.fire) && Number.isSafeInteger(f.shotSeq) && f.shotSeq > 0 && f.shotSeq <= MAX_SHOT_SEQ;
   if (fire) btn |= BTN.FIRE;
   const cmd = {
@@ -151,7 +154,10 @@ export function commandToMovementInput(cmd, out = {}) {
   out.inputEnabled = true; // commands are only produced while the client accepts input (jump is gated by the client)
   out.isAiming = (btn & BTN.AIM) !== 0;
   out.isAdsHeld = (btn & BTN.ADS_HELD) !== 0;
-  out.weaponMoveMult = WEAPONS[cmd.w]?.moveSpeedMult || 1;
+  const baseMoveMult = WEAPONS[cmd.w]?.moveSpeedMult || 1;
+  out.weaponMoveMult = (btn & BTN.SPEED_BOOST) !== 0
+    ? baseMoveMult * (MATCH_CONFIG.SPEED_BOOST_MULT || 1.3)
+    : baseMoveMult;
   return out;
 }
 

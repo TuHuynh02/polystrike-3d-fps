@@ -251,6 +251,7 @@ const THREE = await import('three');
 const constants = await import('../shared/constants.js');
 const lagCompMod = await import('../shared/lagCompensation.js');
 const roomManagerMod = await import('../server/roomManager.js');
+const { stepPlayerMovement } = await import('../shared/movement.js');
 
 const arenaBuilderMod = await import('../public/js/arenaBuilder.js');
 const humanoidRigMod = await import('../public/js/humanoidRig.js');
@@ -2454,6 +2455,110 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
       console.error = origError;
     }
     assert.equal(pubJoin.room.stateSeq, prevSeq + 1, 'Healthy room must still advance and broadcast stateUpdate');
+  });
+
+  it('validates Tactical Arena Gameplay Expansion: Power-ups (Armor, Speed, Damage), Jump Pads, Explosive Barrels, and Killstreaks', () => {
+    const ioEvents = [];
+    const mockIo = {
+      to: (code) => ({
+        emit: (event, data) => ioEvents.push({ code, event, data })
+      })
+    };
+    const rm = new RoomManager(mockIo);
+    rm.stop();
+
+    const s1 = { id: 'tac_1', emit: () => {} };
+    const s2 = { id: 'tac_2', emit: () => {} };
+    const { room, player: p1 } = rm.addHumanPlayer(s1, { name: 'Alpha', mode: 'private', mapId: 'cyber_citadel' });
+    const { player: p2 } = rm.addHumanPlayer(s2, { name: 'Bravo', mode: 'private', roomCode: room.code });
+    p1.invulnerableUntil = 0;
+    p2.invulnerableUntil = 0;
+
+    // 1. Power-ups: Armor (+50 Kevlar), Speed Boost (10s), Damage Overcharge (10s)
+    const armorPack = room.pickups.find((pk) => pk.type === 'armor');
+    const speedPack = room.pickups.find((pk) => pk.type === 'speed');
+    const damagePack = room.pickups.find((pk) => pk.type === 'damage');
+    assert.ok(armorPack && speedPack && damagePack, 'Map must spawn armor, speed, and damage power-ups');
+
+    const now = Date.now();
+    p1.x = armorPack.x;
+    p1.y = armorPack.y;
+    p1.z = armorPack.z;
+    rm.updateHealthPacks(room, now);
+    assert.equal(p1.armor, 50, 'Armor pickup must grant 50 Kevlar armor');
+    assert.equal(armorPack.active, false, 'Picked armor pack must enter cooldown');
+
+    // Verify Kevlar armor absorbs damage before HP
+    rm.applyDamageWithArmor(p1, 35);
+    assert.equal(p1.armor, 15, 'Armor must absorb initial 35 damage');
+    assert.equal(p1.hp, 100, 'HP must remain 100 while armor absorbs damage');
+    rm.applyDamageWithArmor(p1, 30);
+    assert.equal(p1.armor, 0, 'Remaining 15 armor depleted');
+    assert.equal(p1.hp, 85, 'Overflow 15 damage applied to HP');
+
+    // Speed & Damage pickups
+    p1.x = speedPack.x;
+    p1.y = speedPack.y;
+    p1.z = speedPack.z;
+    rm.updateHealthPacks(room, now);
+    assert.ok(p1.speedBoostUntil > now, 'Speed pickup must activate 10s speedBoostUntil');
+
+    p1.x = damagePack.x;
+    p1.y = damagePack.y;
+    p1.z = damagePack.z;
+    rm.updateHealthPacks(room, now);
+    assert.ok(p1.damageBoostUntil > now, 'Damage pickup must activate 10s damageBoostUntil');
+
+    // 2. Jump Pad deterministic launch
+    const mapCfg = getMapConfig('cyber_citadel');
+    assert.ok(Array.isArray(mapCfg.jumpPads) && mapCfg.jumpPads.length >= 4, 'Map must define jumpPads');
+    const jp = mapCfg.jumpPads[0];
+    p1.moveState.x = jp.x;
+    p1.moveState.y = jp.y || 0;
+    p1.moveState.z = jp.z;
+    p1.moveState.onGround = true;
+    const stepRes = stepPlayerMovement(
+      p1.moveState,
+      { moveForward: 1, moveRight: 0, yaw: 0, wantsJump: false, wantsCrouch: false, wantsProne: false, wantsSprint: false },
+      0.016,
+      mapCfg,
+      100
+    );
+    assert.ok(stepRes.jumpPadTriggered, 'Stepping onto Jump Pad must trigger launch');
+    assert.ok(p1.moveState.vy >= 14.0, 'Jump Pad must launch player upward with vy >= 14.0');
+
+    // 3. Explosive Barrels: shooting / detonating a barrel deals AoE damage and respawns after 25s
+    assert.ok(Array.isArray(room.barrels) && room.barrels.length >= 4, 'Room must initialize explosive barrels');
+    const barrel = room.barrels[0];
+    p2.x = barrel.x + 1.0;
+    p2.y = barrel.y || 0;
+    p2.z = barrel.z;
+    p2.hp = 100;
+    p2.armor = 0;
+    rm.damageBarrel(room, barrel, 70, p1, now);
+    assert.equal(barrel.active, false, 'Barrel must detonate when HP reaches 0');
+    assert.ok(p2.hp < 100, 'Nearby player must take AoE blast damage from barrel explosion');
+    assert.ok(ioEvents.some((e) => e.event === 'barrelExploded' && e.data.id === barrel.id), 'barrelExploded event must be emitted');
+
+    rm.updateBarrels(room, now + 26000);
+    assert.equal(barrel.active, true, 'Barrel must respawn after 25s cooldown');
+
+    // 4. Killstreaks (3: KILLING SPREE -> +25 Armor) & Shutdown bonus
+    p2.alive = true;
+    p2.hp = 10;
+    p1.streak = 2;
+    p1.armor = 0;
+    rm.handlePlayerKilled(room, p1, p2, WEAPONS.rifle, true, 40);
+    assert.equal(p1.streak, 3);
+    assert.equal(p1.armor, 25, '3-kill streak (KILLING SPREE) must grant +25 Armor');
+    assert.ok(ioEvents.some((e) => e.event === 'streakEvent' && e.data.label === 'KILLING SPREE'));
+
+    // Shutdown: p2 kills p1 (who has a 3-kill streak)
+    p2.alive = true;
+    p2.armor = 0;
+    rm.handlePlayerKilled(room, p2, p1, WEAPONS.rifle, false, 35);
+    assert.equal(p2.armor, 25, 'Shutting down an enemy on a >=3 streak must grant +25 Armor bonus');
+    assert.ok(ioEvents.some((e) => e.event === 'streakEvent' && e.data.type === 'shutdown'));
   });
 });
 

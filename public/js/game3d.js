@@ -178,6 +178,8 @@ export class Game3D {
     this._remoteSample = {};
     this._remoteScratch = [];
     this.pickupMeshes = new Map();  // pickupId -> { group, crossGroup, ringMesh, padMat }
+    this.jumpPadMeshes = [];        // Jump pad groups & animated rings
+    this.barrelMeshes = new Map();  // barrelId -> { group, bodyGroup, hitboxMesh, padMat, active }
     this.droppedWeaponMeshes = new Map(); // dropId -> { group, gunSpinGroup, ringMat }
     this.activeGrenadeMeshes = new Map(); // grenadeId -> active 3D projectile state
     this.nearbyDrop = null;
@@ -195,6 +197,9 @@ export class Game3D {
     this.gameMode = 'ffa';
     this.localTeam = null;
     this.alive = true;
+    this.armor = 0;
+    this.speedBoostUntil = 0;
+    this.damageBoostUntil = 0;
     this.grenades = 1;
     this.grenadeThrowUntil = 0;
     this.lastGrenadeThrowAt = -2000;
@@ -526,6 +531,8 @@ export class Game3D {
     this.propBatchers = [];
 
     this.clearPickups();
+    this.clearJumpPads();
+    this.clearBarrels();
     this.clearGrenades();
   }
 
@@ -580,6 +587,7 @@ export class Game3D {
 
     this.buildSkyAndAtmosphere(theme, this.arenaHalfSize);
     this.buildArena(mapCfg);
+    this.buildJumpPads(mapCfg.jumpPads || []);
     this.rebuildHitboxList();
     this.minimap?.setMap(mapCfg);
     this.renderer.shadowMap.needsUpdate = true;
@@ -699,6 +707,14 @@ export class Game3D {
     }
     for (const p of pickupsData) {
       let item = this.pickupMeshes.get(p.id);
+      const pType = p.type || 'health';
+      const pColors = pType === 'armor'
+        ? { main: 0x38bdf8, emissive: 0x0284c7 }
+        : pType === 'speed'
+          ? { main: 0xf59e0b, emissive: 0xd97706 }
+          : pType === 'damage'
+            ? { main: 0xec4899, emissive: 0xdb2777 }
+            : { main: 0x22c55e, emissive: 0x16a34a };
       if (!item) {
         const group = new THREE.Group();
         group.position.set(p.x, p.y, p.z);
@@ -716,7 +732,7 @@ export class Game3D {
         const padGeo = new THREE.CylinderGeometry(1.05, 1.18, 0.18, 16);
         const padMat = new THREE.MeshStandardMaterial({
           color: 0x0f172a,
-          emissive: 0x10b981,
+          emissive: pColors.emissive,
           emissiveIntensity: 0.55,
           metalness: 0.6,
           roughness: 0.25
@@ -737,7 +753,7 @@ export class Game3D {
 
         const holoRingGeo = new THREE.RingGeometry(0.78, 1.08, 24);
         const holoRingMat = new THREE.MeshBasicMaterial({
-          color: 0x22c55e,
+          color: pColors.main,
           side: THREE.DoubleSide,
           transparent: true,
           opacity: 0.72,
@@ -753,8 +769,8 @@ export class Game3D {
 
         const crossGroup = new THREE.Group();
         const barMat = new THREE.MeshStandardMaterial({
-          color: 0x22c55e,
-          emissive: 0x16a34a,
+          color: pColors.main,
+          emissive: pColors.emissive,
           emissiveIntensity: 0.8,
           roughness: 0.2,
           metalness: 0.3
@@ -777,7 +793,7 @@ export class Game3D {
         group.add(crossGroup);
 
         this.scene.add(group);
-        item = { group, crossGroup, padMat, holoRing, x: p.x, y: p.y, z: p.z, active: Boolean(p.active) };
+        item = { group, crossGroup, padMat, holoRing, type: pType, x: p.x, y: p.y, z: p.z, active: Boolean(p.active) };
         this.pickupMeshes.set(p.id, item);
       } else {
         item.x = p.x;
@@ -801,6 +817,186 @@ export class Game3D {
       item.holoRing.visible = Boolean(active);
       item.padMat.emissiveIntensity = active ? 0.5 : 0.05;
     }
+  }
+
+  clearJumpPads() {
+    for (const jp of this.jumpPadMeshes) {
+      this.scene.remove(jp.group);
+      jp.group.traverse((obj) => {
+        if (obj.isMesh) {
+          obj.geometry?.dispose();
+          obj.material?.dispose();
+        }
+      });
+    }
+    this.jumpPadMeshes.length = 0;
+  }
+
+  buildJumpPads(jumpPads = []) {
+    this.clearJumpPads();
+    for (const jp of jumpPads) {
+      const group = new THREE.Group();
+      group.position.set(jp.x || 0, jp.y || 0, jp.z || 0);
+
+      const discGeo = new THREE.CylinderGeometry(1.18, 1.32, 0.16, 20);
+      const discMat = new THREE.MeshStandardMaterial({
+        color: 0x083344,
+        emissive: 0x06b6d4,
+        emissiveIntensity: 0.85,
+        metalness: 0.65,
+        roughness: 0.2
+      });
+      const discMesh = new THREE.Mesh(discGeo, discMat);
+      discMesh.position.y = 0.08;
+      group.add(discMesh);
+
+      const ringGeo = new THREE.RingGeometry(0.68, 0.96, 24);
+      const ringMat1 = new THREE.MeshBasicMaterial({
+        color: 0x38bdf8,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.8,
+        depthWrite: false
+      });
+      const ring1 = new THREE.Mesh(ringGeo, ringMat1);
+      ring1.rotation.x = -Math.PI / 2;
+      ring1.position.y = 0.28;
+      group.add(ring1);
+
+      this.scene.add(group);
+      this.jumpPadMeshes.push({
+        id: jp.id,
+        group,
+        ring1,
+        ring2: null,
+        ringMat1,
+        ringMat2: null,
+        x: jp.x || 0,
+        y: jp.y || 0,
+        z: jp.z || 0
+      });
+    }
+  }
+
+  clearBarrels() {
+    for (const item of this.barrelMeshes.values()) {
+      this.scene.remove(item.group);
+      item.group.traverse((obj) => {
+        if (obj.isMesh) {
+          obj.geometry?.dispose();
+          obj.material?.dispose();
+        }
+      });
+    }
+    this.barrelMeshes.clear();
+  }
+
+  syncBarrels(barrelsData = []) {
+    for (const b of barrelsData) {
+      let item = this.barrelMeshes.get(b.id);
+      if (!item) {
+        const group = new THREE.Group();
+        group.position.set(b.x || 0, b.y || 0, b.z || 0);
+
+        const padGeo = new THREE.CylinderGeometry(0.68, 0.76, 0.08, 16);
+        const padMat = new THREE.MeshStandardMaterial({
+          color: 0x1e293b,
+          emissive: 0xef4444,
+          emissiveIntensity: 0.55,
+          roughness: 0.4,
+          metalness: 0.6
+        });
+        const padMesh = new THREE.Mesh(padGeo, padMat);
+        padMesh.position.y = 0.04;
+        group.add(padMesh);
+
+        const bodyGroup = new THREE.Group();
+        const barrelGeo = new THREE.CylinderGeometry(0.55, 0.55, 1.35, 16);
+        barrelGeo.computeBoundingSphere();
+        const barrelMat = new THREE.MeshStandardMaterial({
+          color: 0xdc2626,
+          emissive: 0x7f1d1d,
+          emissiveIntensity: 0.35,
+          roughness: 0.38,
+          metalness: 0.55
+        });
+        const hitboxMesh = new THREE.Mesh(barrelGeo, barrelMat);
+        hitboxMesh.position.y = 0.675;
+        hitboxMesh.userData.barrelId = b.id;
+        bodyGroup.add(hitboxMesh);
+
+        const stripeGeo = new THREE.CylinderGeometry(0.565, 0.565, 0.14, 16);
+        const stripeMat = new THREE.MeshStandardMaterial({
+          color: 0xfacc15,
+          emissive: 0xd97706,
+          emissiveIntensity: 0.45,
+          roughness: 0.3,
+          metalness: 0.4
+        });
+        const stripeLow = new THREE.Mesh(stripeGeo, stripeMat);
+        stripeLow.position.y = 0.42;
+        const stripeHigh = new THREE.Mesh(stripeGeo.clone(), stripeMat.clone());
+        stripeHigh.position.y = 0.93;
+        bodyGroup.add(stripeLow, stripeHigh);
+
+        group.add(bodyGroup);
+        this.scene.add(group);
+
+        item = {
+          id: b.id,
+          group,
+          bodyGroup,
+          hitboxMesh,
+          barrelMat,
+          padMat,
+          x: b.x || 0,
+          y: b.y || 0,
+          z: b.z || 0,
+          hp: b.hp ?? (MATCH_CONFIG.BARREL_MAX_HP || 60),
+          active: Boolean(b.active !== false)
+        };
+        this.barrelMeshes.set(b.id, item);
+      } else {
+        item.x = b.x || 0;
+        item.y = b.y || 0;
+        item.z = b.z || 0;
+        item.group.position.set(item.x, item.y, item.z);
+        if (typeof b.hp === 'number') item.hp = b.hp;
+      }
+
+      const isActive = Boolean(b.active !== false);
+      item.active = isActive;
+      item.bodyGroup.visible = isActive;
+      item.padMat.emissiveIntensity = isActive ? 0.55 : 0.06;
+    }
+    this.rebuildHitboxList();
+  }
+
+  updateBarrelSingle(data) {
+    if (!data || !data.id) return;
+    const item = this.barrelMeshes.get(data.id);
+    if (!item) return;
+    if (typeof data.hp === 'number') item.hp = data.hp;
+    if (typeof data.active === 'boolean') {
+      item.active = data.active;
+      item.bodyGroup.visible = data.active;
+      item.padMat.emissiveIntensity = data.active ? 0.55 : 0.06;
+      this.rebuildHitboxList();
+    }
+  }
+
+  onBarrelExploded(data) {
+    if (!data) return;
+    if (data.id) {
+      this.updateBarrelSingle({ id: data.id, hp: 0, active: false });
+    }
+    this.spawnGrenadeExplosion({
+      id: data.id ? `barrel_${data.id}` : undefined,
+      x: data.x ?? 0,
+      y: (data.y ?? 0) + 0.65,
+      z: data.z ?? 0,
+      radius: data.radius || (MATCH_CONFIG.BARREL_EXPLOSION_RADIUS || 6.5)
+    });
   }
 
   clearDroppedWeapons() {
@@ -1938,6 +2134,14 @@ export class Game3D {
     for (let i = 0; i < this.hitboxMeshes.length; i++) {
       this.rayTargets.push(this.hitboxMeshes[i]);
     }
+    if (this.barrelMeshes) {
+      for (const b of this.barrelMeshes.values()) {
+        if (b.active && b.hitboxMesh) {
+          b.group.updateMatrixWorld(true);
+          this.rayTargets.push(b.hitboxMesh);
+        }
+      }
+    }
   }
 
   disposeRemotePlayer(rp) {
@@ -2034,6 +2238,9 @@ export class Game3D {
       if (p.id === this.localId) {
         this.alive = Boolean(p.alive);
         if (!this.alive) this.cancelGrenadeCooking();
+        if (typeof p.armor === 'number') this.armor = Math.max(0, Math.min(MATCH_CONFIG.MAX_ARMOR || 50, Math.round(p.armor)));
+        if (typeof p.speedBoostMs === 'number') this.speedBoostUntil = p.speedBoostMs > 0 ? now + p.speedBoostMs : 0;
+        if (typeof p.damageBoostMs === 'number') this.damageBoostUntil = p.damageBoostMs > 0 ? now + p.damageBoostMs : 0;
         if (typeof p.grenades === 'number') {
           const isThrowInFlight = p.grenades > this.grenades && (now - this.lastGrenadeThrowAt) < 400;
           if (!isThrowInFlight) {
@@ -2163,6 +2370,9 @@ export class Game3D {
     this.pitch = 0;
     this.cameraRoll = 0;
     this.alive = true;
+    this.armor = 0;
+    this.speedBoostUntil = 0;
+    this.damageBoostUntil = 0;
     this.lastShotAt = -1000;
     this.reloadingUntil = 0;
     this.nextShellAt = 0;
@@ -3029,6 +3239,7 @@ export class Game3D {
     f.wantsJump = Boolean(this.keys.Space) && this.isPointerLocked; // jumps are neither queued nor consumed while input is disabled
     f.isAdsHeld = this.isRightMouseDown;
     f.weapon = this.currentWeapon;
+    f.speedBoost = Boolean(this.speedBoostUntil && now < this.speedBoostUntil);
 
     const mapCfg = this.getMovementMapCfg();
 
@@ -3109,7 +3320,8 @@ export class Game3D {
         this.callbacks.onAimChange?.(false, this.currentWeapon);
       }
       if (res.slideStarted) this.callbacks.onSlide?.();
-      if (res.jumped) this.callbacks.onJump?.();
+      if (res.jumpPadTriggered) this.callbacks.onJumpPad?.(res.jumpPadTriggered);
+      else if (res.jumped) this.callbacks.onJump?.();
       if (res.landed) {
         this.landingDipVel = -2.2 * res.impact;
         this.callbacks.onLand?.(res.impact);
@@ -3127,6 +3339,7 @@ export class Game3D {
     const mapCfg = this._movementMapCfg || (this._movementMapCfg = { obstacles: [], arenaHalfSize: MATCH_CONFIG.ARENA_HALF_SIZE });
     mapCfg.obstacles = this.currentObstacles || [];
     mapCfg.arenaHalfSize = this.arenaHalfSize || MATCH_CONFIG.ARENA_HALF_SIZE;
+    mapCfg.jumpPads = this.currentMapConfig?.jumpPads || [];
     return mapCfg;
   }
 
@@ -3316,6 +3529,15 @@ export class Game3D {
     if (typeof state.hp === 'number' && Number.isFinite(state.hp)) {
       this.hp = Math.max(0, Math.min(MATCH_CONFIG.MAX_HP || 100, Math.round(state.hp)));
     }
+    if (typeof state.armor === 'number' && Number.isFinite(state.armor)) {
+      this.armor = Math.max(0, Math.min(MATCH_CONFIG.MAX_ARMOR || 50, Math.round(state.armor)));
+    }
+    if (typeof state.speedBoostMs === 'number' && Number.isFinite(state.speedBoostMs)) {
+      this.speedBoostUntil = state.speedBoostMs > 0 ? now + state.speedBoostMs : 0;
+    }
+    if (typeof state.damageBoostMs === 'number' && Number.isFinite(state.damageBoostMs)) {
+      this.damageBoostUntil = state.damageBoostMs > 0 ? now + state.damageBoostMs : 0;
+    }
     if (typeof state.alive === 'boolean') {
       this.alive = state.alive;
       if (!this.alive) {
@@ -3413,6 +3635,9 @@ export class Game3D {
     );
     this.callbacks.onSelfState?.({
       hp: this.hp,
+      armor: this.armor,
+      speedBoostMs: this.speedBoostUntil > now ? Math.max(0, Math.round(this.speedBoostUntil - now)) : 0,
+      damageBoostMs: this.damageBoostUntil > now ? Math.max(0, Math.round(this.damageBoostUntil - now)) : 0,
       alive: this.alive,
       weapon: curWep,
       ammo: this.ammoByWeapon[curWep],
@@ -4090,6 +4315,21 @@ export class Game3D {
       if (item.crossGroup.visible) {
         item.crossGroup.rotation.y = now * 0.0024;
         item.crossGroup.position.y = 1.12 + Math.sin(now * 0.004) * 0.15;
+      }
+    }
+    for (let j = 0; j < this.jumpPadMeshes.length; j++) {
+      const jp = this.jumpPadMeshes[j];
+      const phase1 = ((now * 0.0015 + j * 0.25) % 1);
+      const phase2 = ((now * 0.0015 + j * 0.25 + 0.5) % 1);
+      if (jp.ring1) {
+        jp.ring1.position.y = 0.2 + phase1 * 0.85;
+        jp.ringMat1.opacity = (1 - phase1) * 0.85;
+        jp.ring1.scale.setScalar(0.85 + phase1 * 0.35);
+      }
+      if (jp.ring2) {
+        jp.ring2.position.y = 0.2 + phase2 * 0.85;
+        jp.ringMat2.opacity = (1 - phase2) * 0.85;
+        jp.ring2.scale.setScalar(0.85 + phase2 * 0.35);
       }
     }
 
