@@ -28,7 +28,7 @@ export const KEYBOARD_LOCK_CODES = [
   'Tab',
   'Escape'
 ];
-const PROTECTED_GAMEPLAY_KEY_CODES = new Set([
+export const PROTECTED_GAMEPLAY_KEY_CODES = new Set([
   'KeyW',
   'KeyA',
   'KeyS',

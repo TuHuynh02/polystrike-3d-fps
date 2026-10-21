@@ -232,7 +232,7 @@ export function initSocketEvents() {
     rejoin: () => {
       if (!appState.lastJoinPayload) return;
       appState.game.clearAllRemotePlayers();
-      appState.socket.emit('joinRoom', { ...lastJoinPayload, roomCode: appState.activeRoomCode || appState.lastJoinPayload.roomCode });
+      appState.socket.emit('joinRoom', { ...appState.lastJoinPayload, roomCode: appState.activeRoomCode || appState.lastJoinPayload.roomCode });
     },
     onReconnected: () => showToast('🔄 Đã kết nối lại — vào lại phòng')
   });
