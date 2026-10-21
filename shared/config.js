@@ -119,3 +119,16 @@ export const TEAMS = {
   }
 };
 
+export const VALID_OPERATOR_COLORS = [0xe5a024, 0x4b5320, 0x38bdf8, 0xef4444, 0x94a3b8];
+export const DEFAULT_OPERATOR_COLOR = 0xe5a024;
+
+/** Reason codes of `player.lastShotReject = { ss, reason }` (a fire command the server did not simulate). */
+export const SHOT_REJECT = Object.freeze({
+  SEQ: 'seq', // `ss` not strictly increasing, or an implausible jump
+  WEAPON: 'weapon', // command weapon is not the equipped / allowed one
+  RATE: 'rate', // fired faster than the weapon allows (measured in command sim time)
+  RELOAD: 'reload', // reloading
+  AMMO: 'ammo', // empty magazine
+  DEAD: 'dead', // shooter is dead
+  STATE: 'state' // match not running
+});

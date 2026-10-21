@@ -1,0 +1,83 @@
+:root {
+  --bg-dark: #0b0e12;
+  --bg-panel-solid: #12171e;
+  --bg-panel: rgba(18, 23, 30, 0.92);
+  --bg-panel-elevated: rgba(22, 28, 37, 0.95);
+  --card-bg: #12171e;
+  --card-border: rgba(148, 163, 184, 0.22);
+  --border-strong: rgba(229, 160, 36, 0.55);
+  --accent: #e5a024;
+  --accent-hover: #f5b335;
+  --accent-dim: rgba(229, 160, 36, 0.16);
+  --primary: #38bdf8;
+  --primary-hover: #0ea5e9;
+  --olive: #4b5320;
+  --olive-bright: #657c3a;
+  --success: #22c55e;
+  --danger: #ef4444;
+  --text-main: #f1f5f9;
+  --text-muted: #94a3b8;
+  --font-display: 'Chakra Petch', 'Rajdhani', sans-serif;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Consolas', monospace;
+  --chamfer-md: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
+  --chamfer-sm: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px));
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-dark);
+  color: var(--text-main);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+#canvas-container {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 1;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* ======================== TOAST NOTIFICATION ======================== */
+.toast {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  background: rgba(13, 19, 26, 0.96);
+  color: var(--text-main);
+  padding: 10px 22px;
+  border-radius: 2px;
+  border: 1px solid var(--accent);
+  border-left: 4px solid var(--accent);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 0.92rem;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.78);
+  clip-path: var(--chamfer-sm);
+  animation: fadeSlideDown 0.18s ease-out;
+}
+
+@keyframes fadeSlideDown {
+  from { opacity: 0; transform: translate(-50%, -10px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
