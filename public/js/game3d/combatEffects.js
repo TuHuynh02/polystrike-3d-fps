@@ -635,7 +635,9 @@ export class CombatEffectsMethods {
     const pendingShot = {
       weapon: this.currentWeapon,
       ammoConsumed: !isMelee,
-      autoReloaded: false
+      autoReloaded: false,
+      recoilDrainedPitch: 0,
+      recoilDrainedYaw: 0
     };
     this.pendingFire = pendingShot;
     this.callbacks.onLocalShot?.({ weapon: this.currentWeapon, isAiming: this.isAiming, remainingAmmo: isMelee ? Infinity : this.ammoByWeapon[this.currentWeapon], magSize: cfg.magSize || 1 });
@@ -657,30 +659,47 @@ export class CombatEffectsMethods {
     );
 
     this.recoilShotIndex = Math.min(30, this.recoilShotIndex + 1);
-    const runRecoilPenalty = (isMovingWhileShooting && !isLowPosture) ? 1.22 : 1.0;
+    const runRecoilPenalty = (isMovingWhileShooting && !isLowPosture) ? 1.28 : 1.0;
     const postureMult =
-      (this.isAiming ? 0.65 : 1.0) *
-      (this.prone ? 0.48 : (this.crouching && !this.isSliding) ? 0.70 : 1.0) *
+      (this.isAiming ? 0.82 : 1.0) *
+      (this.prone ? 0.55 : (this.crouching && !this.isSliding) ? 0.78 : 1.0) *
       runRecoilPenalty;
-    const chKick = (cfg.crosshairKick || 0.018) * postureMult;
-    this.crosshairRecoilKick = Math.min(0.11, this.crosshairRecoilKick + chKick);
+    const chKick = (cfg.crosshairKick || 0.020) * postureMult;
+    this.crosshairRecoilKick = Math.min(0.14, this.crosshairRecoilKick + chKick);
 
     const patternArr = cfg.recoilPattern;
-    const patIdx = Math.max(0, Math.min((patternArr?.length || 1) - 1, Math.floor(this.recoilShotIndex) - 1));
-    const patDir = patternArr ? patternArr[patIdx] : ((Math.floor(this.recoilShotIndex) % 2 === 0) ? 1 : -1);
-    const climbFactor = 1 + Math.min(8, Math.max(0, this.recoilShotIndex - 1)) * (cfg.recoilClimbMult || 0.08);
-    const maxRecPitch = cfg.recoilMaxPitch || 0.095;
-    const rawKickPitch = (cfg.recoilPitch || 0.011) * climbFactor * postureMult;
+    const shotZeroIdx = Math.max(0, Math.floor(this.recoilShotIndex) - 1);
+    let patIdx = shotZeroIdx;
+    if (patternArr && patternArr.length > 0 && shotZeroIdx >= patternArr.length) {
+      const loopStart = Math.floor(patternArr.length / 2);
+      const loopLen = Math.max(1, patternArr.length - loopStart);
+      patIdx = loopStart + ((shotZeroIdx - loopStart) % loopLen);
+    }
+    const patDir = (patternArr && patternArr.length > 0)
+      ? patternArr[patIdx]
+      : ((shotZeroIdx % 2 === 0) ? 1 : -1);
+
+    // Valorant-style 3-stage recoil curve:
+    // 1) Crisp initial vertical kick with tight horizontal alignment for 1-2 tap bursts
+    // 2) Steep progressive vertical climb across shots 3-9
+    // 3) Sustained spray ceiling with amplified left-right horizontal sway oscillation
+    const climbFactor = 1 + Math.min(9, shotZeroIdx) * (cfg.recoilClimbMult || 0.15);
+    const maxRecPitch = cfg.recoilMaxPitch || 0.16;
+    const rawKickPitch = (cfg.recoilPitch || 0.014) * climbFactor * postureMult;
     const availPitch = Math.max(0, maxRecPitch - (this.accumulatedRecoilPitch + (this.pendingRecoilPitch || 0)));
     const kickPitch = Math.min(availPitch, rawKickPitch);
-    const kickYaw = (cfg.recoilYaw || 0.004) * patDir * postureMult;
+
+    const yawSprayMult = shotZeroIdx < 2
+      ? 0.78
+      : 1 + Math.min(7, shotZeroIdx - 1) * 0.15 + (availPitch < rawKickPitch * 0.5 ? 0.22 : 0);
+    const kickYaw = (cfg.recoilYaw || 0.005) * patDir * yawSprayMult * postureMult;
     this.pendingRecoilPitch = (this.pendingRecoilPitch || 0) + kickPitch;
     this.pendingRecoilYaw = (this.pendingRecoilYaw || 0) + kickYaw;
-    this.punchPitch = Math.min(0.018, (this.punchPitch || 0) + kickPitch * 0.42);
-    this.punchRoll = patDir * Math.min(0.008, Math.abs(kickYaw) * 0.65);
+    this.punchPitch = Math.min(0.026, (this.punchPitch || 0) + (kickPitch > 0 ? kickPitch : rawKickPitch * 0.35) * 0.52);
+    this.punchRoll = Math.sign(patDir || 1) * Math.min(0.012, Math.abs(kickYaw) * 0.85);
 
     // 3D weapon viewmodel kickback & reciprocating bolt/pump animation
-    this.recoilOffset = Math.min(0.16, this.recoilOffset + (cfg.visualKick || 0.055));
+    this.recoilOffset = Math.min(0.19, this.recoilOffset + (cfg.visualKick || 0.062));
     this.boltKickOffset = 1.0;
     if (this.currentWeapon === 'shotgun' || this.currentWeapon === 'sniper') {
       this.pumpCycleDuration = cfg.pumpActionMs || cfg.boltActionMs || 420;

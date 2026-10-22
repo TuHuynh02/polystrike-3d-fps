@@ -56,15 +56,18 @@ export function recordPlayerSnapshot(player, timestamp = Date.now()) {
     return last;
   }
 
-  // Prune snapshots older than LAG_COMP_HISTORY_MS (LAG_COMP_HISTORY_MS), keeping at most one anchor snapshot just before cutoff if needed
+  // Prune snapshots older than LAG_COMP_HISTORY_MS, recycling the last shifted entry to avoid per-tick allocation
   const cutoff = ts - LAG_COMP_HISTORY_MS;
+  let recycled = null;
   while (history.length > 0 && history[0].timestamp < cutoff) {
-    history.shift();
+    recycled = history.shift();
   }
 
-  let snap;
-  if (history.length >= LAG_COMP_MAX_SNAPSHOTS) {
+  let snap = recycled;
+  if (!snap && history.length >= LAG_COMP_MAX_SNAPSHOTS) {
     snap = history.shift();
+  }
+  if (snap) {
     snap.timestamp = ts;
     snap.x = x;
     snap.y = y;

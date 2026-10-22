@@ -19,37 +19,138 @@ export function getCachedGeo(key, factoryFn) {
 const _identMat4 = new THREE.Matrix4();
 
 export const ENEMY_OUTLINE_MAT = new THREE.MeshBasicMaterial({
-  color: 0xff2222,
+  color: 0xd41f30,
   side: THREE.BackSide,
-  depthWrite: false
+  depthTest: true,
+  depthWrite: true,
+  transparent: false,
+  toneMapped: false,
+  polygonOffset: true,
+  polygonOffsetFactor: 1,
+  polygonOffsetUnits: 1
 });
 ENEMY_OUTLINE_MAT.userData = { shared: true, matSlotKey: 'enemyOutline' };
 
 export const TEAMMATE_OUTLINE_MAT = new THREE.MeshBasicMaterial({
   color: 0x38bdf8,
   side: THREE.BackSide,
-  depthWrite: false
+  depthTest: true,
+  depthWrite: true,
+  transparent: false,
+  toneMapped: false,
+  polygonOffset: true,
+  polygonOffsetFactor: 1,
+  polygonOffsetUnits: 1
 });
 TEAMMATE_OUTLINE_MAT.userData = { shared: true, matSlotKey: 'teammateOutline' };
 
-function createInflatedOutlineGeo(entries, inflate = 0.018) {
+let BLOB_SHADOW_GEO = null;
+let BLOB_SHADOW_MAT = null;
+
+/**
+ * Soft ground contact shadow for remote operators. The world shadow map is baked once (autoUpdate = false), so moving
+ * characters cast no shadow; this one flat quad per player (shared geometry + material) grounds them for ~0 cost.
+ */
+export function createBlobShadowMesh(radius = 0.62) {
+  if (!BLOB_SHADOW_GEO) {
+    BLOB_SHADOW_GEO = new THREE.PlaneGeometry(1, 1);
+    BLOB_SHADOW_GEO.rotateX(-Math.PI / 2);
+    BLOB_SHADOW_GEO.userData = { shared: true };
+  }
+  if (!BLOB_SHADOW_MAT) {
+    let map = null;
+    if (typeof document !== 'undefined') {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 64;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        const grad = ctx.createRadialGradient(32, 32, 2, 32, 32, 32);
+        grad.addColorStop(0, 'rgba(0,0,0,0.62)');
+        grad.addColorStop(0.55, 'rgba(0,0,0,0.26)');
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 64, 64);
+        map = new THREE.CanvasTexture(canvas);
+        map.userData = { shared: true };
+      }
+    }
+    BLOB_SHADOW_MAT = new THREE.MeshBasicMaterial({
+      map,
+      color: map ? 0xffffff : 0x000000,
+      opacity: map ? 1 : 0.3,
+      transparent: true,
+      depthWrite: false,
+      fog: false,
+      toneMapped: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2
+    });
+    BLOB_SHADOW_MAT.userData = { shared: true, matSlotKey: 'blobShadow' };
+  }
+  const mesh = new THREE.Mesh(BLOB_SHADOW_GEO, BLOB_SHADOW_MAT);
+  mesh.name = 'blobShadow';
+  mesh.scale.set(radius * 2, 1, radius * 2);
+  mesh.position.y = 0.03;
+  mesh.renderOrder = -1;
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  mesh.userData = { noOutline: true };
+  return mesh;
+}
+
+function createInflatedOutlineGeo(entries, inflate = 0.006) {
   const merged = mergeTransformedGeometries(entries);
   const pos = merged.attributes?.position;
-  let norm = merged.attributes?.normal;
-  if (!norm && merged.computeVertexNormals) {
-    merged.computeVertexNormals();
-    norm = merged.attributes?.normal;
-  }
+  if (!pos) return merged;
+  merged.computeVertexNormals();
+  const norm = merged.attributes?.normal;
   if (pos && norm) {
     const pArr = pos.array;
     const nArr = norm.array;
+    // Average vertex normals by quantized spatial position so cylinder caps,
+    // box edges, and sphere UV seams expand as a watertight thin silhouette hull.
+    const smoothNormals = new Map();
     for (let i = 0; i < pArr.length; i += 3) {
-      pArr[i] += nArr[i] * inflate;
-      pArr[i + 1] += nArr[i + 1] * inflate;
-      pArr[i + 2] += nArr[i + 2] * inflate;
+      const kx = Math.round(pArr[i] * 2000);
+      const ky = Math.round(pArr[i + 1] * 2000);
+      const kz = Math.round(pArr[i + 2] * 2000);
+      const key = `${kx}_${ky}_${kz}`;
+      let acc = smoothNormals.get(key);
+      if (!acc) {
+        acc = [0, 0, 0];
+        smoothNormals.set(key, acc);
+      }
+      acc[0] += nArr[i];
+      acc[1] += nArr[i + 1];
+      acc[2] += nArr[i + 2];
+    }
+    for (let i = 0; i < pArr.length; i += 3) {
+      const kx = Math.round(pArr[i] * 2000);
+      const ky = Math.round(pArr[i + 1] * 2000);
+      const kz = Math.round(pArr[i + 2] * 2000);
+      const acc = smoothNormals.get(`${kx}_${ky}_${kz}`);
+      let nx = acc ? acc[0] : nArr[i];
+      let ny = acc ? acc[1] : nArr[i + 1];
+      let nz = acc ? acc[2] : nArr[i + 2];
+      const len = Math.hypot(nx, ny, nz);
+      if (len > 1e-6) {
+        nx /= len;
+        ny /= len;
+        nz /= len;
+      } else {
+        nx = nArr[i];
+        ny = nArr[i + 1];
+        nz = nArr[i + 2];
+      }
+      pArr[i] += nx * inflate;
+      pArr[i + 1] += ny * inflate;
+      pArr[i + 2] += nz * inflate;
     }
     pos.needsUpdate = true;
   }
+  merged.computeBoundingBox();
   merged.computeBoundingSphere();
   return merged;
 }
@@ -59,6 +160,17 @@ export function batchBoneScope(scopeRoot, boneScopeId, stopNodes, primaryMesh = 
   const byMat = new Map();
   const meshesToRemove = [];
   const allOutlineEntries = withOutline ? [] : null;
+
+  const isOutlineEligible = (mesh) => {
+    if (!mesh || !mesh.geometry || mesh.userData?.noOutline) return false;
+    const g = mesh.geometry;
+    if (g.type === 'CircleGeometry' || g.type === 'RingGeometry' || g.type === 'PlaneGeometry') return false;
+    const params = g.parameters;
+    if (params && typeof params.thetaLength === 'number' && params.thetaLength < Math.PI * 2 - 0.01) {
+      return false;
+    }
+    return true;
+  };
 
   const addEntry = (mesh, relMatrix) => {
     const mat = mesh.material;
@@ -75,7 +187,7 @@ export function batchBoneScope(scopeRoot, boneScopeId, stopNodes, primaryMesh = 
     if (mesh.castShadow) bucket.castShadow = true;
     const clonedMat = relMatrix.clone();
     bucket.entries.push({ geometry: mesh.geometry, matrix: clonedMat });
-    if (allOutlineEntries && mesh.castShadow) {
+    if (allOutlineEntries && isOutlineEligible(mesh)) {
       allOutlineEntries.push({ geometry: mesh.geometry, matrix: clonedMat });
     }
   };
@@ -130,11 +242,13 @@ export function batchBoneScope(scopeRoot, boneScopeId, stopNodes, primaryMesh = 
   }
 
   if (withOutline && allOutlineEntries && allOutlineEntries.length > 0) {
-    const outlineGeo = getCachedGeo(`outline_rig_${boneScopeId}`, () =>
-      createInflatedOutlineGeo(allOutlineEntries, 0.018)
+    const outlineGeo = getCachedGeo(`outline_rig_v2_${boneScopeId}`, () =>
+      createInflatedOutlineGeo(allOutlineEntries, 0.006)
     );
     const outlineMesh = new THREE.Mesh(outlineGeo, outlineMat);
     outlineMesh.name = `outline_${boneScopeId}`;
+    outlineMesh.userData = { isOutlineHull: true, boneScopeId };
+    outlineMesh.renderOrder = 1;
     outlineMesh.castShadow = false;
     outlineMesh.receiveShadow = false;
     outlineMesh.frustumCulled = true;

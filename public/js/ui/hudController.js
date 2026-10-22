@@ -496,9 +496,9 @@ export function syncHotbarSlotsHud() {
   const sCfg = WEAPONS[appState.selectedLoadout.secondary] || WEAPONS.pistol;
   const mCfg = WEAPONS[appState.selectedLoadout.melee] || WEAPONS.knife;
 
-  if (hotbarSlot1) hotbarSlot1.dataset.slot = pCfg.id;
-  if (hotbarSlot2) hotbarSlot2.dataset.slot = sCfg.id;
-  if (hotbarSlot3) hotbarSlot3.dataset.slot = mCfg.id;
+  if (hotbarSlot1?.dataset) hotbarSlot1.dataset.slot = pCfg.id;
+  if (hotbarSlot2?.dataset) hotbarSlot2.dataset.slot = sCfg.id;
+  if (hotbarSlot3?.dataset) hotbarSlot3.dataset.slot = mCfg.id;
   if (hotbarName1) hotbarName1.textContent = pCfg.name;
   if (hotbarName2) hotbarName2.textContent = sCfg.name;
   if (hotbarName3) hotbarName3.textContent = mCfg.name;
@@ -545,24 +545,39 @@ export function updateMapHud(mapId) {
 export function updateTeamScoreHud(teamScores = appState.currentTeamScores) {
   const alphaKills = Math.max(0, Number(teamScores?.alpha) || 0);
   const bravoKills = Math.max(0, Number(teamScores?.bravo) || 0);
-  appState.currentTeamScores = { alpha: alphaKills, bravo: bravoKills };
-
-  if (hudScoreAlpha) hudScoreAlpha.textContent = String(alphaKills);
-  if (hudScoreBravo) hudScoreBravo.textContent = String(bravoKills);
-
-  if (hudTeamScore) {
-    hudTeamScore.classList.toggle('hidden', appState.currentRoomGameMode !== 'tdm');
+  if (!appState.currentTeamScores) {
+    appState.currentTeamScores = { alpha: alphaKills, bravo: bravoKills };
+  } else {
+    appState.currentTeamScores.alpha = alphaKills;
+    appState.currentTeamScores.bravo = bravoKills;
   }
 
-  if (appState.currentRoomGameMode === 'tdm' && hudLeader) {
-    let nextLeaderText = `⚖️ HÒA: ${ alphaKills } - ${ bravoKills } (${ hudKillLimit.textContent })`;
+  const cache = appState.hudCache;
+  if (hudScoreAlpha && cache.scoreAlpha !== alphaKills) {
+    cache.scoreAlpha = alphaKills;
+    hudScoreAlpha.textContent = String(alphaKills);
+  }
+  if (hudScoreBravo && cache.scoreBravo !== bravoKills) {
+    cache.scoreBravo = bravoKills;
+    hudScoreBravo.textContent = String(bravoKills);
+  }
+
+  const isTdm = appState.currentRoomGameMode === 'tdm';
+  if (hudTeamScore && cache.teamScoreVisible !== isTdm) {
+    cache.teamScoreVisible = isTdm;
+    hudTeamScore.classList.toggle('hidden', !isTdm);
+  }
+
+  if (isTdm && hudLeader) {
+    const killLimitText = hudKillLimit ? hudKillLimit.textContent : '30';
+    let nextLeaderText = `⚖️ HÒA: ${ alphaKills } - ${ bravoKills } (${ killLimitText })`;
     if (alphaKills > bravoKills) {
-      nextLeaderText = `🔵 PHE XANH DẪN ĐẦU (${ alphaKills }/${ hudKillLimit.textContent })`;
+      nextLeaderText = `🔵 PHE XANH DẪN ĐẦU (${ alphaKills }/${ killLimitText })`;
     } else if (bravoKills > alphaKills) {
-      nextLeaderText = `🔴 PHE ĐỎ DẪN ĐẦU (${ bravoKills }/${ hudKillLimit.textContent })`;
+      nextLeaderText = `🔴 PHE ĐỎ DẪN ĐẦU (${ bravoKills }/${ killLimitText })`;
     }
-    if (appState.hudCache.leaderText !== nextLeaderText) {
-      appState.hudCache.leaderText = nextLeaderText;
+    if (cache.leaderText !== nextLeaderText) {
+      cache.leaderText = nextLeaderText;
       hudLeader.textContent = nextLeaderText;
     }
   }

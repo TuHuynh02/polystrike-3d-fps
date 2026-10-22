@@ -185,9 +185,11 @@ export function buildFirstPersonViewmodel(groupOrWeaponId = 'rifle', weaponId, m
     metalness: 0.65
   });
   const skinMat = new THREE.MeshStandardMaterial({
-    color: 0xd6a586,
-    roughness: 0.56,
-    metalness: 0.04
+    color: 0xdca482,
+    emissive: 0x3d2416,
+    emissiveIntensity: 0.05,
+    roughness: 0.55,
+    metalness: 0
   });
   const watchDialMat = new THREE.MeshBasicMaterial({
     map: getWatchDialTexture(),
@@ -246,15 +248,15 @@ export function buildFirstPersonViewmodel(groupOrWeaponId = 'rifle', weaponId, m
   rightKnuckleBridge.rotation.z = Math.PI / 2;
   rightKnuckleBridge.position.set(0.004, 0.025, -0.012);
 
-  // Articulated 2-Segment Thumb wrapping around left side of pistol/knife grip
+  // Articulated 2-Segment Thumb wrapping around left side of pistol/knife grip (fingerless tactical glove exposing warm human skin)
   const rightThumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, 0.032, 8, 12), gloveLeatherMat);
   rightThumb.position.set(-0.032, 0.01, -0.018);
   rightThumb.rotation.set(0.45, 0.35, 0.55);
-  const rightThumbTip = new THREE.Mesh(new THREE.CapsuleGeometry(0.010, 0.022, 8, 12), gloveLeatherMat);
+  const rightThumbTip = new THREE.Mesh(new THREE.CapsuleGeometry(0.010, 0.022, 8, 12), skinMat);
   rightThumbTip.position.set(-0.024, 0.018, -0.036);
   rightThumbTip.rotation.set(0.15, 0.65, 0.35);
 
-  // 4 Articulated 2-Phalanx Fingers (Index finger extended onto trigger, 3 fingers curled around grip)
+  // 4 Articulated 2-Phalanx Fingers (Index finger extended onto trigger, 3 fingers curled around grip with exposed fingertips)
   for (let f = 0; f < 4; f++) {
     const isTriggerFinger = f === 0 && !isKnife;
     const fy = -0.008 - f * 0.018;
@@ -264,7 +266,7 @@ export function buildFirstPersonViewmodel(groupOrWeaponId = 'rifle', weaponId, m
     proximal.rotation.z = Math.PI / 2;
     proximal.rotation.y = isTriggerFinger ? -0.35 : 0.08;
 
-    const distal = new THREE.Mesh(new THREE.CapsuleGeometry(0.0082, 0.022, 8, 12), carbonKnuckleMat);
+    const distal = new THREE.Mesh(new THREE.CapsuleGeometry(0.0082, 0.022, 8, 12), skinMat);
     distal.position.set(-0.026, fy, fz + (isTriggerFinger ? -0.006 : 0.012));
     distal.rotation.z = Math.PI / 2;
     distal.rotation.y = isTriggerFinger ? -0.65 : 0.72;
@@ -336,7 +338,7 @@ export function buildFirstPersonViewmodel(groupOrWeaponId = 'rifle', weaponId, m
   leftKnuckleBridge.rotation.z = Math.PI / 2;
   leftKnuckleBridge.position.set(-0.005, 0.022, 0);
 
-  const leftThumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, 0.046, 8, 12), gloveLeatherMat);
+  const leftThumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, 0.046, 8, 12), skinMat);
   leftThumb.position.set(-0.018, 0.032, -0.02);
   leftThumb.rotation.set(0.2, -0.4, -0.8);
 
@@ -346,12 +348,16 @@ export function buildFirstPersonViewmodel(groupOrWeaponId = 'rifle', weaponId, m
     fingerProx.position.set(0.012, -0.018, fz);
     fingerProx.rotation.z = Math.PI / 2.3;
 
-    const fingerDist = new THREE.Mesh(new THREE.CapsuleGeometry(0.0082, 0.022, 8, 12), carbonKnuckleMat);
+    const fingerDist = new THREE.Mesh(new THREE.CapsuleGeometry(0.0082, 0.022, 8, 12), skinMat);
     fingerDist.position.set(0.026, -0.006, fz);
     fingerDist.rotation.z = Math.PI / 4.2;
     leftHandGroup.add(fingerProx, fingerDist);
   }
-  leftHandGroup.add(leftPalm, leftKnuckleBridge, leftThumb);
+  const leftWristSkin = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.038, 0.046, 16), skinMat);
+  leftWristSkin.position.set(-0.010, -0.016, 0.042);
+  leftWristSkin.rotation.x = Math.PI / 2 + 0.22;
+  leftWristSkin.rotation.z = 0.34;
+  leftHandGroup.add(leftPalm, leftKnuckleBridge, leftThumb, leftWristSkin);
 
   // Tactical Wrist Chrono-Watch with Illuminated OLED Telemetry Dial seated on inner-top left wrist
   const watchCase = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.014, 22), darkMetal);

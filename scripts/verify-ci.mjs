@@ -99,12 +99,15 @@ assert.ok(smgDmg36m <= 11, `SMG damage at 36m (${smgDmg36m}) must drop to <= 11 
 assert.ok(akTtk36m < smgTtk36m * 0.5, `AK TTK at 36m (${akTtk36m}ms) must be more than 2x faster than SMG (${smgTtk36m}ms)`);
 assert.ok(m4Ttk36m < smgTtk36m * 0.65, `M4 TTK at 36m (${m4Ttk36m}ms) must be much faster than SMG (${smgTtk36m}ms)`);
 
-// Zero camera recoil shake & heavy run-and-gun penalty checks
+// Valorant-grade camera recoil climb & heavy run-and-gun penalty checks
 for (const [wId, wCfg] of Object.entries(WEAPONS)) {
-  assert.equal(wCfg.recoilPitch, 0, `${wId} must have recoilPitch === 0 (zero camera shake)`);
-  assert.equal(wCfg.recoilYaw, 0, `${wId} must have recoilYaw === 0 (zero camera shake)`);
-  if (!wCfg.isMelee) {
-    assert.ok(wCfg.crosshairKick > 0, `${wId} must define crosshairKick > 0 for crosshair-only recoil`);
+  if (wCfg.isMelee) {
+    assert.equal(wCfg.recoilPitch, 0, `${wId} melee must have recoilPitch === 0`);
+    assert.equal(wCfg.recoilYaw, 0, `${wId} melee must have recoilYaw === 0`);
+  } else {
+    assert.ok(wCfg.recoilPitch > 0, `${wId} must define recoilPitch > 0 for Valorant-grade vertical recoil`);
+    assert.ok(wCfg.recoilYaw > 0, `${wId} must define recoilYaw > 0 for horizontal spray sway`);
+    assert.ok(wCfg.crosshairKick > 0, `${wId} must define crosshairKick > 0 for dynamic crosshair feedback`);
     assert.ok(wCfg.moveSpread >= 0.055, `${wId} must enforce heavy moveSpread >= 0.055 when running`);
     assert.ok(wCfg.airSpread >= 0.09, `${wId} must enforce heavy airSpread >= 0.09 when airborne`);
   }

@@ -5,6 +5,7 @@ import {
   PRIMARY_WEAPONS,
   SECONDARY_WEAPONS,
   VALID_OPERATOR_COLORS,
+  PlayerStateCache,
   getMapConfig
 } from '../shared.js';
 
@@ -92,9 +93,7 @@ export function loadUserPrefs() {
     ? raw.primaryWeapon
     : (DEFAULT_LOADOUT.primary || 'rifle');
 
-  const secondaryWeapon = SECONDARY_WEAPONS.includes(raw.secondaryWeapon)
-    ? raw.secondaryWeapon
-    : (DEFAULT_LOADOUT.secondary || 'pistol');
+  const secondaryWeapon = DEFAULT_LOADOUT.secondary || 'pistol';
 
   const parsedColor = Number(raw.operatorColor);
   const operatorColor = VALID_OPERATOR_COLORS.includes(parsedColor)
@@ -129,6 +128,7 @@ export const userPrefs = loadUserPrefs();
 
 export function saveUserPrefs(partial = {}) {
   Object.assign(userPrefs, partial);
+  userPrefs.secondaryWeapon = DEFAULT_LOADOUT.secondary || 'pistol';
   try {
     localStorage.setItem(USER_PREFS_STORAGE_KEY, JSON.stringify(userPrefs));
     if (userPrefs.playerName) {
@@ -188,6 +188,7 @@ export const appState = {
   currentTeamScores: { alpha: 0, bravo: 0 },
   activeRoomCode: '',
   latestPlayers: [],
+  playerStateCache: new PlayerStateCache(), // rebuilds complete player objects from hot-only stateUpdate entries
   hitmarkerTimer: null,
   floatingDmgTimer: null,
   adrenalineTimer: null,

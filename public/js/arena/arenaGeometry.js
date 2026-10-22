@@ -32,20 +32,20 @@ export function buildMapLandmarks(
   trimSecondaryMat
 ) {
   if (mapId === 'cargo_dock') {
-    // 2 Massive Industrial Port Gantry Cranes spanning West & East Dockyards
+    // 2 Massive Industrial Port Gantry Cranes spanning West & East Dockyards (legs placed outside walkable 12x16m platform decks)
     for (const sideSign of [-1, 1]) {
       const gx = sideSign * 38;
-      for (const lz of [-7.4, 7.4]) {
-        addDecorBox(gx - 5.2, 11.5, lz, 1.1, 21.0, 1.1, hazardMat, true);
-        addDecorBox(gx + 5.2, 11.5, lz, 1.1, 21.0, 1.1, hazardMat, true);
-        addDecorBox(gx, 10.5, lz, 11.2, 0.65, 0.65, darkSteelMat);
-        addDecorBox(gx, 16.5, lz, 11.2, 0.65, 0.65, darkSteelMat);
-        addDecorBox(gx, 21.5, lz, 12.2, 1.1, 1.3, gunmetalFrameMat);
+      for (const lz of [-8.6, 8.6]) {
+        addDecorBox(gx - 6.6, 11.5, lz, 1.1, 21.0, 1.1, hazardMat, true);
+        addDecorBox(gx + 6.6, 11.5, lz, 1.1, 21.0, 1.1, hazardMat, true);
+        addDecorBox(gx, 10.5, lz, 14.0, 0.65, 0.65, darkSteelMat);
+        addDecorBox(gx, 16.5, lz, 14.0, 0.65, 0.65, darkSteelMat);
+        addDecorBox(gx, 21.5, lz, 14.8, 1.1, 1.3, gunmetalFrameMat);
       }
       const boomX = gx - sideSign * 6.5;
-      addDecorBox(boomX, 22.4, 0, 28.0, 1.4, 16.2, darkSteelMat, true);
-      addDecorBox(boomX, 23.2, -7.4, 28.5, 0.35, 0.45, trimAccentMat);
-      addDecorBox(boomX, 23.2, 7.4, 28.5, 0.35, 0.45, trimAccentMat);
+      addDecorBox(boomX, 22.4, 0, 28.0, 1.4, 18.4, darkSteelMat, true);
+      addDecorBox(boomX, 23.2, -8.6, 28.5, 0.35, 0.45, trimAccentMat);
+      addDecorBox(boomX, 23.2, 8.6, 28.5, 0.35, 0.45, trimAccentMat);
 
       const cabX = gx - sideSign * 14.0;
       addDecorBox(cabX, 20.6, 0, 3.8, 2.2, 3.4, gunmetalFrameMat);
@@ -92,13 +92,13 @@ export function buildMapLandmarks(
 
     for (const qx of [-36, 36]) {
       for (const qz of [-34, 34]) {
-        for (const px of [-4.6, 4.6]) {
-          for (const pz of [-4.6, 4.6]) {
+        for (const px of [-5.75, 5.75]) {
+          for (const pz of [-5.75, 5.75]) {
             addDecorCyl(qx + px, 4.6, qz + pz, 0.22, 4.4, darkSteelMat, 'y');
           }
         }
-        addDecorBox(qx, 6.9, qz, 11.4, 0.45, 11.4, gunmetalFrameMat, true);
-        addDecorBox(qx, 7.2, qz, 11.6, 0.14, 11.6, trimAccentMat);
+        addDecorBox(qx, 6.9, qz, 12.2, 0.45, 12.2, gunmetalFrameMat, true);
+        addDecorBox(qx, 7.2, qz, 12.4, 0.14, 12.4, trimAccentMat);
       }
     }
   } else if (mapId === 'neon_lab') {
@@ -193,6 +193,17 @@ export function mergeMeshGeometries(meshes) {
   return merged;
 }
 
+function liftTintHex(hex, lift = 0.36) {
+  const c = typeof hex === 'number' ? hex : 0x94a3b8;
+  const r = (c >> 16) & 0xff;
+  const g = (c >> 8) & 0xff;
+  const b = c & 0xff;
+  const lr = Math.min(255, Math.round(r + (255 - r) * lift));
+  const lg = Math.min(255, Math.round(g + (255 - g) * lift));
+  const lb = Math.min(255, Math.round(b + (255 - b) * lift));
+  return (lr << 16) | (lg << 8) | lb;
+}
+
 export function buildArena(game, mapCfg = game?.currentMapConfig || {}) {
   const halfSize = mapCfg.arenaHalfSize || game?.arenaHalfSize || 60;
   const span = halfSize * 2;
@@ -200,6 +211,47 @@ export function buildArena(game, mapCfg = game?.currentMapConfig || {}) {
   const preset = game?.quality || QUALITY.medium;
   const plan = getSurfacePlan(mapCfg.id);
   game.pbrSlots = [];
+
+  // Brighten map lighting, renderer exposure, and atmospheric fog so all arenas and UI showcase are bright and clear
+  const isDesert = theme.floorBase === '#27170c';
+  if (game?.renderer) {
+    game.renderer.toneMappingExposure = 1.28;
+  }
+  if (game?.scene) {
+    const brightFogHex = isDesert ? 0x453528 : 0x1e2c3e;
+    if (game.scene.background?.setHex) {
+      game.scene.background.setHex(brightFogHex);
+    }
+    if (game.scene.fog) {
+      game.scene.fog.color?.setHex?.(brightFogHex);
+      game.scene.fog.density = (theme.fogDensity || 0.004) * 0.42;
+    }
+  }
+  if (game?.hemiLight) {
+    game.hemiLight.intensity = 1.3;
+    game.hemiLight.color?.setHex?.(isDesert ? 0xfff3c4 : 0xdbeafe);
+    game.hemiLight.groundColor?.setHex?.(isDesert ? 0x7c654d : 0x566578);
+  }
+  if (game?.dirLight) {
+    game.dirLight.intensity = 2.6;
+    game.dirLight.color?.setHex?.(isDesert ? 0xfff0d4 : 0xfff7eb);
+  }
+  if (game?.rimLight) {
+    game.rimLight.intensity = 1.38;
+    game.rimLight.color?.setHex?.(isDesert ? 0xe2b887 : 0x93c5fd);
+  }
+  if (game?.citadelLight) {
+    game.citadelLight.intensity = 2.85;
+  }
+  if (game?.lobbyKeyLight) {
+    game.lobbyKeyLight.intensity = 3.8;
+  }
+  if (game?.lobbyRimLight) {
+    game.lobbyRimLight.intensity = 2.45;
+  }
+  if (game?.lobbyFillLight) {
+    game.lobbyFillLight.intensity = 2.35;
+  }
 
   // Ground Floor with high-res anisotropic weathered concrete/tarmac diffuse, bump & roughness relief
   const floorGeo = new THREE.PlaneGeometry(span, span);
@@ -209,8 +261,8 @@ export function buildArena(game, mapCfg = game?.currentMapConfig || {}) {
     bumpMap: floorBumpTex,
     roughnessMap: floorBumpTex,
     bumpScale: 0.048,
-    roughness: 0.82,
-    metalness: 0.14,
+    roughness: 0.74,
+    metalness: 0.10,
     polygonOffset: true,
     polygonOffsetFactor: 1,
     polygonOffsetUnits: 1
@@ -218,7 +270,7 @@ export function buildArena(game, mapCfg = game?.currentMapConfig || {}) {
   game.arenaMaterials.add(floorMat);
   applyMetricPlaneUV1(floorGeo, span, span, plan.floor.tile);
   game.arenaGeometries.add(floorGeo);
-  registerPbrSlot(game, floorMat, plan.floor, resolveTint(plan.floor, null, 'floor'));
+  registerPbrSlot(game, floorMat, plan.floor, liftTintHex(resolveTint(plan.floor, null, 'floor'), 0.38));
   const floorMesh = new THREE.Mesh(floorGeo, floorMat);
   floorMesh.rotation.x = -Math.PI / 2;
   floorMesh.receiveShadow = true;
@@ -241,58 +293,59 @@ export function buildArena(game, mapCfg = game?.currentMapConfig || {}) {
       const isPlatform = type === 'platform';
       const isWoodCrate = type === 'crate';
       const bumpTex = getBump(type);
+      const liftedObsHex = liftTintHex(colorHex || 0x64748b, 0.28);
       const m = new THREE.MeshStandardMaterial({
-        map: createObstacleTexture(game, colorHex, type),
+        map: createObstacleTexture(game, liftedObsHex, type),
         bumpMap: bumpTex,
         roughnessMap: bumpTex,
         bumpScale: isMetal ? 0.058 : isPlatform ? 0.045 : 0.042,
-        roughness: isMetal ? 0.42 : isPlatform ? 0.62 : isWoodCrate ? 0.68 : 0.76,
-        metalness: isMetal ? 0.66 : isPlatform ? 0.34 : isWoodCrate ? 0.16 : 0.14
+        roughness: isMetal ? 0.42 : isPlatform ? 0.58 : isWoodCrate ? 0.64 : 0.70,
+        metalness: isMetal ? 0.52 : isPlatform ? 0.28 : isWoodCrate ? 0.14 : 0.12
       });
       game.arenaMaterials.add(m);
       const spec = plan[type] || plan.wall;
-      registerPbrSlot(game, m, spec, resolveTint(spec, colorHex, type));
+      registerPbrSlot(game, m, spec, liftTintHex(resolveTint(spec, liftedObsHex, type), 0.34));
       matCache.set(key, m);
     }
     return matCache.get(key);
   };
 
   const darkSteelMat = new THREE.MeshStandardMaterial({
-    color: 0x161b22,
+    color: 0x2c3644,
     roughness: 0.38,
-    metalness: 0.82,
+    metalness: 0.72,
     polygonOffset: true,
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1
   });
   const gunmetalFrameMat = new THREE.MeshStandardMaterial({
-    color: 0x262f3d,
-    roughness: 0.44,
-    metalness: 0.68,
+    color: 0x425166,
+    roughness: 0.42,
+    metalness: 0.62,
     polygonOffset: true,
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1
   });
   const brushedChromeMat = new THREE.MeshStandardMaterial({
-    color: 0x94a3b8,
+    color: 0xb0c0d4,
     roughness: 0.24,
-    metalness: 0.90,
+    metalness: 0.86,
     polygonOffset: true,
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1
   });
   const hazardMat = new THREE.MeshStandardMaterial({
-    color: 0xd97706,
-    roughness: 0.46,
-    metalness: 0.34,
+    color: 0xf59e0b,
+    roughness: 0.44,
+    metalness: 0.30,
     polygonOffset: true,
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1
   });
   const barrelOliveMat = new THREE.MeshStandardMaterial({
-    color: 0x3b4d38,
+    color: 0x526b4e,
     roughness: 0.42,
-    metalness: 0.58
+    metalness: 0.52
   });
 
   const sandbagCanvas = document.createElement('canvas');
@@ -481,13 +534,10 @@ export function buildArena(game, mapCfg = game?.currentMapConfig || {}) {
     }
 
     if (!isUpperStack) {
-      addDecorBox(cx, cy + halfH + 0.14, cz, cw * 0.55, 0.24, cd * 0.35, gunmetalFrameMat);
+      addDecorBox(cx, cy + halfH - 0.11, cz, cw * 0.55, 0.18, cd * 0.35, gunmetalFrameMat);
     }
   };
 
-  // Authentic Military & Maritime Container Palette (Rust Red, Navy Blue, Olive Drab, Ochre Tan, Slate)
-  const stackColors = [0x2b4c65, 0x7c2d12, 0x3f4d3b, 0x92400e, 0x334155];
-  let containerIdx = 0;
   let crateIdx = 0;
 
   // glTF crate props (Low tier: none). Only models whose bounding box fits the target AABB within tolerance are used;
@@ -531,20 +581,6 @@ export function buildArena(game, mapCfg = game?.currentMapConfig || {}) {
 
     if (obs.type === 'container') {
       buildContainerDetails(obs.x, obs.y, obs.z, obs.w, obs.h, obs.d, mainMat, false);
-
-      if (obs.y < 2.2 && Math.max(obs.w, obs.d) >= 7.5) {
-        const upperColor = stackColors[containerIdx % stackColors.length];
-        containerIdx++;
-        const upperMat = getMat(upperColor, 'container');
-        const upperH = 3.1;
-        const upperY = topY + upperH / 2 + 0.06;
-
-        const upperCore = addDecorBox(obs.x, upperY, obs.z, obs.w * 0.96, upperH, obs.d * 0.96, upperMat, true);
-        if (containerIdx % 2 === 0) {
-          upperCore.rotation.y = 0.035;
-        }
-        buildContainerDetails(obs.x, upperY, obs.z, obs.w * 0.96, upperH, obs.d * 0.96, upperMat, true);
-      }
     } else if (obs.type === 'crate' && crateObstacleBatch?.tryAdd(
       { x: obs.x, y: obs.y, z: obs.z },
       { w: obs.w, h: obs.h, d: obs.d }
@@ -573,32 +609,22 @@ export function buildArena(game, mapCfg = game?.currentMapConfig || {}) {
         }
       }
 
-      // Molded Top Reinforcement Lid & Tie-Down Bars
-      addDecorBox(obs.x, topY + 0.045, obs.z, obs.w * 0.76, 0.07, obs.d * 0.76, gunmetalFrameMat);
-      addDecorCyl(obs.x, topY + 0.095, obs.z - obs.d * 0.22, 0.04, obs.w * 0.72, darkSteelMat, 'x');
-      addDecorCyl(obs.x, topY + 0.095, obs.z + obs.d * 0.22, 0.04, obs.w * 0.72, darkSteelMat, 'x');
+      // Molded Top Reinforcement Lid & Tie-Down Bars (recessed flush with topY)
+      addDecorBox(obs.x, topY - 0.03, obs.z, obs.w * 0.76, 0.05, obs.d * 0.76, gunmetalFrameMat);
+      addDecorCyl(obs.x, topY - 0.015, obs.z - obs.d * 0.22, 0.025, obs.w * 0.72, darkSteelMat, 'x');
+      addDecorCyl(obs.x, topY - 0.015, obs.z + obs.d * 0.22, 0.025, obs.w * 0.72, darkSteelMat, 'x');
 
       // Side Latch Clasps & Caution Plates
       addDecorBox(obs.x, obs.y + 0.05, obs.z - halfD - 0.04, obs.w * 0.42, 0.10, 0.04, hazardMat);
       addDecorBox(obs.x, obs.y + 0.05, obs.z + halfD + 0.04, obs.w * 0.42, 0.10, 0.04, hazardMat);
 
-      // On wide supply crates, stack cylindrical 55-gallon military fuel drums or tactical hardcases on top
-      if (obs.w >= 2.1 && obs.d >= 2.0 && obs.h >= 1.8) {
-        if (crateIdx % 2 === 0) {
-          addMilitaryFuelDrum(obs.x - 0.42, topY + 0.08, obs.z - 0.18, barrelOliveMat);
-          addMilitaryFuelDrum(obs.x + 0.36, topY + 0.08, obs.z + 0.22, gunmetalFrameMat);
-        } else {
-          // Molded Pelican Tactical Weapons Case on top of supply pallet (glTF crate when it fits, else procedural boxes)
-          const topperFit = crateTopperBatch?.tryAddContained(
-            { x: obs.x, z: obs.z },
-            topY + 0.08,
-            { w: obs.w * 0.7, h: 0.5, d: obs.d * 0.6 }
-          );
-          if (!topperFit) {
-            addDecorBox(obs.x, topY + 0.26, obs.z, obs.w * 0.58, 0.36, obs.d * 0.48, barrelOliveMat, true);
-            addDecorBox(obs.x, topY + 0.47, obs.z, obs.w * 0.60, 0.05, obs.d * 0.50, darkSteelMat);
-          }
-        }
+      // Keep crate top surface flush with collision topY so players jumping onto elevated/boost crates never clip into uncollidable props
+      if (obs.w >= 2.1 && obs.d >= 2.0 && obs.h >= 1.8 && crateIdx % 2 === 1) {
+        crateTopperBatch?.tryAddContained(
+          { x: obs.x, z: obs.z },
+          topY + 0.08,
+          { w: obs.w * 0.7, h: 0.5, d: obs.d * 0.6 }
+        );
       }
     } else if (obs.type === 'pillar') {
       // Heavy Stepped Concrete & Steel Column Base + Cylindrical Corner Flanges
@@ -665,13 +691,13 @@ export function buildArena(game, mapCfg = game?.currentMapConfig || {}) {
       addDecorBox(obs.x, topY - 0.055, obs.z, obs.w + 0.42, 0.07, obs.d + 0.42, hazardMat);
       addDecorBox(obs.x, botY + 0.15, obs.z, obs.w + 0.28, 0.24, obs.d + 0.28, gunmetalFrameMat);
 
-      // Corner Cylindrical & Box Bastion Columns
+      // Corner Cylindrical & Box Bastion Columns (recessed below walkable deck topY so players never clip into them)
       for (const sx of [-1, 1]) {
         for (const sz of [-1, 1]) {
           const bx = obs.x + sx * (halfW - 0.35);
           const bz = obs.z + sz * (halfD - 0.35);
-          addDecorBox(bx, obs.y + 0.26, bz, 0.88, obs.h + 0.48, 0.88, darkSteelMat);
-          addDecorCyl(bx, topY + 0.38, bz, 0.32, 0.24, gunmetalFrameMat, 'y');
+          addDecorBox(bx, obs.y - 0.02, bz, 0.88, Math.max(0.1, obs.h - 0.04), 0.88, darkSteelMat);
+          addDecorCyl(bx, topY - 0.12, bz, 0.32, 0.20, gunmetalFrameMat, 'y');
         }
       }
 
@@ -728,11 +754,11 @@ export function buildArena(game, mapCfg = game?.currentMapConfig || {}) {
         }
       } else {
         // Interior Precast Reinforced Concrete Bremer / Jersey Blast Wall
-        // Flared stepped concrete base plinth + overhanging top coping cap (recessed from botY & topY)
+        // Flared stepped concrete base plinth + overhanging top coping cap (recessed below botY & topY)
         addDecorBox(obs.x, botY + 0.18, obs.z, obs.w + 0.32, 0.32, obs.d + 0.32, darkSteelMat);
         addDecorBox(obs.x, botY + 0.44, obs.z, obs.w + 0.18, 0.18, obs.d + 0.18, gunmetalFrameMat);
         addDecorBox(obs.x, topY - 0.15, obs.z, obs.w + 0.28, 0.24, obs.d + 0.28, darkSteelMat);
-        addDecorCyl(obs.x, topY + 0.06, obs.z, 0.12, obs.w >= obs.d ? obs.w * 0.92 : obs.d * 0.92, gunmetalFrameMat, obs.w >= obs.d ? 'x' : 'z');
+        addDecorCyl(obs.x, topY - 0.08, obs.z, 0.06, obs.w >= obs.d ? obs.w * 0.92 : obs.d * 0.92, gunmetalFrameMat, obs.w >= obs.d ? 'x' : 'z');
 
         const alongX = obs.w >= obs.d;
         const wallSpan = alongX ? obs.w : obs.d;
@@ -758,15 +784,9 @@ export function buildArena(game, mapCfg = game?.currentMapConfig || {}) {
             if (alongX) {
               addDecorSandbag(obs.x + boff, botY + 0.18, obs.z + halfD + 0.18, true, 0.86, jitter);
               addDecorSandbag(obs.x + boff * 0.86, botY + 0.46, obs.z + halfD + 0.15, true, 0.80, -jitter);
-              if (b < 3) {
-                addDecorSandbag(obs.x + (b - 1) * 1.05, topY - 0.04, obs.z, true, 0.62, jitter * 0.8);
-              }
             } else {
               addDecorSandbag(obs.x + halfW + 0.18, botY + 0.18, obs.z + boff, false, 0.86, jitter);
               addDecorSandbag(obs.x + halfW + 0.15, botY + 0.46, obs.z + boff * 0.86, false, 0.80, -jitter);
-              if (b < 3) {
-                addDecorSandbag(obs.x, topY - 0.04, obs.z + (b - 1) * 1.05, false, 0.62, jitter * 0.8);
-              }
             }
           }
         }

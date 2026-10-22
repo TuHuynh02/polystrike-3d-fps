@@ -1,4 +1,5 @@
 import * as THREE from '../three.js';
+import { roundedBox } from './roundedBox.js';
 import {
   buildCurvedMagazine,
   buildDetailedOptic,
@@ -33,20 +34,20 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
 
   if (weaponId === 'smg') {
     // ==================== VECTOR-KRISS .45 ACP CQB SUBMACHINE GUN ====================
-    const upperRailReceiver = new THREE.Mesh(new THREE.BoxGeometry(0.076, 0.068, 0.42), darkMetal);
+    const upperRailReceiver = new THREE.Mesh(roundedBox(0.076, 0.068, 0.42), darkMetal);
     upperRailReceiver.position.set(0, 0.042, -0.05);
     const topRail = buildPicatinnyRail(0.40, 0.080, -0.05, gunMetal, 12);
 
     // Iconic Angled Kriss Super-V Delayed-Blowback Lower Housing + Side Relief Channels + Knuckle Guard
-    const superVHousing = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.175, 0.135), fdePolymerMat);
+    const superVHousing = new THREE.Mesh(roundedBox(0.072, 0.175, 0.135), fdePolymerMat);
     superVHousing.position.set(0, -0.048, -0.18);
     superVHousing.rotation.x = 0.22;
 
-    const superVRecess = new THREE.Mesh(new THREE.BoxGeometry(0.078, 0.095, 0.052), polymerMat);
+    const superVRecess = new THREE.Mesh(roundedBox(0.078, 0.095, 0.052), polymerMat);
     superVRecess.position.set(0, -0.045, -0.18);
     superVRecess.rotation.x = 0.22;
 
-    const handBridge = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.028, 0.18), polymerMat);
+    const handBridge = new THREE.Mesh(roundedBox(0.056, 0.028, 0.18), polymerMat);
     handBridge.position.set(0, -0.105, -0.05);
     handBridge.rotation.x = 0.14;
 
@@ -78,15 +79,15 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
 
     // Extended 33-Round Angled .45 ACP Kriss ExMag2
     magMesh = new THREE.Group();
-    const magStick = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.26, 0.062), polymerMat);
-    const magExtension = new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.075, 0.072), fdePolymerMat);
+    const magStick = new THREE.Mesh(roundedBox(0.044, 0.26, 0.062), polymerMat);
+    const magExtension = new THREE.Mesh(roundedBox(0.052, 0.075, 0.072), fdePolymerMat);
     magExtension.position.set(0, -0.10, 0);
     magMesh.add(magStick, magExtension);
     magMesh.position.set(0, -0.175, -0.205);
     magMesh.rotation.x = 0.22;
     magMesh.userData.basePos = magMesh.position.clone();
 
-    boltMesh = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.026, 0.085), chromeMetal);
+    boltMesh = new THREE.Mesh(roundedBox(0.095, 0.026, 0.085), chromeMetal);
     boltMesh.position.set(0.012, 0.042, -0.10);
     boltMesh.userData.baseZ = -0.10;
 
@@ -115,12 +116,12 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
     muzzleZ = -0.46;
   } else if (weaponId === 'lmg') {
     // ==================== ODIN-M249 (M249 SAW PARA SQUAD AUTOMATIC WEAPON) ====================
-    const receiverBox = new THREE.Mesh(new THREE.BoxGeometry(0.110, 0.116, 0.52), darkMetal);
+    const receiverBox = new THREE.Mesh(roundedBox(0.110, 0.116, 0.52), darkMetal);
     receiverBox.position.set(0, 0.015, -0.04);
 
     // Stamped receiver side reinforcement ribs
     for (const side of [-1, 1]) {
-      const rib = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.028, 0.44), gunMetal);
+      const rib = new THREE.Mesh(roundedBox(0.008, 0.028, 0.44), gunMetal);
       rib.position.set(side * 0.056, 0.015, -0.04);
       group.add(rib);
     }
@@ -190,7 +191,7 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
 
     // 100-Round Olive Box Drum Magazine + Visible Brass 5.56mm Linked Cartridge Belt with Copper Bullet Tips!
     magMesh = new THREE.Group();
-    const drumBox = new THREE.Mesh(new THREE.BoxGeometry(0.152, 0.185, 0.152), oliveChassisMat);
+    const drumBox = new THREE.Mesh(roundedBox(0.152, 0.185, 0.152), oliveChassisMat);
     const drumBevel = new THREE.Mesh(new THREE.CylinderGeometry(0.076, 0.076, 0.152, 20), oliveChassisMat);
     drumBevel.rotation.x = Math.PI / 2;
     drumBevel.position.set(0, -0.065, 0);
@@ -214,7 +215,7 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
     magMesh.position.set(0, -0.145, -0.13);
     magMesh.userData.basePos = magMesh.position.clone();
 
-    boltMesh = new THREE.Mesh(new THREE.BoxGeometry(0.125, 0.032, 0.12), chromeMetal);
+    boltMesh = new THREE.Mesh(roundedBox(0.125, 0.032, 0.12), chromeMetal);
     boltMesh.position.set(0.022, 0.036, -0.06);
     boltMesh.userData.baseZ = -0.06;
 
@@ -248,7 +249,7 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
   } else if (weaponId === 'shotgun') {
     // ==================== BUCKSHOT-8 (BENELLI M4 / MOSSBERG 590 TACTICAL COMBAT SHOTGUN) ====================
     // Contoured Shotgun Receiver with Rounded Top Crown & Top Picatinny Rail
-    const receiverLow = new THREE.Mesh(new THREE.BoxGeometry(0.080, 0.086, 0.44), darkMetal);
+    const receiverLow = new THREE.Mesh(roundedBox(0.080, 0.086, 0.44), darkMetal);
     receiverLow.position.set(0, 0.005, -0.02);
     const receiverCrown = new THREE.Mesh(
       new THREE.CylinderGeometry(0.041, 0.041, 0.44, 20, 1, false, -Math.PI * 0.5, Math.PI),
@@ -280,7 +281,7 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
     magCap.rotation.x = Math.PI / 2;
     magCap.position.set(0, -0.008, -0.78);
 
-    const barrelClamp = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.082, 0.038), darkMetal);
+    const barrelClamp = new THREE.Mesh(roundedBox(0.046, 0.082, 0.038), darkMetal);
     barrelClamp.position.set(0, 0.016, -0.68);
 
     // Breacher Standoff Muzzle Choke with Bore Hole
@@ -292,7 +293,7 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
     muzzleBore.position.set(0, 0.042, -0.852);
 
     // Low-Profile Winged Front Sight Post + Top-Rail Red-Dot Reflex Sight
-    const frontSightPost = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.032, 0.024), darkMetal);
+    const frontSightPost = new THREE.Mesh(roundedBox(0.018, 0.032, 0.024), darkMetal);
     frontSightPost.position.set(0, 0.068, -0.76);
     const frontFiberDot = new THREE.Mesh(new THREE.SphereGeometry(0.0045, 12, 12), reticleMat);
     frontFiberDot.position.set(0, 0.080, -0.75);
@@ -312,7 +313,7 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
       ribRing.position.set(0, 0, -0.10 + r * 0.04);
       boltMesh.add(ribRing);
     }
-    const actionBar = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.016, 0.34), chromeMetal);
+    const actionBar = new THREE.Mesh(roundedBox(0.056, 0.016, 0.34), chromeMetal);
     actionBar.position.set(0, 0.018, 0.10);
     boltMesh.add(actionBar);
     boltMesh.position.set(0, -0.012, -0.37);
@@ -320,7 +321,7 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
 
     // Side Saddle Shell Holder (`magMesh`) with 5 Detailed 12-Gauge Buckshot Shells (Crimson Hull + High Brass)
     magMesh = new THREE.Group();
-    const saddlePlate = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.074, 0.24), darkMetal);
+    const saddlePlate = new THREE.Mesh(roundedBox(0.016, 0.074, 0.24), darkMetal);
     saddlePlate.position.set(0.046, 0.012, -0.02);
     magMesh.add(saddlePlate);
     const shellHullMat = new THREE.MeshStandardMaterial({ color: 0xb91c1c, roughness: 0.38, metalness: 0.15 });
@@ -374,7 +375,7 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
   } else if (weaponId === 'sniper') {
     // ==================== AWP-PHANTOM (ACCURACY INTERNATIONAL AWSM .338 LAPUA MAGNUM) ====================
     // Iconic Olive-Drab Polymer Thumbhole Chassis + Machined Steel Action Receiver
-    const chassisForend = new THREE.Mesh(new THREE.BoxGeometry(0.080, 0.090, 0.68), oliveChassisMat);
+    const chassisForend = new THREE.Mesh(roundedBox(0.080, 0.090, 0.68), oliveChassisMat);
     chassisForend.position.set(0, -0.008, -0.08);
     const chassisBevel = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.042, 0.68, 18), oliveChassisMat);
     chassisBevel.rotation.x = Math.PI / 2;
@@ -386,9 +387,9 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
     steelAction.position.set(0, 0.042, 0.02);
 
     // Thumbhole Buttstock + Adjustable Cheekpiece + Monopod Rear Spike
-    const stockRear = new THREE.Mesh(new THREE.BoxGeometry(0.074, 0.116, 0.32), oliveChassisMat);
+    const stockRear = new THREE.Mesh(roundedBox(0.074, 0.116, 0.32), oliveChassisMat);
     stockRear.position.set(0, -0.012, 0.42);
-    const thumbholeBridge = new THREE.Mesh(new THREE.BoxGeometry(0.068, 0.032, 0.14), oliveChassisMat);
+    const thumbholeBridge = new THREE.Mesh(roundedBox(0.068, 0.032, 0.14), oliveChassisMat);
     thumbholeBridge.position.set(0, -0.086, 0.25);
     const cheekRest = new THREE.Mesh(
       new THREE.CylinderGeometry(0.038, 0.038, 0.21, 20, 1, false, -Math.PI * 0.5, Math.PI),
@@ -411,25 +412,25 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
     heavyBarrel.rotation.x = Math.PI / 2;
     heavyBarrel.position.set(0, 0.042, -0.72);
 
-    const fluteL = new THREE.Mesh(new THREE.BoxGeometry(0.005, 0.007, 0.66), darkMetal);
+    const fluteL = new THREE.Mesh(roundedBox(0.005, 0.007, 0.66), darkMetal);
     fluteL.position.set(-0.021, 0.042, -0.70);
-    const fluteR = new THREE.Mesh(new THREE.BoxGeometry(0.005, 0.007, 0.66), darkMetal);
+    const fluteR = new THREE.Mesh(roundedBox(0.005, 0.007, 0.66), darkMetal);
     fluteR.position.set(0.021, 0.042, -0.70);
-    const fluteTop = new THREE.Mesh(new THREE.BoxGeometry(0.007, 0.005, 0.66), darkMetal);
+    const fluteTop = new THREE.Mesh(roundedBox(0.007, 0.005, 0.66), darkMetal);
     fluteTop.position.set(0, 0.063, -0.70);
 
-    const muzzleBrake = new THREE.Mesh(new THREE.BoxGeometry(0.068, 0.048, 0.115), darkMetal);
+    const muzzleBrake = new THREE.Mesh(roundedBox(0.068, 0.048, 0.115), darkMetal);
     muzzleBrake.position.set(0, 0.042, -1.16);
-    const brakeBaffle1 = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.028, 0.022), boreHoleMat);
+    const brakeBaffle1 = new THREE.Mesh(roundedBox(0.072, 0.028, 0.022), boreHoleMat);
     brakeBaffle1.position.set(0, 0.042, -1.14);
-    const brakeBaffle2 = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.028, 0.022), boreHoleMat);
+    const brakeBaffle2 = new THREE.Mesh(roundedBox(0.072, 0.028, 0.022), boreHoleMat);
     brakeBaffle2.position.set(0, 0.042, -1.18);
     const muzzleBore = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.018, 10), boreHoleMat);
     muzzleBore.rotation.x = Math.PI / 2;
     muzzleBore.position.set(0, 0.042, -1.218);
 
     // Folding Parker-Hale Tactical Bipod under Forend
-    const bipodMount = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.038, 0.055), darkMetal);
+    const bipodMount = new THREE.Mesh(roundedBox(0.062, 0.038, 0.055), darkMetal);
     bipodMount.position.set(0, -0.052, -0.40);
     for (const side of [-1, 1]) {
       const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.010, 0.010, 0.29, 10), gunMetal);
@@ -447,7 +448,7 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
     ringFront.position.set(0, 0.135, -0.14);
     const ringRear = new THREE.Mesh(new THREE.TorusGeometry(0.030, 0.008, 8, 18), darkMetal);
     ringRear.position.set(0, 0.135, 0.03);
-    const mountBridge = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.042, 0.22), darkMetal);
+    const mountBridge = new THREE.Mesh(roundedBox(0.042, 0.042, 0.22), darkMetal);
     mountBridge.position.set(0, 0.098, -0.055);
 
     const scopeTube = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.38, 18), darkMetal);
@@ -493,8 +494,8 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
 
     // 5-Round Detachable Steel Box Magazine (`magMesh`)
     magMesh = new THREE.Group();
-    const sMagBody = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.155, 0.145), gunMetal);
-    const sMagBase = new THREE.Mesh(new THREE.BoxGeometry(0.064, 0.024, 0.152), darkMetal);
+    const sMagBody = new THREE.Mesh(roundedBox(0.058, 0.155, 0.145), gunMetal);
+    const sMagBase = new THREE.Mesh(roundedBox(0.064, 0.024, 0.152), darkMetal);
     sMagBase.position.set(0, -0.082, 0);
     magMesh.add(sMagBody, sMagBase);
     magMesh.position.set(0, -0.105, -0.06);

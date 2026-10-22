@@ -6,8 +6,25 @@ import {
   SHOT_REJECT,
   WEAPONS
 } from '../../shared/constants.js';
+import { INTERP_DELAY_MIN_MS, INTERP_DELAY_MS } from '../../shared/config.js';
 
-export const TICK_INTERVAL_MS = 40; // 25Hz server simulation / state broadcast
+// Server simulation / state broadcast rate. Default 25 Hz (Internet / Render). LAN mode (`npm run lan`, `--lan` or LAN_MODE=1)
+// runs 50 Hz because bandwidth is free on a LAN and every tick shaves latency off hit registration and remote-player motion.
+// TICK_HZ overrides either default. Capped to [20, 50] Hz: the lag-compensation history ring (LAG_COMP_MAX_SNAPSHOTS = 32 over
+// LAG_COMP_HISTORY_MS = 550) only holds 550 ms of history down to a 20 ms tick.
+export const LAN_MODE = /^(1|true|yes|on)$/i.test(process.env.LAN_MODE || '') || process.argv.includes('--lan');
+const requestedHz = Number(process.env.TICK_HZ);
+export const TICK_HZ = Math.min(50, Math.max(20, Number.isFinite(requestedHz) && requestedHz > 0 ? requestedHz : (LAN_MODE ? 50 : 25)));
+export const TICK_INTERVAL_MS = Math.round(1000 / TICK_HZ);
+
+// Sent to every client in `roomJoined`: the client's snapshot jitter buffer cannot know the tick rate in advance, and its delay
+// floor must follow it (a 70 ms floor would waste the 50 Hz gain). At the default 25 Hz this equals the shared config values
+// (floor 70 ms, start 100 ms), so nothing changes there.
+export const NET_CONFIG = Object.freeze({
+  tickMs: TICK_INTERVAL_MS,
+  interpMinMs: Math.min(INTERP_DELAY_MIN_MS, Math.round(TICK_INTERVAL_MS * 1.75)),
+  interpInitialMs: Math.min(INTERP_DELAY_MS, Math.round(TICK_INTERVAL_MS * 2.5))
+});
 
 // ---- Input-command netcode (client-side prediction + server reconciliation) ----
 // A command always costs exactly FIXED_DT of simulated player time. The server only simulates as much player time as

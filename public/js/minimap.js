@@ -120,9 +120,9 @@ export class TacticalMinimap {
       ctx.stroke();
     }
 
-    // 3. Draw Map Obstacles (Platforms first, then Steps, Crates, Containers, Walls, Pillars)
+    // 3. Draw Map Obstacles (Platforms first, then Steps, Barricades, Crates, Containers, Walls, Pillars)
     const obstacles = this.mapConfig?.obstacles || [];
-    const layerOrder = { platform: 1, step: 2, crate: 3, container: 4, wall: 5, pillar: 6 };
+    const layerOrder = { platform: 1, step: 2, barricade: 3, crate: 3, container: 4, wall: 5, pillar: 6 };
     const sorted = [...obstacles].sort(
       (a, b) => (layerOrder[a.type] || 3) - (layerOrder[b.type] || 3)
     );
@@ -146,6 +146,9 @@ export class TacticalMinimap {
       } else if (obs.type === 'step') {
         ctx.fillStyle = 'rgba(100, 116, 139, 0.55)';
         ctx.fillRect(x, y, w, d);
+      } else if (obs.type === 'barricade') {
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.48)';
+        ctx.fillRect(x, y, w, d);
       } else if (obs.type === 'container') {
         ctx.fillStyle = 'rgba(14, 165, 233, 0.42)';
         ctx.strokeStyle = 'rgba(56, 189, 248, 0.72)';
@@ -165,9 +168,41 @@ export class TacticalMinimap {
       }
     }
 
+    // 4. Pre-render Tactical Callout Zone Labels onto the static radar canvas
+    const callouts = this.mapConfig?.callouts || [];
+    if (callouts.length > 0 && typeof ctx.fillText === 'function') {
+      ctx.save?.();
+      ctx.font = '600 6.5px "Orbitron", "Rajdhani", monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = 'rgba(226, 232, 240, 0.52)';
+      for (let i = 0; i < callouts.length; i++) {
+        const c = callouts[i];
+        const cx = this.clampBlipCoord(this.worldToCanvasX(c.x), 14);
+        const cy = this.clampBlipCoord(this.worldToCanvasY(c.z), 8);
+        ctx.fillText(c.name, cx, cy);
+      }
+      ctx.restore?.();
+    }
+
     if (this.ctx && this.staticCanvas) {
       this.ctx.drawImage(this.staticCanvas, 0, 0, s, s);
     }
+  }
+
+  getCalloutAt(x, z) {
+    const callouts = this.mapConfig?.callouts;
+    if (!Array.isArray(callouts)) return null;
+    for (let i = 0; i < callouts.length; i++) {
+      const c = callouts[i];
+      const r = c.radius || 10;
+      const dx = x - c.x;
+      const dz = z - c.z;
+      if (dx * dx + dz * dz <= r * r) {
+        return c.name;
+      }
+    }
+    return null;
   }
 
   update(stateOrGame, nowArg) {
@@ -232,33 +267,13 @@ export class TacticalMinimap {
       }
     }
 
-    // 3b. Render Active Enemy Gunfire Sonar Rings (Unsuppressed shots pulse for 2.2s)
+    // 3b. Prune expired gunfire blips (enemy red dots removed in favor of thin 3D character outlines)
     if (this.gunfireBlips && this.gunfireBlips.size > 0) {
       for (const [shooterId, blip] of this.gunfireBlips.entries()) {
         const elapsed = now - blip.at;
         if (elapsed >= blip.durationMs || elapsed < 0) {
           this.gunfireBlips.delete(shooterId);
-          continue;
         }
-        const prog = elapsed / blip.durationMs;
-        const alpha = Math.max(0.08, (1 - prog) * 0.92);
-        const bx = this.clampBlipCoord(this.worldToCanvasX(blip.x), 4);
-        const by = this.clampBlipCoord(this.worldToCanvasY(blip.z), 4);
-        const pulseRadius = 3.5 + (elapsed % 750) / 750 * 9.5;
-
-        ctx.strokeStyle = `rgba(248, 113, 113, ${(alpha * 0.85).toFixed(2)})`;
-        ctx.lineWidth = 1.4;
-        ctx.beginPath();
-        ctx.arc(bx, by, pulseRadius, 0, Math.PI * 2);
-        ctx.stroke();
-
-        ctx.fillStyle = `rgba(239, 68, 68, ${alpha.toFixed(2)})`;
-        ctx.strokeStyle = '#090d16';
-        ctx.lineWidth = 1.1;
-        ctx.beginPath();
-        ctx.arc(bx, by, 3.6, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
       }
     }
 

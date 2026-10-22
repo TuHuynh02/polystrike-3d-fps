@@ -1,4 +1,5 @@
 import * as THREE from '../three.js';
+import { roundedBox } from './roundedBox.js';
 import {
   buildCurvedMagazine,
   buildDetailedOptic,
@@ -34,15 +35,15 @@ export function buildAssaultRifleGeometry(weaponId, group, mats) {
   if (weaponId === 'rifle') {
     // ==================== VANDAL-AK (AKM / AK-103 CUSTOM TACTICAL) ====================
     // Stamped Steel Lower Receiver + Magwell Dimples + Ribbed Rounded Dust Cover
-    const lowerReceiver = new THREE.Mesh(new THREE.BoxGeometry(0.074, 0.068, 0.38), darkMetal);
+    const lowerReceiver = new THREE.Mesh(roundedBox(0.074, 0.068, 0.38), darkMetal);
     lowerReceiver.position.set(0, -0.015, 0.02);
 
     // Stamped receiver side bevels & AK safety selector lever
-    const akSelector = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.024, 0.15), gunMetal);
+    const akSelector = new THREE.Mesh(roundedBox(0.008, 0.024, 0.15), gunMetal);
     akSelector.position.set(0.040, -0.006, 0.04);
     akSelector.rotation.x = -0.12;
 
-    const sideMountBracket = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.078, 0.11), gunMetal);
+    const sideMountBracket = new THREE.Mesh(roundedBox(0.012, 0.078, 0.11), gunMetal);
     sideMountBracket.position.set(-0.041, 0.022, 0.02);
 
     const dustCover = new THREE.Mesh(
@@ -53,9 +54,9 @@ export function buildAssaultRifleGeometry(weaponId, group, mats) {
     dustCover.position.set(0, 0.018, 0.04);
 
     // Rear Sight Block & Tangent Leaf Sight
-    const trunnionBlock = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.072, 0.09), darkMetal);
+    const trunnionBlock = new THREE.Mesh(roundedBox(0.072, 0.072, 0.09), darkMetal);
     trunnionBlock.position.set(0, 0.016, -0.16);
-    const tangentLeaf = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.018, 0.085), chromeMetal);
+    const tangentLeaf = new THREE.Mesh(roundedBox(0.036, 0.018, 0.085), chromeMetal);
     tangentLeaf.position.set(0, 0.056, -0.155);
 
     // Contoured Laminated Wood / Bakelite Lower Handguard with Palm Swells & Upper Gas Tube Cover
@@ -94,7 +95,7 @@ export function buildAssaultRifleGeometry(weaponId, group, mats) {
     cleaningRod.rotation.x = Math.PI / 2;
     cleaningRod.position.set(0, -0.015, -0.60);
 
-    const frontSightTower = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.064, 0.038), darkMetal);
+    const frontSightTower = new THREE.Mesh(roundedBox(0.022, 0.064, 0.038), darkMetal);
     frontSightTower.position.set(0, 0.028, -0.73);
     const sightHoodRing = new THREE.Mesh(new THREE.TorusGeometry(0.016, 0.0032, 10, 20, Math.PI), darkMetal);
     sightHoodRing.position.set(0, 0.054, -0.73);
@@ -103,7 +104,7 @@ export function buildAssaultRifleGeometry(weaponId, group, mats) {
     const muzzleBrake = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.021, 0.088, 22), gunMetal);
     muzzleBrake.rotation.x = Math.PI / 2;
     muzzleBrake.position.set(0, 0.005, -0.82);
-    const brakePort = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.014, 0.032), boreHoleMat);
+    const brakePort = new THREE.Mesh(roundedBox(0.046, 0.014, 0.032), boreHoleMat);
     brakePort.position.set(0, 0.008, -0.82);
     const muzzleBore = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.015, 16), boreHoleMat);
     muzzleBore.rotation.x = Math.PI / 2;
@@ -132,7 +133,7 @@ export function buildAssaultRifleGeometry(weaponId, group, mats) {
 
     // Reciprocating Polished Bolt Carrier & Curved Charging Handle Knob
     boltMesh = new THREE.Group();
-    const carrierPlate = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.032, 0.13), chromeMetal);
+    const carrierPlate = new THREE.Mesh(roundedBox(0.016, 0.032, 0.13), chromeMetal);
     carrierPlate.position.set(0.036, 0, 0);
     const handleKnob = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.010, 0.038, 16), darkMetal);
     handleKnob.rotation.z = Math.PI / 2;
@@ -195,10 +196,10 @@ export function buildAssaultRifleGeometry(weaponId, group, mats) {
     brassDeflector.rotation.z = -Math.PI / 2;
     brassDeflector.position.set(0.042, 0.028, 0.055);
 
-    const lowerReceiver = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.068, 0.26), gunMetal);
+    const lowerReceiver = new THREE.Mesh(roundedBox(0.072, 0.068, 0.26), gunMetal);
     lowerReceiver.position.set(0, -0.028, 0.02);
 
-    const magwellFlare = new THREE.Mesh(new THREE.BoxGeometry(0.082, 0.032, 0.115), darkMetal);
+    const magwellFlare = new THREE.Mesh(roundedBox(0.082, 0.032, 0.115), darkMetal);
     magwellFlare.position.set(0, -0.058, -0.06);
 
     // Smooth M-LOK Free-Float Handguard with Barrel Nut Collar & Cooling Slots
@@ -213,7 +214,7 @@ export function buildAssaultRifleGeometry(weaponId, group, mats) {
 
     for (let s = 0; s < 4; s++) {
       const slotZ = -0.18 - s * 0.075;
-      const slotBar = new THREE.Mesh(new THREE.BoxGeometry(0.088, 0.014, 0.048), boreHoleMat);
+      const slotBar = new THREE.Mesh(roundedBox(0.088, 0.014, 0.048), boreHoleMat);
       slotBar.position.set(0, 0.024, slotZ);
       group.add(slotBar);
     }
@@ -221,7 +222,7 @@ export function buildAssaultRifleGeometry(weaponId, group, mats) {
     const fullTopRail = buildPicatinnyRail(0.62, 0.068, -0.16, darkMetal, 18);
 
     // Side-Offset AN/PEQ-15 Tactical Laser Box near Front of Handguard (clear of Holo sightline)
-    const peqBox = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.022, 0.092), fdePolymerMat);
+    const peqBox = new THREE.Mesh(roundedBox(0.046, 0.022, 0.092), fdePolymerMat);
     peqBox.position.set(0.024, 0.074, -0.39);
     const peqLens = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.007, 0.014, 14), reticleMat);
     peqLens.rotation.x = Math.PI / 2;
@@ -281,7 +282,7 @@ export function buildAssaultRifleGeometry(weaponId, group, mats) {
 
     // Windowed PMAG 30-Round Polymer Magazine
     magMesh = buildCurvedMagazine(4, 0.050, 0.092, 0.058, 0.07, polymerMat, gunMetal, fdePolymerMat);
-    const pmagWindow = new THREE.Mesh(new THREE.BoxGeometry(0.054, 0.085, 0.024), brassMat);
+    const pmagWindow = new THREE.Mesh(roundedBox(0.054, 0.085, 0.024), brassMat);
     pmagWindow.position.set(0, -0.06, -0.01);
     magMesh.add(pmagWindow);
     magMesh.position.set(0, -0.072, -0.06);
@@ -289,9 +290,9 @@ export function buildAssaultRifleGeometry(weaponId, group, mats) {
 
     // Ejection Port Bolt Carrier & T-Charging Handle
     boltMesh = new THREE.Group();
-    const bcgCover = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.028, 0.105), chromeMetal);
+    const bcgCover = new THREE.Mesh(roundedBox(0.016, 0.028, 0.105), chromeMetal);
     bcgCover.position.set(0.038, 0, 0);
-    const tHandle = new THREE.Mesh(new THREE.BoxGeometry(0.066, 0.016, 0.028), darkMetal);
+    const tHandle = new THREE.Mesh(roundedBox(0.066, 0.016, 0.028), darkMetal);
     tHandle.position.set(0, 0.022, 0.16);
     boltMesh.add(bcgCover, tHandle);
     boltMesh.position.set(0, 0.028, -0.02);
@@ -332,7 +333,7 @@ export function buildAssaultRifleGeometry(weaponId, group, mats) {
   } else if (weaponId === 'scar') {
     // ==================== SCAR-H 7.62 (FN MK17 HEAVY BATTLE RIFLE) ====================
     // Iconic Monolithic Extruded FDE Aluminum Upper Receiver with Chamfered Crown & Side Scallops
-    const monoUpper = new THREE.Mesh(new THREE.BoxGeometry(0.084, 0.094, 0.64), fdeAnodizedMat);
+    const monoUpper = new THREE.Mesh(roundedBox(0.084, 0.094, 0.64), fdeAnodizedMat);
     monoUpper.position.set(0, 0.032, -0.12);
     const upperChamfer = new THREE.Mesh(new THREE.CylinderGeometry(0.044, 0.044, 0.64, 18), fdeAnodizedMat);
     upperChamfer.rotation.x = Math.PI / 2;
@@ -341,12 +342,12 @@ export function buildAssaultRifleGeometry(weaponId, group, mats) {
 
     // Machined receiver lightening grooves
     for (const side of [-1, 1]) {
-      const groove = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.018, 0.46), gunMetal);
+      const groove = new THREE.Mesh(roundedBox(0.006, 0.018, 0.46), gunMetal);
       groove.position.set(side * 0.042, 0.042, -0.12);
       group.add(groove);
     }
 
-    const lowerPolymer = new THREE.Mesh(new THREE.BoxGeometry(0.076, 0.068, 0.34), polymerMat);
+    const lowerPolymer = new THREE.Mesh(roundedBox(0.076, 0.068, 0.34), polymerMat);
     lowerPolymer.position.set(0, -0.032, 0.01);
 
     const topRail = buildPicatinnyRail(0.62, 0.092, -0.12, darkMetal, 18);
@@ -380,7 +381,7 @@ export function buildAssaultRifleGeometry(weaponId, group, mats) {
     // Iconic FN Ugg-Boot Folding/Telescoping Buttstock with Contoured Cheekpiece & Rubber Pad
     const stockHinge = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.115, 18), darkMetal);
     stockHinge.position.set(0, 0.018, 0.21);
-    const stockBody = new THREE.Mesh(new THREE.BoxGeometry(0.068, 0.116, 0.26), fdePolymerMat);
+    const stockBody = new THREE.Mesh(roundedBox(0.068, 0.116, 0.26), fdePolymerMat);
     stockBody.position.set(0, 0.005, 0.35);
     const cheekRiser = new THREE.Mesh(
       new THREE.CylinderGeometry(0.036, 0.036, 0.22, 20, 1, false, -Math.PI * 0.5, Math.PI),
@@ -396,12 +397,12 @@ export function buildAssaultRifleGeometry(weaponId, group, mats) {
 
     // Straight Heavy 20-Round 7.62x51mm NATO Steel Box Magazine with FDE Mag-Pull Floorplate
     magMesh = new THREE.Group();
-    const magBox = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.195, 0.118), fdeAnodizedMat);
-    const magRib1 = new THREE.Mesh(new THREE.BoxGeometry(0.060, 0.16, 0.018), gunMetal);
+    const magBox = new THREE.Mesh(roundedBox(0.056, 0.195, 0.118), fdeAnodizedMat);
+    const magRib1 = new THREE.Mesh(roundedBox(0.060, 0.16, 0.018), gunMetal);
     magRib1.position.set(0, 0, -0.025);
-    const magRib2 = new THREE.Mesh(new THREE.BoxGeometry(0.060, 0.16, 0.018), gunMetal);
+    const magRib2 = new THREE.Mesh(roundedBox(0.060, 0.16, 0.018), gunMetal);
     magRib2.position.set(0, 0, 0.025);
-    const magPullBase = new THREE.Mesh(new THREE.BoxGeometry(0.064, 0.032, 0.124), darkMetal);
+    const magPullBase = new THREE.Mesh(roundedBox(0.064, 0.032, 0.124), darkMetal);
     magPullBase.position.set(0, -0.105, 0);
     const magLoop = new THREE.Mesh(new THREE.TorusGeometry(0.022, 0.005, 8, 16, Math.PI), darkMetal);
     magLoop.rotation.y = Math.PI / 2;
@@ -414,7 +415,7 @@ export function buildAssaultRifleGeometry(weaponId, group, mats) {
 
     // Forward Reciprocating Charging Handle & Bolt Carrier
     boltMesh = new THREE.Group();
-    const bcgPlate = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.034, 0.12), chromeMetal);
+    const bcgPlate = new THREE.Mesh(roundedBox(0.018, 0.034, 0.12), chromeMetal);
     bcgPlate.position.set(0.042, 0, 0.04);
     const chHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.055, 16), darkMetal);
     chHandle.rotation.z = Math.PI / 2;

@@ -343,18 +343,17 @@ export class CombatSystemMethods {
         let bestBarrel = null;
         let barrelDist = Infinity;
         const barrelReach = Math.min(maxRange, wallDist);
+        const brlBox = this._brlBoxScratch || (this._brlBoxScratch = { minX: 0, maxX: 0, minY: 0, maxY: 0, minZ: 0, maxZ: 0 });
         for (let i = 0; i < activeBarrels.length; i++) {
           const brl = activeBarrels[i];
           if (!brl || !brl.active) continue;
           const by = brl.y || 0;
-          const brlBox = {
-            minX: brl.x - 0.52,
-            maxX: brl.x + 0.52,
-            minY: by,
-            maxY: by + 1.25,
-            minZ: brl.z - 0.52,
-            maxZ: brl.z + 0.52
-          };
+          brlBox.minX = brl.x - 0.52;
+          brlBox.maxX = brl.x + 0.52;
+          brlBox.minY = by;
+          brlBox.maxY = by + 1.25;
+          brlBox.minZ = brl.z - 0.52;
+          brlBox.maxZ = brl.z + 0.52;
           const bt = rayIntersectsAABB(origin, dir, barrelReach, brlBox);
           if (bt !== null && bt < barrelDist) {
             barrelDist = bt;
@@ -425,7 +424,9 @@ export class CombatSystemMethods {
       isPlayerHit: hits.length > 0
     };
     if (dirs.length > 1) shotEvent.dirs = dirs.map((d) => roundVec(d, 10000));
-    this.io.to(room.code).emit('shotFired', shotEvent);
+    const shotTarget = this.io.to(room.code);
+    const shotEmitTarget = process.env.SV_RELIABLE ? shotTarget : (shotTarget.volatile || shotTarget);
+    shotEmitTarget.emit('shotFired', shotEvent);
 
     const dmgBoostMult = (shooter.damageBoostUntil && now < shooter.damageBoostUntil)
       ? (MATCH_CONFIG.DAMAGE_BOOST_MULT || 1.35)

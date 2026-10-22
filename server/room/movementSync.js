@@ -449,7 +449,7 @@ export class MovementSyncMethods {
   }
 
   /** Sends the owner-only `selfState` snapshot to `player.id` (never broadcast to the room). */
-  sendSelfState(player, now = Date.now(), reliable = false) {
+  sendSelfState(player, now = Date.now(), reliable = false, precomputedSig = null) {
     if (!player) return null;
     if (this._deferSelfState) {
       player._selfStateDirty = true;
@@ -459,7 +459,7 @@ export class MovementSyncMethods {
     const state = this.buildSelfState(player, now);
     if (!state) return null;
     player.lastSelfStateAt = now;
-    player._selfStateSig = this._selfStateSignature(player);
+    player._selfStateSig = precomputedSig || this._selfStateSignature(player);
     player._selfStateDirty = false;
     player._selfStateReliable = false;
     const target = this.io.to(player.id);
@@ -470,8 +470,9 @@ export class MovementSyncMethods {
   sendSelfStateIfChanged(player, now = Date.now(), reliable = false) {
     if (!player) return null;
     this.syncPlayerReloadState(player, now, false);
-    if (this._selfStateSignature(player) !== player._selfStateSig) {
-      return this.sendSelfState(player, now, reliable);
+    const sig = this._selfStateSignature(player);
+    if (sig !== player._selfStateSig) {
+      return this.sendSelfState(player, now, reliable, sig);
     }
     return null;
   }
@@ -587,7 +588,7 @@ export class MovementSyncMethods {
       if (player.moveCredit < FIXED_DT - 1e-9) break; // out of simulated time: the rest waits for more real time
       player.moveCredit -= FIXED_DT;
       queue.shift();
-      this.applyInputCommand(player, cmd, mapCfg);
+      this.applyInputCommand(player, cmd, mapCfg, now);
       player.lastProcessedSeq = cmd.seq;
       player.cmdFresh = false;
       player.cmdGapSince = null;
@@ -616,13 +617,12 @@ export class MovementSyncMethods {
   }
 
   /** Simulates one validated command and mirrors the result into the fields the rest of the server reads. */
-  applyInputCommand(player, cmd, mapCfg) {
+  applyInputCommand(player, cmd, mapCfg, nowWall = Date.now()) {
     const state = player.moveState;
     if (cmd.w && cmd.w !== player.weapon && this.isWeaponAllowed(player, cmd.w)) {
       this.switchPlayerWeapon(player, cmd.w);
     }
     // Movement speed follows the weapon the server knows about, and BTN.SPEED_BOOST is only allowed when speedBoostUntil is active
-    const nowWall = Date.now();
     const hasSpeedBuff = Boolean(player.speedBoostUntil && player.speedBoostUntil > nowWall - 250);
     const wantsBoostBtn = (cmd.btn & BTN.SPEED_BOOST) !== 0;
     const cleanBtn = (wantsBoostBtn && !hasSpeedBuff) ? (cmd.btn & ~BTN.SPEED_BOOST) : cmd.btn;

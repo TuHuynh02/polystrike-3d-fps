@@ -6,3 +6,4 @@ export * from '../shared/netcode.js';
 export * from '../shared/spread.js';
 export * from '../shared/hitboxes.js';
 export * from '../shared/lagCompensation.js';
+export * from '../shared/playerDelta.js';

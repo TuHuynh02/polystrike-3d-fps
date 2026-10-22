@@ -81,7 +81,7 @@ export class WeaponsAndShowcaseMethods {
     this.viewmodelRig = new THREE.Group();
     this.camera.add(this.viewmodelRig);
 
-    this.viewmodelKeyLight = new THREE.PointLight(0xe0f2fe, 0.72, 2.5, 1.5);
+    this.viewmodelKeyLight = new THREE.PointLight(0xfff4e6, 1.15, 3.0, 1.4);
     this.viewmodelKeyLight.position.set(0.22, 0.28, -0.25);
     this.camera.add(this.viewmodelKeyLight);
 
@@ -104,16 +104,16 @@ export class WeaponsAndShowcaseMethods {
     this.lobbyShowcaseGroup.position.set(0, -0.96, -2.62);
     this.camera.add(this.lobbyShowcaseGroup);
 
-    this.lobbyKeyLight = new THREE.PointLight(0xfff4e0, 2.35, 7.0, 1.2);
+    this.lobbyKeyLight = new THREE.PointLight(0xfff7eb, 3.85, 8.5, 1.1);
     this.lobbyKeyLight.position.set(1.3, 2.3, 1.55);
     this.lobbyShowcaseGroup.add(this.lobbyKeyLight);
 
-    this.lobbyRimLight = new THREE.PointLight(0xe5a024, 1.65, 6.2, 1.2);
+    this.lobbyRimLight = new THREE.PointLight(0xe5a024, 2.45, 7.2, 1.15);
     this.lobbyRimLight.position.set(-1.35, 1.85, -0.95);
     this.lobbyShowcaseGroup.add(this.lobbyRimLight);
 
-    this.lobbyFillLight = new THREE.PointLight(0x94a3b8, 1.05, 5.8, 1.4);
-    this.lobbyFillLight.position.set(0.15, 0.72, 1.65);
+    this.lobbyFillLight = new THREE.PointLight(0xe2e8f0, 2.35, 7.0, 1.2);
+    this.lobbyFillLight.position.set(0.15, 0.95, 1.85);
     this.lobbyShowcaseGroup.add(this.lobbyFillLight);
 
     const pedGroup = new THREE.Group();

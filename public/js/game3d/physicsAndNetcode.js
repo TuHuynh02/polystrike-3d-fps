@@ -213,6 +213,10 @@ export class PhysicsAndNetcodeMethods {
     this.physicsAccumulator += Math.min(0.1, Math.max(0, frameDt));
 
     const now = performance.now();
+    const activeCfg = WEAPONS[this.currentWeapon];
+    if (this.isMouseDown && activeCfg?.automatic && this.isPointerLocked && !this.pendingFire) {
+      this.attemptShoot();
+    }
     const f = this.cmdFields;
     f.moveForward = 0;
     f.moveRight = 0;
@@ -271,6 +275,10 @@ export class PhysicsAndNetcodeMethods {
         ) {
           f.fire = true;
           f.shotSeq = this.shotSeq + 1;
+          if (pending.recoilDrainedPitch || pending.recoilDrainedYaw) {
+            f.pitch = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, this.pitch - (pending.recoilDrainedPitch || 0)));
+            f.yaw = this.yaw - (pending.recoilDrainedYaw || 0);
+          }
         }
       }
 
@@ -798,12 +806,12 @@ export class PhysicsAndNetcodeMethods {
 
     // Apply pending weapon recoil impulse and auto-recover smoothly after firing stops
     const effectiveFireRateMs = getEffectiveFireRateMs(cfg, this.isAiming);
-    const recDelay = cfg.recoilRecoveryDelayMs || (effectiveFireRateMs + 35);
-    const stanceRecBoost = this.prone ? 1.35 : (this.crouching && !this.isSliding) ? 1.18 : 1.0;
+    const recDelay = Math.max(cfg.recoilRecoveryDelayMs || 0, effectiveFireRateMs + 28);
+    const stanceRecBoost = this.prone ? 1.30 : (this.crouching && !this.isSliding) ? 1.15 : 1.0;
     this.crosshairRecoilKick = Math.max(0, this.crosshairRecoilKick - dt * (cfg.recoilRecovery || 14.0) * stanceRecBoost * 0.018);
 
     if (this.pendingRecoilPitch || this.pendingRecoilYaw) {
-      const kickStep = Math.min(1, dt * 36);
+      const kickStep = Math.min(1, dt * 42);
       const dp = this.pendingRecoilPitch * kickStep;
       const dy = this.pendingRecoilYaw * kickStep;
       this.pendingRecoilPitch -= dp;
@@ -812,9 +820,14 @@ export class PhysicsAndNetcodeMethods {
       if (Math.abs(this.pendingRecoilYaw) < 1e-5) this.pendingRecoilYaw = 0;
       const prevPitch = this.pitch;
       this.pitch = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, this.pitch + dp));
-      this.accumulatedRecoilPitch += (this.pitch - prevPitch);
+      const appliedPitch = this.pitch - prevPitch;
+      this.accumulatedRecoilPitch += appliedPitch;
       this.yaw += dy;
       this.accumulatedRecoilYaw += dy;
+      if (this.pendingFire) {
+        this.pendingFire.recoilDrainedPitch = (this.pendingFire.recoilDrainedPitch || 0) + appliedPitch;
+        this.pendingFire.recoilDrainedYaw = (this.pendingFire.recoilDrainedYaw || 0) + dy;
+      }
     }
 
     if (now - this.lastShotAt > recDelay) {

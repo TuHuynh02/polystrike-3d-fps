@@ -1,4 +1,5 @@
 import * as THREE from '../three.js';
+import { roundedBox } from './roundedBox.js';
 
 const WEAPON_TEX_CACHE = new Map();
 let WATCH_DIAL_TEX = null;
@@ -191,13 +192,13 @@ function getWatchDialTexture() {
 // ==================== SHARED GUNSMITH SUB-ASSEMBLY BUILDERS ====================
 export function buildPicatinnyRail(length, yPos, zCenter, mat, toothCount = 12) {
   const railGroup = new THREE.Group();
-  const base = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.010, length), mat);
+  const base = new THREE.Mesh(roundedBox(0.034, 0.010, length), mat);
   base.position.set(0, yPos, zCenter);
   railGroup.add(base);
 
   const toothSpan = length * 0.92;
   const toothLen = (toothSpan / toothCount) * 0.55;
-  const toothGeo = new THREE.BoxGeometry(0.042, 0.008, toothLen);
+  const toothGeo = roundedBox(0.042, 0.008, toothLen);
   for (let i = 0; i < toothCount; i++) {
     const tz = zCenter - toothSpan / 2 + (i / Math.max(1, toothCount - 1)) * toothSpan;
     const tooth = new THREE.Mesh(toothGeo, mat);
@@ -230,7 +231,7 @@ export function buildErgonomicGripAndTrigger(yPos, zPos, gripMat, metalMat, bore
   const selectorPin = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.056, 12), metalMat);
   selectorPin.rotation.z = Math.PI / 2;
   selectorPin.position.set(0, 0.012, -0.008);
-  const selectorLever = new THREE.Mesh(new THREE.BoxGeometry(0.060, 0.007, 0.024), boreMat);
+  const selectorLever = new THREE.Mesh(roundedBox(0.060, 0.007, 0.024), boreMat);
   selectorLever.position.set(0, 0.012, -0.015);
   selectorLever.rotation.x = 0.25;
 
@@ -263,13 +264,13 @@ export function buildCurvedMagazine(segments, width, depth, segHeight, curveStep
 
   for (let i = 0; i < segments; i++) {
     // Contoured rounded-edge magazine segment
-    const seg = new THREE.Mesh(new THREE.BoxGeometry(width, segHeight, depth), bodyMat);
+    const seg = new THREE.Mesh(roundedBox(width, segHeight, depth), bodyMat);
     seg.position.set(0, curY, curZ);
     seg.rotation.x = curAngle;
     magGroup.add(seg);
 
     // Side reinforcement stamping ribs
-    const rib = new THREE.Mesh(new THREE.BoxGeometry(width + 0.006, segHeight * 0.26, depth * 0.78), ribMat);
+    const rib = new THREE.Mesh(roundedBox(width + 0.006, segHeight * 0.26, depth * 0.78), ribMat);
     rib.position.set(0, curY, curZ);
     rib.rotation.x = curAngle;
     magGroup.add(rib);
@@ -280,7 +281,7 @@ export function buildCurvedMagazine(segments, width, depth, segHeight, curveStep
   }
 
   // Flared Floorplate with Magpul Ranger Pull Loop
-  const floorPlate = new THREE.Mesh(new THREE.BoxGeometry(width + 0.010, 0.022, depth + 0.014), floorMat);
+  const floorPlate = new THREE.Mesh(roundedBox(width + 0.010, 0.022, depth + 0.014), floorMat);
   floorPlate.position.set(0, curY + 0.012, curZ);
   floorPlate.rotation.x = curAngle;
   const pullLoop = new THREE.Mesh(new THREE.TorusGeometry(0.018, 0.0045, 6, 12, Math.PI), floorMat);
@@ -323,9 +324,9 @@ export function buildDetailedOptic(type, yPos, zPos, darkMetal, gunMetal, accent
   });
 
   // Compact under-optic Picatinny rail saddle & upper receiver crown visible at bottom of ADS sight picture
-  const railSaddle = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.010, 0.096), darkMetal);
+  const railSaddle = new THREE.Mesh(roundedBox(0.038, 0.010, 0.096), darkMetal);
   railSaddle.position.set(0, -0.005, 0);
-  const receiverCrown = new THREE.Mesh(new THREE.BoxGeometry(0.064, 0.024, 0.110), gunMetal);
+  const receiverCrown = new THREE.Mesh(roundedBox(0.064, 0.024, 0.110), gunMetal);
   receiverCrown.position.set(0, -0.022, 0);
   opticGroup.add(railSaddle, receiverCrown);
 
@@ -334,13 +335,13 @@ export function buildDetailedOptic(type, yPos, zPos, darkMetal, gunMetal, accent
 
   if (type === 'reflex') {
     // Kobra / Aimpoint Open Reflex Red-Dot Housing with Wide Clear Lens & Slim Hood
-    const riserMount = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.010, 0.072), darkMetal);
+    const riserMount = new THREE.Mesh(roundedBox(0.044, 0.010, 0.072), darkMetal);
     riserMount.position.set(0, 0.002, -0.004);
     const clampBolt = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.050, 8), gunMetal);
     clampBolt.rotation.z = Math.PI / 2;
     clampBolt.position.set(0, 0.002, 0.008);
 
-    const emitterDeck = new THREE.Mesh(new THREE.BoxGeometry(0.054, 0.007, 0.064), gunMetal);
+    const emitterDeck = new THREE.Mesh(roundedBox(0.054, 0.007, 0.064), gunMetal);
     emitterDeck.position.set(0, 0.010, -0.004);
 
     const windageDial = new THREE.Mesh(new THREE.CylinderGeometry(0.0065, 0.0065, 0.010, 10), darkMetal);
@@ -348,9 +349,9 @@ export function buildDetailedOptic(type, yPos, zPos, darkMetal, gunMetal, accent
     windageDial.position.set(0.029, 0.010, -0.014);
 
     // Slim side protective pillars & wide-aperture top reflex arch (depth 14mm so zero tunnel vision)
-    const pillarL = new THREE.Mesh(new THREE.BoxGeometry(0.0038, 0.028, 0.014), hoodMetal);
+    const pillarL = new THREE.Mesh(roundedBox(0.0038, 0.028, 0.014), hoodMetal);
     pillarL.position.set(-0.0295, 0.026, -0.006);
-    const pillarR = new THREE.Mesh(new THREE.BoxGeometry(0.0038, 0.028, 0.014), hoodMetal);
+    const pillarR = new THREE.Mesh(roundedBox(0.0038, 0.028, 0.014), hoodMetal);
     pillarR.position.set(0.0295, 0.026, -0.006);
 
     const archFrame = new THREE.Mesh(
@@ -387,21 +388,21 @@ export function buildDetailedOptic(type, yPos, zPos, darkMetal, gunMetal, accent
     };
   } else {
     // EOTech EXPS3 Holographic Weapon Sight — Slim 20mm Hood Depth & Wide Clear Rectangular Window
-    const baseMount = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.010, 0.074), gunMetal);
+    const baseMount = new THREE.Mesh(roundedBox(0.056, 0.010, 0.074), gunMetal);
     baseMount.position.set(0, 0.002, 0.002);
     const batteryCyl = new THREE.Mesh(new THREE.CylinderGeometry(0.0065, 0.0065, 0.052, 10), darkMetal);
     batteryCyl.rotation.z = Math.PI / 2;
     batteryCyl.position.set(0, 0.007, -0.026);
 
-    const hoodBase = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.004, 0.020), darkMetal);
+    const hoodBase = new THREE.Mesh(roundedBox(0.062, 0.004, 0.020), darkMetal);
     hoodBase.position.set(0, 0.013, 0.004);
 
     // Slim aluminum protective hood frame (wide 58mm x 45mm sight window centered at y = 0.038)
-    const hoodLeft = new THREE.Mesh(new THREE.BoxGeometry(0.0042, 0.048, 0.020), hoodMetal);
+    const hoodLeft = new THREE.Mesh(roundedBox(0.0042, 0.048, 0.020), hoodMetal);
     hoodLeft.position.set(-0.031, 0.038, 0.004);
-    const hoodRight = new THREE.Mesh(new THREE.BoxGeometry(0.0042, 0.048, 0.020), hoodMetal);
+    const hoodRight = new THREE.Mesh(roundedBox(0.0042, 0.048, 0.020), hoodMetal);
     hoodRight.position.set(0.031, 0.038, 0.004);
-    const hoodTopBar = new THREE.Mesh(new THREE.BoxGeometry(0.066, 0.0042, 0.020), hoodMetal);
+    const hoodTopBar = new THREE.Mesh(roundedBox(0.066, 0.0042, 0.020), hoodMetal);
     hoodTopBar.position.set(0, 0.062, 0.004);
 
     const hoodTopArch = new THREE.Mesh(

@@ -1,7 +1,7 @@
 import {
+  DEFAULT_LOADOUT,
   DEFAULT_MAP_ID,
   PRIMARY_WEAPONS,
-  SECONDARY_WEAPONS,
   WEAPONS,
   getMapConfig
 } from '../shared.js';
@@ -157,64 +157,136 @@ import {
   updateMapHud
 } from './hudController.js';
 
-export function renderLoadoutModal() {
-  if (!loadoutPrimaryGrid || !loadoutSecondaryGrid) return;
+const WEAPON_SILHOUETTE_SVGS = {
+  rifle: `<svg class="weapon-silhouette-svg" viewBox="0 0 240 84" xmlns="http://www.w3.org/2000/svg" focusable="false" aria-hidden="true">
+    <path fill="currentColor" opacity="0.88" d="M14,34 L54,30 L54,43 L20,54 L12,50 Z" />
+    <path fill="currentColor" d="M54,26 L124,26 L128,31 L126,44 L54,44 Z" />
+    <path fill="currentColor" opacity="0.9" d="M74,16 L98,16 L100,26 L72,26 Z" />
+    <path fill="currentColor" d="M58,44 L69,44 L61,67 L49,65 Z" />
+    <path fill="currentColor" opacity="0.75" d="M69,44 L82,44 L80,52 L67,52 Z" />
+    <path fill="currentColor" d="M84,43 L102,43 C106,56 114,68 123,75 L108,79 C97,70 88,57 84,43 Z" />
+    <path fill="currentColor" opacity="0.92" d="M126,25 L164,25 L164,30 L126,30 Z M126,31 L168,31 L166,41 L126,42 Z" />
+    <path fill="currentColor" d="M164,25 L173,31 L168,35 L162,30 Z M168,31.5 L216,31.5 L216,35.5 L168,35.5 Z M168,37 L212,37 L212,38.8 L168,38.8 Z M198,19 L205,19 L209,32 L196,32 Z M216,30 L229,30 L229,37 L216,37 Z" />
+  </svg>`,
+  m4a1: `<svg class="weapon-silhouette-svg" viewBox="0 0 240 84" xmlns="http://www.w3.org/2000/svg" focusable="false" aria-hidden="true">
+    <path fill="currentColor" opacity="0.9" d="M14,27 L48,27 L48,40 L26,53 L14,51 Z M48,29 L60,29 L60,36 L48,36 Z" />
+    <path fill="currentColor" d="M60,25 L118,25 L118,44 L94,46 L88,43 L60,43 Z" />
+    <path fill="currentColor" opacity="0.92" d="M76,14 L102,14 L104,25 L74,25 Z M148,19 L168,19 L168,26 L148,26 Z" />
+    <path fill="currentColor" d="M64,43 L74,43 L67,66 L56,64 Z" />
+    <path fill="currentColor" opacity="0.75" d="M74,43 L88,43 L86,50 L73,50 Z" />
+    <path fill="currentColor" d="M92,45 L109,45 C111,56 115,66 120,73 L105,76 C99,68 94,57 92,45 Z" />
+    <path fill="currentColor" d="M118,26 L174,26 L174,39 L118,39 Z M136,39 L160,39 L152,47 L132,44 Z" />
+    <path fill="currentColor" opacity="0.95" d="M174,27.5 L180,27.5 L180,37.5 L174,37.5 Z M180,28.5 L228,28.5 L228,36.5 L180,36.5 Z" />
+  </svg>`,
+  scar: `<svg class="weapon-silhouette-svg" viewBox="0 0 240 84" xmlns="http://www.w3.org/2000/svg" focusable="false" aria-hidden="true">
+    <path fill="currentColor" opacity="0.9" d="M12,24 L30,21 L56,24 L56,44 L22,52 L12,48 Z M56,25 L62,25 L62,42 L56,42 Z" />
+    <path fill="currentColor" d="M62,21 L172,21 L172,38 L62,38 Z M66,38 L116,38 L114,43 L66,43 Z" />
+    <path fill="currentColor" opacity="0.92" d="M82,11 L108,11 L110,21 L80,21 Z" />
+    <path fill="currentColor" d="M66,41 L77,41 L70,63 L59,61 Z" />
+    <path fill="currentColor" d="M94,41 L114,41 L114,70 L94,70 Z M99,70 L109,70 L107,75 L101,75 Z" />
+    <path fill="currentColor" opacity="0.9" d="M142,38 L152,38 L151,58 L143,58 Z" />
+    <path fill="currentColor" d="M172,28 L214,28 L214,33 L172,33 Z M174,20 L182,20 L182,28 L174,28 Z M214,26.5 L228,26.5 L228,34.5 L214,34.5 Z" />
+  </svg>`,
+  smg: `<svg class="weapon-silhouette-svg" viewBox="0 0 240 84" xmlns="http://www.w3.org/2000/svg" focusable="false" aria-hidden="true">
+    <path fill="currentColor" opacity="0.88" d="M24,25 L70,26 L70,31 L33,31 L31,44 L70,36 L70,41 L24,50 Z" />
+    <path fill="currentColor" d="M70,22 L158,22 L158,34 L70,34 Z" />
+    <path fill="currentColor" opacity="0.92" d="M90,12 L116,12 L118,22 L88,22 Z" />
+    <path fill="currentColor" d="M76,34 L86,34 L84,56 L112,56 L112,61 L74,61 L72,34 Z" />
+    <path fill="currentColor" d="M112,34 L150,34 L142,62 L108,62 Z" />
+    <path fill="currentColor" opacity="0.95" d="M124,58 L138,58 L126,81 L111,79 Z" />
+    <path fill="currentColor" d="M158,26 L196,26 L196,32 L158,32 Z M196,25 L208,25 L208,33 L196,33 Z" />
+  </svg>`,
+  shotgun: `<svg class="weapon-silhouette-svg" viewBox="0 0 240 84" xmlns="http://www.w3.org/2000/svg" focusable="false" aria-hidden="true">
+    <path fill="currentColor" opacity="0.9" d="M12,36 L56,29 L56,41 L20,56 L12,52 Z" />
+    <path fill="currentColor" d="M54,39 L64,39 L58,60 L48,58 Z" />
+    <path fill="currentColor" d="M56,25 L122,25 L122,40 L56,40 Z" />
+    <path fill="currentColor" opacity="0.9" d="M78,16 L96,16 L98,25 L76,25 Z" />
+    <path fill="currentColor" d="M122,26 L218,26 L218,31 L122,31 Z M122,33 L212,33 L212,38 L122,38 Z M196,25 L202,25 L202,39 L196,39 Z" />
+    <path fill="currentColor" opacity="0.95" d="M134,32 L178,32 L178,43 L134,43 Z" />
+    <path fill="currentColor" d="M206,20 L212,20 L214,26 L204,26 Z M218,25 L228,25 L228,32 L218,32 Z" />
+  </svg>`,
+  sniper: `<svg class="weapon-silhouette-svg" viewBox="0 0 240 84" xmlns="http://www.w3.org/2000/svg" focusable="false" aria-hidden="true">
+    <path fill="currentColor" opacity="0.9" d="M10,27 L66,27 L66,46 L52,58 L24,58 L24,48 L10,48 Z M24,21 L52,21 L54,27 L22,27 Z M18,48 L24,48 L24,62 L16,62 Z" />
+    <path fill="currentColor" d="M66,27 L148,27 L144,41 L66,43 Z" />
+    <path fill="currentColor" opacity="0.95" d="M68,12 L84,14 L126,14 L144,9 L156,9 L156,22 L144,22 L126,18 L84,18 L68,20 Z M101,9 L109,9 L109,14 L101,14 Z M86,18 L92,18 L92,27 L86,27 Z M118,18 L124,18 L124,27 L118,27 Z" />
+    <path fill="currentColor" d="M86,43 L110,43 L108,58 L86,58 Z" />
+    <path fill="currentColor" opacity="0.88" d="M138,41 L176,45 L176,49 L136,44 Z" />
+    <path fill="currentColor" d="M148,29 L218,29 L218,34 L148,34 Z M218,26 L232,26 L232,37 L218,37 Z" />
+  </svg>`,
+  lmg: `<svg class="weapon-silhouette-svg" viewBox="0 0 240 84" xmlns="http://www.w3.org/2000/svg" focusable="false" aria-hidden="true">
+    <path fill="currentColor" opacity="0.9" d="M14,24 L24,24 L24,48 L14,48 Z M24,27 L58,27 L58,31 L24,31 Z M24,40 L58,40 L58,44 L24,44 Z" />
+    <path fill="currentColor" d="M58,20 L132,20 L132,44 L58,44 Z" />
+    <path fill="currentColor" opacity="0.92" d="M76,10 L102,10 L104,20 L74,20 Z M128,13 L144,13 L144,20 L138,20 L138,16 L128,16 Z" />
+    <path fill="currentColor" d="M64,44 L75,44 L68,66 L57,64 Z" />
+    <path fill="currentColor" opacity="0.95" d="M88,44 L128,44 L128,74 L88,74 Z" />
+    <path fill="currentColor" d="M132,22 L182,22 L182,41 L132,41 Z M146,41 L190,46 L190,50 L146,45 Z" />
+    <path fill="currentColor" d="M182,25 L218,25 L218,31 L182,31 Z M182,33 L208,33 L208,37 L182,37 Z M218,23.5 L229,23.5 L229,32.5 L218,32.5 Z" />
+  </svg>`
+};
 
-  const buildWeaponCardHtml = (wId, isSelected, slotTag) => {
+export function getWeaponSilhouetteSvg(weaponId) {
+  return WEAPON_SILHOUETTE_SVGS[weaponId] || WEAPON_SILHOUETTE_SVGS.rifle;
+}
+
+export function renderLoadoutModal() {
+  if (!loadoutPrimaryGrid) return;
+
+  const activePrimary = PRIMARY_WEAPONS.includes(appState.selectedLoadout?.primary)
+    ? appState.selectedLoadout.primary
+    : (DEFAULT_LOADOUT?.primary || 'rifle');
+
+  const buildPrimaryWeaponCardHtml = (wId, isSelected) => {
     const w = WEAPONS[wId];
     if (!w) return '';
-    const st = w.stats || { damage: 70, fireRate: 70, recoilControl: 70, mobility: 70 };
-    const ammoTag = w.magSize > 1 ? `${ w.magSize }/${ w.reserveAmmo ?? w.magSize * 3 }` : 'MELEE';
+    const categoryTag = escapeHtml(w.category || 'PRI');
+    const safeName = escapeHtml(w.name);
+    const silhouetteSvg = getWeaponSilhouetteSvg(w.id);
     return `
-      <button type="button" class="weapon-option ${ isSelected ? 'active' : '' }" data-loadout-weapon="${ w.id }" data-loadout-slot="${ w.slot }">
+      <button type="button" class="weapon-option loadout-weapon-card ${ isSelected ? 'active' : '' }" data-loadout-weapon="${ w.id }" data-loadout-slot="${ w.slot }" aria-pressed="${ isSelected ? 'true' : 'false' }">
         <div class="weapon-opt-top">
-          <span class="weapon-key">${ slotTag || w.category }</span>
-          <span class="weapon-dmg-pill">${ w.damage } DMG • ${ ammoTag }</span>
+          <span class="weapon-key">${ categoryTag }</span>
         </div>
-        <span class="weapon-name">${ w.name }</span>
-        <div class="weapon-spec-bars" aria-hidden="true">
-          <span class="spec-chip"><i>DMG</i><b style="--pct:${ st.damage }%"></b></span>
-          <span class="spec-chip"><i>ROF</i><b style="--pct:${ st.fireRate }%"></b></span>
-          <span class="spec-chip"><i>CTL</i><b style="--pct:${ st.recoilControl }%"></b></span>
+        <div class="weapon-silhouette" data-weapon-silhouette="${ w.id }" aria-hidden="true">
+          ${ silhouetteSvg }
         </div>
+        <span class="weapon-name">${ safeName }</span>
       </button>
     `;
   };
 
   loadoutPrimaryGrid.innerHTML = PRIMARY_WEAPONS.map((wId) =>
-    buildWeaponCardHtml(wId, appState.selectedLoadout.primary === wId, WEAPONS[wId]?.category)
+    buildPrimaryWeaponCardHtml(wId, activePrimary === wId)
   ).join('');
 
-  const secondaryHtml = SECONDARY_WEAPONS.map((wId) =>
-    buildWeaponCardHtml(wId, appState.selectedLoadout.secondary === wId, 'PHỤ [2]')
-  ).join('');
-  const meleeHtml = buildWeaponCardHtml('knife', true, 'DAO [3]');
-  loadoutSecondaryGrid.innerHTML = secondaryHtml + meleeHtml;
+  if (loadoutSecondaryGrid) {
+    loadoutSecondaryGrid.innerHTML = '';
+    loadoutSecondaryGrid.classList?.add('hidden');
+  }
 }
 
 export function toggleLoadoutModal(forceOpen = null) {
-  if (!appState.game.inMatch || !loadoutModal) return;
+  if (!appState.game?.inMatch || !loadoutModal) return;
   const isCurrentlyHidden = loadoutModal.classList.contains('hidden');
   const shouldOpen = forceOpen !== null ? forceOpen : isCurrentlyHidden;
 
   if (shouldOpen) {
     renderLoadoutModal();
-    pauseModal.classList.add('hidden');
+    pauseModal?.classList?.add('hidden');
     loadoutModal.classList.remove('hidden');
-    appState.game.exitPointerLock();
+    appState.game.exitPointerLock?.();
   } else {
     loadoutModal.classList.add('hidden');
-    if (deathOverlay.classList.contains('hidden') && matchEndModal.classList.contains('hidden')) {
-      appState.game.requestPointerLock();
+    if (deathOverlay?.classList?.contains('hidden') && matchEndModal?.classList?.contains('hidden')) {
+      appState.game.requestPointerLock?.();
     }
   }
 }
 
 export function syncLobbyWeaponSelectionUi(weaponId) {
   if (!WEAPONS[weaponId]) return;
-  if (weaponGrid) {
+  if (weaponGrid?.querySelectorAll) {
     weaponGrid.querySelectorAll('.weapon-option').forEach((el) => {
-      el.classList.toggle('active', el.dataset.weapon === weaponId);
+      el.classList?.toggle('active', el.dataset?.weapon === weaponId);
     });
   }
   if (showcaseWeaponName) {
@@ -223,9 +295,9 @@ export function syncLobbyWeaponSelectionUi(weaponId) {
 }
 
 export function syncLobbyMapSelectionUi(mapId) {
-  if (mapGrid) {
+  if (mapGrid?.querySelectorAll) {
     mapGrid.querySelectorAll('.map-option').forEach((el) => {
-      el.classList.toggle('active', el.dataset.map === mapId);
+      el.classList?.toggle('active', el.dataset?.map === mapId);
     });
   }
   if (pauseMapSelect) {
@@ -234,14 +306,23 @@ export function syncLobbyMapSelectionUi(mapId) {
 }
 
 export function applySelectedLoadoutAndNotify() {
-  appState.game.setLoadout(appState.selectedLoadout);
+  const activePrimary = PRIMARY_WEAPONS.includes(appState.selectedLoadout?.primary)
+    ? appState.selectedLoadout.primary
+    : (DEFAULT_LOADOUT?.primary || 'rifle');
+  const standardSecondary = DEFAULT_LOADOUT?.secondary || 'pistol';
+  const standardMelee = DEFAULT_LOADOUT?.melee || 'knife';
+  appState.selectedLoadout.primary = activePrimary;
+  appState.selectedLoadout.secondary = standardSecondary;
+  appState.selectedLoadout.melee = standardMelee;
+  appState.selectedStartingWeapon = activePrimary;
+  appState.game?.setLoadout?.(appState.selectedLoadout);
   syncHotbarSlotsHud();
-  syncLobbyWeaponSelectionUi(appState.selectedLoadout.primary);
+  syncLobbyWeaponSelectionUi(activePrimary);
   saveUserPrefs({
-    primaryWeapon: appState.selectedLoadout.primary,
-    secondaryWeapon: appState.selectedLoadout.secondary
+    primaryWeapon: activePrimary,
+    secondaryWeapon: standardSecondary
   });
-  appState.socket.emit('updateLoadout', appState.selectedLoadout);
+  appState.socket?.emit?.('updateLoadout', appState.selectedLoadout);
   renderLoadoutModal();
 }
 
@@ -256,10 +337,14 @@ export function applyRestoredUserPrefs() {
       showcaseOperatorName.textContent = (userPrefs.playerName.trim() || 'STRIKER').toUpperCase();
     }
 
-    // 2. Primary & Secondary Weapons (Lobby Grid, 3D Showcase, Hotbar & Loadout Modal)
+    // 2. Primary Weapon & Standardized Secondary/Melee Loadout (Lobby Grid, 3D Showcase, Hotbar & Loadout Modal)
+    const standardSecondary = DEFAULT_LOADOUT?.secondary || 'pistol';
+    const standardMelee = DEFAULT_LOADOUT?.melee || 'knife';
     appState.selectedStartingWeapon = userPrefs.primaryWeapon;
     appState.selectedLoadout.primary = userPrefs.primaryWeapon;
-    appState.selectedLoadout.secondary = userPrefs.secondaryWeapon;
+    appState.selectedLoadout.secondary = standardSecondary;
+    appState.selectedLoadout.melee = standardMelee;
+    userPrefs.secondaryWeapon = standardSecondary;
     syncLobbyWeaponSelectionUi(appState.selectedStartingWeapon);
     appState.game.setLoadout(appState.selectedLoadout, appState.selectedStartingWeapon);
     appState.game.setLobbyWeapon(appState.selectedStartingWeapon);
@@ -315,11 +400,15 @@ export function requestJoinRoom({ mode = 'public', roomCode = '' }) {
   const rawName = playerNameInput.value.trim();
   const name = (rawName.replace(/[<>&"'`]/g, '').trim().slice(0, 16)) || userPrefs.playerName || 'Striker';
 
+  const standardSecondary = DEFAULT_LOADOUT?.secondary || 'pistol';
+  const standardMelee = DEFAULT_LOADOUT?.melee || 'knife';
   appState.selectedLoadout.primary = appState.selectedStartingWeapon;
+  appState.selectedLoadout.secondary = standardSecondary;
+  appState.selectedLoadout.melee = standardMelee;
   saveUserPrefs({
     playerName: name,
     primaryWeapon: appState.selectedStartingWeapon,
-    secondaryWeapon: appState.selectedLoadout.secondary,
+    secondaryWeapon: standardSecondary,
     operatorColor: appState.selectedOperatorColor,
     selectedMap: appState.selectedMapId
   });
@@ -352,6 +441,7 @@ export function leaveActiveRoom(opts = {}) {
   appState.currentLocalReady = false;
   appState.currentTeamScores = { alpha: 0, bravo: 0 };
   appState.latestPlayers = [];
+  appState.playerStateCache.clear();
   appState.lastScoreboardSig = '';
   appState.hudCache.leaderText = '';
   if (appState.respawnInterval) {
@@ -518,19 +608,7 @@ if (loadoutPrimaryGrid) {
     if (WEAPONS[wId]?.slot === 1) {
       appState.selectedLoadout.primary = wId;
       appState.selectedStartingWeapon = wId;
-      appState.game.setLobbyWeapon(wId);
-      applySelectedLoadoutAndNotify();
-    }
-  });
-}
-
-if (loadoutSecondaryGrid) {
-  loadoutSecondaryGrid.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-loadout-weapon]');
-    if (!btn) return;
-    const wId = btn.dataset.loadoutWeapon;
-    if (WEAPONS[wId]?.slot === 2) {
-      appState.selectedLoadout.secondary = wId;
+      appState.game?.setLobbyWeapon?.(wId);
       applySelectedLoadoutAndNotify();
     }
   });
@@ -540,7 +618,7 @@ if (btnSaveLoadout) {
   btnSaveLoadout.addEventListener('click', () => {
     applySelectedLoadoutAndNotify();
     toggleLoadoutModal(false);
-    showToast(`🎒 ${ WEAPONS[appState.selectedLoadout.primary].name } + ${ WEAPONS[appState.selectedLoadout.secondary].name }`);
+    showToast(`🎒 ${ WEAPONS[appState.selectedLoadout.primary]?.name || appState.selectedLoadout.primary }`);
   });
 }
 
@@ -582,13 +660,23 @@ if (lobbyGameModeGrid) {
 weaponGrid.addEventListener('click', (e) => {
   const btn = e.target.closest('.weapon-option');
   if (!btn) return;
-  appState.selectedStartingWeapon = btn.dataset.weapon;
-  appState.selectedLoadout.primary = appState.selectedStartingWeapon;
+  const wId = btn.dataset.weapon;
+  if (!PRIMARY_WEAPONS.includes(wId)) return;
+  const standardSecondary = DEFAULT_LOADOUT?.secondary || 'pistol';
+  const standardMelee = DEFAULT_LOADOUT?.melee || 'knife';
+  appState.selectedStartingWeapon = wId;
+  appState.selectedLoadout.primary = wId;
+  appState.selectedLoadout.secondary = standardSecondary;
+  appState.selectedLoadout.melee = standardMelee;
   syncLobbyWeaponSelectionUi(appState.selectedStartingWeapon);
-  appState.game.setLoadout(appState.selectedLoadout);
-  appState.game.setLobbyWeapon(appState.selectedStartingWeapon);
+  appState.game?.setLoadout?.(appState.selectedLoadout);
+  appState.game?.setLobbyWeapon?.(appState.selectedStartingWeapon);
   syncHotbarSlotsHud();
-  saveUserPrefs({ primaryWeapon: appState.selectedStartingWeapon });
+  renderLoadoutModal();
+  saveUserPrefs({
+    primaryWeapon: appState.selectedStartingWeapon,
+    secondaryWeapon: standardSecondary
+  });
 });
 
 // Interactive 3D Humanoid Showcase Turntable & Controls in Lobby
@@ -650,6 +738,11 @@ if (btnShowcaseCrouch) {
 
 if (btnShowcaseFire) {
   btnShowcaseFire.addEventListener('click', () => {
+    if (!appState.sfx.enabled) {
+      appState.sfx.enabled = true;
+      if (soundCheckbox) soundCheckbox.checked = true;
+      saveUserPrefs({ soundEnabled: true });
+    }
     appState.sfx.ensureContext();
     appState.sfx.playShot(appState.selectedStartingWeapon || 'rifle', 0.72);
     appState.game.triggerLobbyTestFire();
@@ -750,6 +843,9 @@ sensSlider.addEventListener('change', handleSensSliderChange);
 
 soundCheckbox.addEventListener('change', () => {
   appState.sfx.enabled = soundCheckbox.checked;
+  if (appState.sfx.enabled) {
+    appState.sfx.ensureContext();
+  }
   saveUserPrefs({ soundEnabled: soundCheckbox.checked });
 });
 

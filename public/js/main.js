@@ -572,6 +572,19 @@ window.addEventListener('blur', () => {
 });
 
 
+const unlockAudioOnGesture = () => {
+  if (appState.sfx?.enabled && (!appState.sfx.ctx || appState.sfx.ctx.state !== 'running')) {
+    appState.sfx.ensureContext();
+  }
+};
+window.addEventListener('pointerdown', unlockAudioOnGesture, { capture: true, passive: true });
+window.addEventListener('mousedown', unlockAudioOnGesture, { capture: true, passive: true });
+window.addEventListener('mouseup', unlockAudioOnGesture, { capture: true, passive: true });
+window.addEventListener('click', unlockAudioOnGesture, { capture: true, passive: true });
+window.addEventListener('keydown', unlockAudioOnGesture, { capture: true, passive: true });
+window.addEventListener('touchstart', unlockAudioOnGesture, { capture: true, passive: true });
+window.addEventListener('touchend', unlockAudioOnGesture, { capture: true, passive: true });
+
 applyRestoredUserPrefs();
 initLobbyAndModalListeners();
 initSocketEvents();

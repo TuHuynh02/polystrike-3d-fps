@@ -7,6 +7,7 @@ export class AudioCoreMethods {
       globalThis.webkitAudioContext;
     if (
       !this.ctx ||
+      this.ctx.state === 'closed' ||
       (this.ctx === this._autoCreatedCtx && this._ctxCtor && AudioCtx && this._ctxCtor !== AudioCtx)
     ) {
       if (!AudioCtx) return null;
@@ -18,8 +19,15 @@ export class AudioCoreMethods {
     if ((!this.noiseBuffer || this._noiseBufferCtx !== this.ctx) && this.ctx) {
       this.createNoiseBuffer();
     }
-    if (this.ctx.state === 'suspended' && typeof this.ctx.resume === 'function') {
-      this.ctx.resume().catch(() => {});
+    if (this.ctx.state && this.ctx.state !== 'running' && typeof this.ctx.resume === 'function') {
+      try {
+        const res = this.ctx.resume();
+        if (res && typeof res.catch === 'function') {
+          res.catch(() => {});
+        }
+      } catch {
+        // Ignore resume errors before user gesture
+      }
     }
     this.flushPendingCleanups();
     return this.ctx;
@@ -41,7 +49,12 @@ export class AudioCoreMethods {
         this._pendingCleanups.splice(i, 1);
         continue;
       }
-      const perfExpired = forceAll || nowPerf >= entry.expireAtPerf;
+      const isLiveSuspendedCtx =
+        entry.ctx &&
+        typeof entry.ctx.state === 'string' &&
+        entry.ctx.state !== 'running' &&
+        entry.ctx.state !== 'closed';
+      const perfExpired = forceAll || (!isLiveSuspendedCtx && nowPerf >= entry.expireAtPerf);
       const ctxExpired =
         entry.ctx &&
         typeof entry.ctx.currentTime === 'number' &&
@@ -98,7 +111,7 @@ export class AudioCoreMethods {
     this._cleanupTickTimer = timer;
   }
 
-  _evictOverflowCleanups(maxEntries = 128) {
+  _evictOverflowCleanups(maxEntries = 512) {
     while (this._pendingCleanups.length > maxEntries) {
       const oldest = this._pendingCleanups.shift();
       if (!oldest || oldest.done) continue;
@@ -115,8 +128,10 @@ export class AudioCoreMethods {
     if (typeof cleanup !== 'function') return null;
     const dur = Number.isFinite(durationSec) ? Math.max(0, durationSec) : 0.25;
     const nowPerf = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    const delayMs = Math.max(1, Math.ceil(dur * 1000));
-    const expireAtPerf = nowPerf + dur * 1000;
+    const wakeGraceMs =
+      ctx && typeof ctx.state === 'string' && ctx.state !== 'running' ? 350 : 0;
+    const delayMs = Math.max(1, Math.ceil(dur * 1000) + wakeGraceMs);
+    const expireAtPerf = nowPerf + dur * 1000 + wakeGraceMs;
     const expireAtCtx = ctx && typeof ctx.currentTime === 'number' ? ctx.currentTime + dur : null;
     const entry = {
       chain: null,
@@ -127,10 +142,10 @@ export class AudioCoreMethods {
       done: false
     };
     this._pendingCleanups.push(entry);
-    if (this._pendingCleanups.length > 128) {
+    if (this._pendingCleanups.length > 512) {
       this.flushPendingCleanups();
-      if (this._pendingCleanups.length > 128) {
-        this._evictOverflowCleanups(128);
+      if (this._pendingCleanups.length > 512) {
+        this._evictOverflowCleanups(512);
       }
     }
     this._scheduleQueueFlush(delayMs);
@@ -191,8 +206,6 @@ export class AudioCoreMethods {
     }
 
     const nowPerf = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    const delayMs = Math.max(1, Math.ceil(dur * 1000));
-    const expireAtPerf = nowPerf + dur * 1000;
     const ctx =
       chain._ctx ||
       chain.gain?.context ||
@@ -200,6 +213,10 @@ export class AudioCoreMethods {
       chain.filter?.context ||
       chain.panner?.context ||
       this.ctx;
+    const wakeGraceMs =
+      ctx && typeof ctx.state === 'string' && ctx.state !== 'running' ? 350 : 0;
+    const delayMs = Math.max(1, Math.ceil(dur * 1000) + wakeGraceMs);
+    const expireAtPerf = nowPerf + dur * 1000 + wakeGraceMs;
     const expireAtCtx = ctx && typeof ctx.currentTime === 'number' ? ctx.currentTime + dur : null;
 
     let entry = chain._cleanupEntry;
@@ -218,8 +235,8 @@ export class AudioCoreMethods {
       };
       chain._cleanupEntry = entry;
       this._pendingCleanups.push(entry);
-      if (this._pendingCleanups.length > 128) {
-        this._evictOverflowCleanups(128);
+      if (this._pendingCleanups.length > 512) {
+        this._evictOverflowCleanups(512);
       }
     }
 

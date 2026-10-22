@@ -1,4 +1,5 @@
 import * as THREE from '../three.js';
+import { roundedBox } from './roundedBox.js';
 import {
   buildCurvedMagazine,
   buildDetailedOptic,
@@ -67,11 +68,11 @@ export function buildSidearmMeleeGeometry(weaponId, group, mats) {
     for (let b = 0; b < bladeSegs; b++) {
       const segW = 0.042 * (1 - b * 0.13);
       const segLen = 0.042;
-      const spine = new THREE.Mesh(new THREE.BoxGeometry(0.009, segW, segLen), darkMetal);
+      const spine = new THREE.Mesh(roundedBox(0.009, segW, segLen), darkMetal);
       spine.position.set(0, by, bz);
       spine.rotation.x = bAngle;
 
-      const bevelEdge = new THREE.Mesh(new THREE.BoxGeometry(0.005, segW * 0.48, segLen + 0.004), chromeMetal);
+      const bevelEdge = new THREE.Mesh(roundedBox(0.005, segW * 0.48, segLen + 0.004), chromeMetal);
       bevelEdge.position.set(0, by - segW * 0.35, bz - 0.004);
       bevelEdge.rotation.x = bAngle;
 
@@ -91,7 +92,7 @@ export function buildSidearmMeleeGeometry(weaponId, group, mats) {
 
     // Polymer/Steel Lower Frame with Dust Cover & Picatinny Accessory Rail
     const frame = new THREE.Mesh(
-      new THREE.BoxGeometry(isDeagle ? 0.068 : 0.060, 0.046, slideLen - 0.02),
+      roundedBox(isDeagle ? 0.068 : 0.060, 0.046, slideLen - 0.02),
       isDeagle ? darkMetal : polymerMat
     );
     frame.position.set(0, -0.016, -0.03);
@@ -128,7 +129,7 @@ export function buildSidearmMeleeGeometry(weaponId, group, mats) {
     boltMesh = new THREE.Group();
     const slideMat = isDeagle ? chromeMetal : gunMetal;
     const slideLower = new THREE.Mesh(
-      new THREE.BoxGeometry(isDeagle ? 0.078 : 0.066, isDeagle ? 0.056 : 0.048, slideLen),
+      roundedBox(isDeagle ? 0.078 : 0.066, isDeagle ? 0.056 : 0.048, slideLen),
       slideMat
     );
     const slideCrown = new THREE.Mesh(
@@ -139,13 +140,13 @@ export function buildSidearmMeleeGeometry(weaponId, group, mats) {
     slideCrown.scale.set(1, 1, 0.42);
     slideCrown.position.set(0, isDeagle ? 0.028 : 0.024, 0);
 
-    const ejectionPort = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.026, 0.068), isDeagle ? darkMetal : chromeMetal);
+    const ejectionPort = new THREE.Mesh(roundedBox(0.072, 0.026, 0.068), isDeagle ? darkMetal : chromeMetal);
     ejectionPort.position.set(0.005, 0.014, 0.01);
 
     // Rear Slide Cocking Serration Ribs
     for (let s = 0; s < 5; s++) {
       const rib = new THREE.Mesh(
-        new THREE.BoxGeometry(isDeagle ? 0.081 : 0.069, 0.038, 0.006),
+        roundedBox(isDeagle ? 0.081 : 0.069, 0.038, 0.006),
         darkMetal
       );
       rib.position.set(0, 0.004, 0.075 + s * 0.014);
@@ -160,7 +161,7 @@ export function buildSidearmMeleeGeometry(weaponId, group, mats) {
       boltMesh.add(selector);
     }
 
-    const frontSight = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.016, 0.020), darkMetal);
+    const frontSight = new THREE.Mesh(roundedBox(0.012, 0.016, 0.020), darkMetal);
     frontSight.position.set(0, isDeagle ? 0.044 : 0.038, -slideLen * 0.43);
     const frontDot = new THREE.Mesh(new THREE.SphereGeometry(0.004, 8, 8), reticleMat);
     frontDot.position.set(0, isDeagle ? 0.048 : 0.042, -slideLen * 0.42);
@@ -190,8 +191,8 @@ export function buildSidearmMeleeGeometry(weaponId, group, mats) {
     // Detachable Magazine (`magMesh` — Extended 33-Round Mag for Glock 18, Heavy Mag for Deagle/P9)
     magMesh = new THREE.Group();
     const pMagH = isGlock ? 0.25 : 0.16;
-    const pMagBody = new THREE.Mesh(new THREE.BoxGeometry(0.046, pMagH, 0.068), gunMetal);
-    const pMagBase = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.024, 0.082), darkMetal);
+    const pMagBody = new THREE.Mesh(roundedBox(0.046, pMagH, 0.068), gunMetal);
+    const pMagBase = new THREE.Mesh(roundedBox(0.058, 0.024, 0.082), darkMetal);
     pMagBase.position.set(0, -pMagH * 0.52, 0);
     magMesh.add(pMagBody, pMagBase);
     magMesh.position.set(0, -0.11, 0.085);

@@ -186,7 +186,7 @@ export const SHOT_REJECT_MESSAGES = {
 export function handleTeamLobbyState(data) {
   if (!appState.activeRoomCode || !data) return;
   if (Array.isArray(data.players)) {
-    appState.latestPlayers = data.players;
+    appState.latestPlayers = appState.playerStateCache.merge(data.players);
   }
   if (data.gameMode) {
     appState.currentRoomGameMode = data.gameMode === 'tdm' ? 'tdm' : 'ffa';
@@ -207,12 +207,37 @@ export function handleTeamLobbyState(data) {
 }
 
 export function measurePing() {
-  if (!appState.game.inMatch) return;
-  const start = performance.now();
+  if (!appState.game.inMatch && !appState.activeRoomCode) return;
+  if (!appState.socket?.connected) return;
+  const now = performance.now();
+  if (appState._pingInFlightAt && now - appState._pingInFlightAt < 4000) return;
+  appState._pingInFlightAt = now;
+  const start = now;
   appState.socket.emit('pingCheck', start, () => {
-    const rtt = Math.round(performance.now() - start);
+    appState._pingInFlightAt = 0;
+    const rawRtt = Math.max(0, Math.round(performance.now() - start));
+    if (!Array.isArray(appState._pingSamples)) {
+      appState._pingSamples = [];
+    }
+    const samples = appState._pingSamples;
+    samples.push(rawRtt);
+    if (samples.length > 3) samples.shift();
+    let filteredRtt = rawRtt;
+    if (samples.length === 3) {
+      const a = samples[0];
+      const b = samples[1];
+      const c = samples[2];
+      filteredRtt = Math.max(Math.min(a, b), Math.min(Math.max(a, b), c));
+    }
+    const prevRtt = Number(appState.currentPingMs);
+    const rtt = prevRtt > 0
+      ? Math.round(prevRtt * 0.6 + filteredRtt * 0.4)
+      : filteredRtt;
     appState.currentPingMs = rtt;
-    hudPing.textContent = String(rtt);
+    if (appState.hudCache.ping !== rtt) {
+      appState.hudCache.ping = rtt;
+      hudPing.textContent = String(rtt);
+    }
     appState.game.setNetworkRtt?.(rtt); // render clock: adds the one-way latency back into the server-time estimate
   });
 }
@@ -238,6 +263,7 @@ export function initSocketEvents() {
   });
 
 appState.socket.on('disconnect', () => {
+  appState._pingInFlightAt = 0;
   if (!appState.game.inMatch && !appState.activeRoomCode) showServerUnreachable();
 });
 appState.socket.on('connect', () => {
@@ -257,6 +283,8 @@ appState.socket.on('joinError', ({ message }) => {
 });
 
 appState.socket.on('roomJoined', (data) => {
+  appState._pingInFlightAt = 0;
+  appState._pingSamples = [];
   appState.activeRoomCode = data.roomCode;
   appState.game.localId = data.playerId;
   appState.currentRoomGameMode = data.gameMode === 'tdm' ? 'tdm' : 'ffa';
@@ -268,6 +296,7 @@ appState.socket.on('roomJoined', (data) => {
   appState.game.inMatch = !isWaitingTeamLobby;
   appState.game.setTeamState?.(appState.currentRoomGameMode, appState.currentLocalTeam);
   appState.game.clearAllRemotePlayers();
+  appState.game.snapshots?.configure?.(data.net); // server tick rate -> interpolation delay floor
 
   // Load room map geometry & update HUD map indicators
   const roomMapId = data.mapId || appState.selectedMapId || DEFAULT_MAP_ID;
@@ -318,7 +347,7 @@ appState.socket.on('roomJoined', (data) => {
   appState.game.syncBarrels?.(data.barrels || []);
   appState.game.syncDroppedWeapons(data.droppedWeapons || []);
   appState.game.syncGrenades?.(data.activeGrenades || []);
-  appState.latestPlayers = data.players || [];
+  appState.latestPlayers = appState.playerStateCache.merge(data.players);
   appState.game.syncPlayersState(appState.latestPlayers);
 
   // Switch UI from Lobby to Team Waiting Lobby or In-Match HUD
@@ -387,7 +416,7 @@ appState.socket.on('mapChanged', (data) => {
   appState.game.syncBarrels?.(data.barrels || []);
   appState.game.syncDroppedWeapons(data.droppedWeapons || []);
   appState.game.syncGrenades?.(data.activeGrenades || []);
-  appState.latestPlayers = data.players || [];
+  appState.latestPlayers = appState.playerStateCache.merge(data.players);
   appState.game.syncPlayersState(appState.latestPlayers);
 
   appState.localMultiKillCount = 0;
@@ -487,7 +516,8 @@ appState.socket.on('stateUpdate', (snapshot) => {
   if (snapshot.teamScores) {
     updateTeamScoreHud(snapshot.teamScores);
   }
-  appState.latestPlayers = snapshot.players || [];
+  // Snapshot entries are hot-only between refreshes: rebuild complete player objects (shared/playerDelta.js)
+  appState.latestPlayers = appState.playerStateCache.merge(snapshot.players);
   // `snapshot.t` = server timestamp (ms) of this tick: remote players are drawn by snapshot interpolation
   appState.game.syncPlayersState(appState.latestPlayers, snapshot.t);
   if (Array.isArray(snapshot.barrels)) {
@@ -631,6 +661,10 @@ appState.socket.on('damageDealt', (data) => {
     if (data.armorBroken) {
       appState.sfx.playArmorHit?.(true);
       showCenterBanner('🛡️ GIÁP KEVLAR ĐÃ VỠ!');
+    } else if ((Number(data.armorDamage) || 0) > 0) {
+      appState.sfx.playArmorHit?.(false);
+    } else {
+      appState.sfx.playHitmarker?.(false);
     }
     updateHpHud(data.hp);
     appState.game.applyDamageFlinch(data.damage);
@@ -940,6 +974,11 @@ appState.socket.on('weaponSwapped', (data) => {
   }
 });
 
+appState.socket.on('droppedWeaponsUpdate', ({ droppedWeapons }) => {
+  if (!appState.game.inMatch || !Array.isArray(droppedWeapons)) return;
+  appState.game.syncDroppedWeapons(droppedWeapons);
+});
+
 appState.socket.on('matchEnded', (data) => {
   if (!appState.game.inMatch) return;
   if (appState.respawnInterval) {
@@ -1040,14 +1079,16 @@ appState.socket.on('matchStarted', (data) => {
   clearAdrenalineHealHud();
   multikillBanner?.classList.add('hidden');
   if (data.mapId) {
-    appState.game.loadMap(data.mapId);
+    if (appState.game.currentMapConfig?.id !== data.mapId) {
+      appState.game.loadMap(data.mapId);
+    }
     updateMapHud(data.mapId);
   }
   appState.game.syncPickups(data.pickups || []);
   appState.game.syncBarrels?.(data.barrels || []);
   appState.game.syncDroppedWeapons(data.droppedWeapons || []);
   appState.game.syncGrenades?.(data.activeGrenades || []);
-  appState.latestPlayers = data.players || [];
+  appState.latestPlayers = appState.playerStateCache.merge(data.players);
   const me = appState.latestPlayers.find((p) => p.id === appState.game.localId);
   if (me && me.team) {
     appState.currentLocalTeam = me.team;
@@ -1062,6 +1103,7 @@ appState.socket.on('matchStarted', (data) => {
   }
   showCenterBanner(appState.currentRoomGameMode === 'tdm' ? '⚔️ ĐẤU ĐỘI BẮT ĐẦU' : '🔥 BẮT ĐẦU');
   appState.game.requestPointerLock();
+  for (const delay of [200, 600]) setTimeout(measurePing, delay);
 });
 
   setInterval(measurePing, 2500);

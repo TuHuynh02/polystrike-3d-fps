@@ -280,7 +280,7 @@ export function hasLineOfSight(p1, p2, obstaclesOrMapId = null) {
  * returns the highest walkable floor top under the body.
  *
  * `body` is mutated in place: { x, y (feet), z, vy? }. Only x/z (push-out), y and vy (head bump) are written.
- *  - A box whose top is at most `stepUp` above the feet (and the body is not rising faster than 2.2 m/s)
+ *  - A box whose top is reachable as a floor (when not rising into the side of an elevated block)
  *    is treated as walkable floor (step-up) and reported through the return value, never as a wall.
  *  - Otherwise a box overlapping the body's vertical span pushes the body out horizontally; if the body is
  *    rising into the underside of a box the head is bumped (y snapped below it, vy = 0).
@@ -289,8 +289,52 @@ export function hasLineOfSight(p1, p2, obstaclesOrMapId = null) {
  */
 export function collideCapsuleVsBoxes(body, obstacles, radius, height, stepUp = 0.52, dt = 0) {
   const radiusSq = radius * radius;
-  let highestFloor = 0;
+  const vy = body.vy || 0;
+  const prevFootY = dt > 0 ? body.y - vy * dt : body.y;
 
+  const canStandOnTop = (candX, candZ, floorTopY, ignoreIndex) => {
+    const standHeadY = floorTopY + height;
+    for (let j = 0; j < obstacles.length; j++) {
+      if (j === ignoreIndex) continue;
+      const ob = obstacles[j];
+      const oTop = ob.maxY !== undefined ? ob.maxY : ob.y + ob.h * 0.5;
+      const oBot = ob.minY !== undefined ? ob.minY : ob.y - ob.h * 0.5;
+      if (oTop <= floorTopY + 0.02 || oBot >= standHeadY - 0.02) continue;
+      const oMinX = ob.minX !== undefined ? ob.minX : ob.x - ob.w * 0.5;
+      const oMaxX = ob.maxX !== undefined ? ob.maxX : ob.x + ob.w * 0.5;
+      if (candX + radius <= oMinX || candX - radius >= oMaxX) continue;
+      const oMinZ = ob.minZ !== undefined ? ob.minZ : ob.z - ob.d * 0.5;
+      const oMaxZ = ob.maxZ !== undefined ? ob.maxZ : ob.z + ob.d * 0.5;
+      if (candZ + radius <= oMinZ || candZ - radius >= oMaxZ) continue;
+      const cx = candX < oMinX ? oMinX : candX > oMaxX ? oMaxX : candX;
+      const cz = candZ < oMinZ ? oMinZ : candZ > oMaxZ ? oMaxZ : candZ;
+      const dx = candX - cx;
+      const dz = candZ - cz;
+      if (dx * dx + dz * dz < radiusSq) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const isWalkableFloorBox = (topY, boxIndex, candX, candZ) => {
+    // When rising (vy > 0), stepPlayerMovement never snaps s.y to highestFloor;
+    // treating a box above the feet as a floor while rising would disable wall push-out
+    // and let the player move horizontally inside elevated blocks.
+    if (vy > 0) {
+      return body.y >= topY - 0.02;
+    }
+    const crossedFromAbove = dt > 0 && prevFootY >= topY - 0.05 && body.y <= topY;
+    const withinStepUp = body.y + stepUp >= topY;
+    if (!crossedFromAbove && !withinStepUp) return false;
+    if (topY > body.y + 0.02 && !canStandOnTop(candX, candZ, topY, boxIndex)) {
+      return false;
+    }
+    return true;
+  };
+
+  // Pass 1: Identify highest candidate walkable floor under current (x, z)
+  let highestFloor = 0;
   for (let i = 0; i < obstacles.length; i++) {
     const box = obstacles[i];
     const minX = box.minX !== undefined ? box.minX : box.x - box.w * 0.5;
@@ -302,22 +346,53 @@ export function collideCapsuleVsBoxes(body, obstacles, radius, height, stepUp = 
     if (body.z + radius <= minZ || body.z - radius >= maxZ) continue;
 
     const topY = box.maxY !== undefined ? box.maxY : box.y + box.h * 0.5;
-    const bottomY = box.minY !== undefined ? box.minY : box.y - box.h * 0.5;
-
     const closestX = body.x < minX ? minX : body.x > maxX ? maxX : body.x;
     const closestZ = body.z < minZ ? minZ : body.z > maxZ ? maxZ : body.z;
     const dx = body.x - closestX;
     const dz = body.z - closestZ;
-    const distSq = dx * dx + dz * dz;
+    if (dx * dx + dz * dz < radiusSq) {
+      if (isWalkableFloorBox(topY, i, body.x, body.z) && topY > highestFloor) {
+        highestFloor = topY;
+      }
+    }
+  }
 
-    if (distSq < radiusSq) {
-      const vy = body.vy || 0;
-      if (body.y + stepUp >= topY && vy <= 2.2) {
-        if (topY > highestFloor) {
-          highestFloor = topY;
-        }
-      } else if (body.y < topY && body.y + height > bottomY) {
-        if (vy > 0 && body.y + height - vy * dt <= bottomY + 0.15) {
+  // Pass 2: Resolve ceiling head-bumps and horizontal wall push-outs (2 iterations for multi-block corners)
+  let pushedHorizontally = false;
+
+  for (let iter = 0; iter < 2; iter++) {
+    let anyPushInIter = false;
+    const curVy = body.vy || 0;
+    const footY = curVy <= 0 && highestFloor > body.y ? highestFloor : body.y;
+
+    for (let i = 0; i < obstacles.length; i++) {
+      const box = obstacles[i];
+      const minX = box.minX !== undefined ? box.minX : box.x - box.w * 0.5;
+      const maxX = box.maxX !== undefined ? box.maxX : box.x + box.w * 0.5;
+      if (body.x + radius <= minX || body.x - radius >= maxX) continue;
+
+      const minZ = box.minZ !== undefined ? box.minZ : box.z - box.d * 0.5;
+      const maxZ = box.maxZ !== undefined ? box.maxZ : box.z + box.d * 0.5;
+      if (body.z + radius <= minZ || body.z - radius >= maxZ) continue;
+
+      const topY = box.maxY !== undefined ? box.maxY : box.y + box.h * 0.5;
+      const bottomY = box.minY !== undefined ? box.minY : box.y - box.h * 0.5;
+
+      const closestX = body.x < minX ? minX : body.x > maxX ? maxX : body.x;
+      const closestZ = body.z < minZ ? minZ : body.z > maxZ ? maxZ : body.z;
+      const dx = body.x - closestX;
+      const dz = body.z - closestZ;
+      const distSq = dx * dx + dz * dz;
+
+      if (distSq >= radiusSq) continue;
+
+      if (topY <= footY + 0.005 || isWalkableFloorBox(topY, i, body.x, body.z)) {
+        continue;
+      }
+
+      if (footY < topY && footY + height > bottomY) {
+        const prevHeadY = dt > 0 ? body.y + height - curVy * dt : body.y + height;
+        if (iter === 0 && curVy > 0 && prevHeadY <= bottomY + 0.22) {
           body.y = bottomY - height;
           body.vy = 0;
         } else {
@@ -337,6 +412,35 @@ export function collideCapsuleVsBoxes(body, obstacles, radius, height, stepUp = 
             else if (minPen === penFront) body.z = minZ - radius;
             else body.z = maxZ + radius;
           }
+          pushedHorizontally = true;
+          anyPushInIter = true;
+        }
+      }
+    }
+    if (!anyPushInIter) break;
+  }
+
+  // If a wall pushed the body horizontally, recompute highestFloor at the final (x, z)
+  if (pushedHorizontally) {
+    highestFloor = 0;
+    for (let i = 0; i < obstacles.length; i++) {
+      const box = obstacles[i];
+      const minX = box.minX !== undefined ? box.minX : box.x - box.w * 0.5;
+      const maxX = box.maxX !== undefined ? box.maxX : box.x + box.w * 0.5;
+      if (body.x + radius <= minX || body.x - radius >= maxX) continue;
+
+      const minZ = box.minZ !== undefined ? box.minZ : box.z - box.d * 0.5;
+      const maxZ = box.maxZ !== undefined ? box.maxZ : box.z + box.d * 0.5;
+      if (body.z + radius <= minZ || body.z - radius >= maxZ) continue;
+
+      const topY = box.maxY !== undefined ? box.maxY : box.y + box.h * 0.5;
+      const closestX = body.x < minX ? minX : body.x > maxX ? maxX : body.x;
+      const closestZ = body.z < minZ ? minZ : body.z > maxZ ? maxZ : body.z;
+      const dx = body.x - closestX;
+      const dz = body.z - closestZ;
+      if (dx * dx + dz * dz < radiusSq) {
+        if (isWalkableFloorBox(topY, i, body.x, body.z) && topY > highestFloor) {
+          highestFloor = topY;
         }
       }
     }
@@ -497,7 +601,7 @@ export function stepGrenade(g, dt, mapCfg) {
         g.vx = Math.abs(g.vx) * restitution;
         g.vz *= 0.82;
       } else if (prevZ <= minZ + 0.03 && g.vz > 0) {
-        bounceImpact = Math.max(bounceImpact, Math.abs(g.vz));
+        bounceImpact = Math.max(bounceImpact, Math.abs(g.vx));
         g.z = minZ;
         g.vz = -Math.abs(g.vz) * restitution;
         g.vx *= 0.82;
@@ -556,4 +660,3 @@ export function stepGrenade(g, dt, mapCfg) {
 
   return bounceImpact;
 }
-

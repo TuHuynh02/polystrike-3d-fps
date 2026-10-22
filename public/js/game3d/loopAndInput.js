@@ -105,6 +105,10 @@ export class LoopAndInputMethods {
           Boolean(this.lobbyWalkDemo),
           this.lobbyWalkDemo ? 0.18 : 0
         );
+        if (this.lobbyWalkDemo && now >= (this.nextLobbyFootstepAt || 0)) {
+          this.nextLobbyFootstepAt = now + (this.lobbyCrouching ? 560 : 460);
+          this.callbacks?.onFootstep?.(false, Boolean(this.lobbyCrouching));
+        }
         if (this.lobbyHoloRingOuter) this.lobbyHoloRingOuter.rotation.z = now * 0.0012;
         if (this.lobbyHoloRingInner) this.lobbyHoloRingInner.rotation.z = -now * 0.0018;
       }
@@ -136,6 +140,8 @@ export class LoopAndInputMethods {
         localPos: this.position,
         localYaw: this.yaw,
         localAlive: this.alive,
+        gameMode: this.gameMode,
+        localTeam: this.localTeam,
         remotePlayers: this.remotePlayers,
         pickups: this.pickupMeshes,
         droppedWeapons: this.droppedWeaponMeshes,
@@ -143,34 +149,17 @@ export class LoopAndInputMethods {
       });
       if (this.minimap.ctx && this.minimap.lastRenderAt !== prevRenderAt) {
         const mCtx = this.minimap.ctx;
-        for (const [rpId, rp] of this.remotePlayers.entries()) {
+        for (const rp of this.remotePlayers.values()) {
           if (!rp || !rp.alive || !rp.group) continue;
+          const isTeammate = Boolean(rp.isTeammate ?? (this.gameMode === 'tdm' && this.localTeam && rp.team && rp.team === this.localTeam));
+          if (!isTeammate) continue;
           const rx = this.minimap.clampBlipCoord(this.minimap.worldToCanvasX(rp.group.position.x), 4);
           const ry = this.minimap.clampBlipCoord(this.minimap.worldToCanvasY(rp.group.position.z), 4);
-          const isTeammate = Boolean(this.gameMode === 'tdm' && this.localTeam && rp.team && rp.team === this.localTeam);
-          if (isTeammate) {
-            mCtx.fillStyle = '#38bdf8';
-            mCtx.strokeStyle = '#090d16';
-            mCtx.lineWidth = 1.1;
-            mCtx.beginPath();
-            mCtx.arc(rx, ry, 3.4, 0, Math.PI * 2);
-            mCtx.fill();
-            mCtx.stroke();
-            continue;
-          }
-          const distToMe = Math.hypot(rp.group.position.x - this.position.x, rp.group.position.z - this.position.z);
-          const isStealthStance = Boolean(rp.prone || rp.crouching || rp.crouch);
-          const hasGunfireBlip = Boolean(this.minimap.gunfireBlips?.has(rpId));
-          const blipAlpha = hasGunfireBlip
-            ? 1.0
-            : (isStealthStance && distToMe > 24)
-              ? 0.28
-              : 0.92;
-          mCtx.fillStyle = blipAlpha >= 0.9 ? '#ef4444' : `rgba(239, 68, 68, ${blipAlpha})`;
+          mCtx.fillStyle = '#38bdf8';
           mCtx.strokeStyle = '#090d16';
           mCtx.lineWidth = 1.1;
           mCtx.beginPath();
-          mCtx.arc(rx, ry, hasGunfireBlip ? 3.6 : 3.1, 0, Math.PI * 2);
+          mCtx.arc(rx, ry, 3.4, 0, Math.PI * 2);
           mCtx.fill();
           mCtx.stroke();
         }
@@ -516,6 +505,7 @@ export class LoopAndInputMethods {
     }, { passive: true });
 
     window.addEventListener('mousedown', (e) => {
+      this.sfx?.ensureContext?.();
       if (!this.inMatch) return;
       if (!this.isPointerLocked) {
         if (e.target === this.renderer.domElement) {
@@ -605,6 +595,7 @@ export class LoopAndInputMethods {
     ]);
 
     window.addEventListener('keydown', (e) => {
+      this.sfx?.ensureContext?.();
       const activeTag = document.activeElement?.tagName;
       if (
         !this.isPointerLocked &&

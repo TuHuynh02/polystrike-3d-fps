@@ -977,7 +977,7 @@ describe('2. State Synchronization, Sequence Ordering, Quantization, Lag Comp & 
       assert.equal(shotEvt.shooterId, joinedA.playerId);
       assert.equal(dmgEvt.targetId, joinedB.playerId);
       assert.equal(dmgEvt.isHeadshot, true);
-      assert.ok(dmgEvt.damage > 50);
+      assert.equal(dmgEvt.damage, Math.round(WEAPONS.m4a1.damage * WEAPONS.m4a1.headshotMult));
 
       // Test live stateUpdate broadcast over WebSocket
       // stateUpdate is sent as a Socket.IO *volatile* event, which is dropped whenever the socket is mid-write
@@ -1191,6 +1191,53 @@ describe('4. Weapon Shooting, Hit Detection, Kill/Respawn, Grenades & Match Win'
     assert.equal(computeDistanceFalloff(WEAPONS.smg, 5), 1.0);
     assert.equal(computeDistanceFalloff(WEAPONS.smg, 100), WEAPONS.smg.minFalloffMult);
     assert.ok(computeDistanceFalloff(WEAPONS.rifle, 36) > computeDistanceFalloff(WEAPONS.smg, 36));
+
+    // Halved weapon damage & 2-headshot kill checks (rifle, scar, deagle require 2 headshots on 100 HP)
+    const expectedDamages = {
+      rifle: 17, m4a1: 15, scar: 20, smg: 11, shotgun: 9, sniper: 54,
+      lmg: 13, pistol: 14, deagle: 26, glock: 9, knife: 28
+    };
+    for (const [id, dmg] of Object.entries(expectedDamages)) {
+      assert.equal(WEAPONS[id].damage, dmg, `Expected halved damage ${dmg} for ${id}`);
+    }
+    for (const twoTapId of ['rifle', 'scar', 'deagle']) {
+      const hsDmg = Math.round(WEAPONS[twoTapId].damage * WEAPONS[twoTapId].headshotMult);
+      assert.ok(hsDmg >= 50 && hsDmg < 100, `${twoTapId} headshot (${hsDmg}) must kill 100 HP in 2 shots`);
+    }
+
+    // Valorant-grade recoil climb, horizontal spray oscillation, 144Hz pre-shot aim preservation & recovery
+    const game = createTestGame3D();
+    game.inMatch = true;
+    game.alive = true;
+    game.isPointerLocked = true;
+    game.spawnLocalPlayer({ x: 0, y: 0, z: 0, yaw: 0, weapon: 'rifle' });
+    game.equipUntil = 0;
+    game.pitch = 0;
+    game.yaw = 0;
+    game.lastShotAt = -1000;
+    game.attemptShoot();
+    assert.ok(game.pendingRecoilPitch > 0, 'Shot 1 must queue upward pendingRecoilPitch');
+    // Simulate a 144Hz render frame draining recoil BEFORE the fixed physics step consumes pendingFire
+    game.updateLocalPhysics(1 / 144);
+    assert.ok(game.pitch > 0, 'Camera pitch should begin climbing smoothly on 144Hz frame');
+    game.advanceFixedPhysics(1 / 60);
+    const firstFireCmd = game.prediction.pending.find((e) => (e.cmd.btn & 64) !== 0)?.cmd;
+    assert.ok(firstFireCmd, 'First shot command must be recorded');
+    assert.ok(Math.abs(firstFireCmd.pitch) < 1e-6, 'First shot command must fire at exact pre-recoil pitch = 0');
+    assert.ok(Math.abs(firstFireCmd.yaw) < 1e-6, 'First shot command must fire at exact pre-recoil yaw = 0');
+    // Sustained burst climbs toward recoilMaxPitch and oscillates yaw
+    for (let s = 0; s < 8; s++) {
+      game.lastShotAt = -1000;
+      game.lastFireCmdTimeMs = -Infinity;
+      game.attemptShoot();
+      game.advanceFixedPhysics(1 / 60);
+      game.updateLocalPhysics(1 / 60);
+    }
+    assert.ok(game.accumulatedRecoilPitch > 0.08 && game.accumulatedRecoilPitch <= WEAPONS.rifle.recoilMaxPitch + 1e-4);
+    const peakAccumPitch = game.accumulatedRecoilPitch;
+    game.lastShotAt = performance.now() - 500;
+    game.updateLocalPhysics(0.05);
+    assert.ok(game.accumulatedRecoilPitch < peakAccumPitch, 'Recoil must recover smoothly after recDelay');
   });
 
   it('registers headshots, bodyshots, legshots, enforces fire rate & ammo, and blocks shots through walls', () => {
@@ -1391,6 +1438,7 @@ describe('4. Weapon Shooting, Hit Detection, Kill/Respawn, Grenades & Match Win'
     // 2. Aim at victim's torso center (y = 1.21 at 6m from eye y = 1.62 => pitch ≈ -0.068) to finish off the victim
     game.pitch = Math.atan2(1.21 - 1.62, 6);
     game.yaw = 0;
+    victim.hp = WEAPONS.m4a1.damage;
     human.hp = 80; // Injure human to verify +25 HP Kill Adrenaline on victim kill
 
     const fireCmd2 = stepAndFlushFire(10);
@@ -1802,6 +1850,26 @@ describe('6. Terrain/Map Collision, AABB Raycasting, Entity Physics & 3D Renderi
       assert.ok(cfg.obstacles.length > 10, `Map ${mapId} should have obstacles`);
       assert.ok(cfg.spawnPoints.length >= 10, `Map ${mapId} should have at least 10 spawn points`);
       assert.ok(cfg.healthPacks.length >= 4, `Map ${mapId} should have health packs`);
+      assert.ok(Array.isArray(cfg.callouts) && cfg.callouts.length >= 8, `Map ${mapId} should define tactical radar callouts`);
+      assert.ok(cfg.obstacles.filter((o) => o.type === 'platform' && o.h >= 2.0).length >= 3, `Map ${mapId} should have elevated platforms`);
+      assert.ok(cfg.obstacles.filter((o) => o.type === 'step').length >= 16, `Map ${mapId} should have stepped ramps`);
+      assert.ok(cfg.obstacles.filter((o) => o.type === 'crate' && o.h >= 1.0 && o.h <= 1.25).length >= 2, `Map ${mapId} should have skill-jump boost crates`);
+      assert.ok(cfg.obstacles.filter((o) => Math.min(o.w, o.d) <= 0.72).length >= 2, `Map ${mapId} should have thin wallbangable cover`);
+      for (const sp of cfg.spawnPoints) {
+        assert.equal(typeof sp.y, 'number', `Spawn point (${sp.x}, ${sp.z}) in ${mapId} must define numeric y`);
+        assert.equal(typeof sp.yaw, 'number', `Spawn point (${sp.x}, ${sp.z}) in ${mapId} must define numeric yaw`);
+      }
+      for (const team of ['alpha', 'bravo']) {
+        for (const sp of cfg.teamSpawns?.[team] || []) {
+          assert.equal(isPointClearOfObstacles(sp.x, sp.z, 0.5, cfg.obstacles, sp.y || 0.1), true, `Team ${team} spawn (${sp.x}, ${sp.z}) in ${mapId} overlaps an obstacle!`);
+        }
+      }
+      if (mapId === 'neon_lab') {
+        assert.equal(cfg.theme.floorBase, '#0b0f1e', 'neon_lab floorBase must match skyAtmosphere/proceduralTextures isLab check');
+      }
+      for (const hp of cfg.healthPacks) {
+        assert.equal(isPointClearOfObstacles(hp.x, hp.z, 0.4, cfg.obstacles, (hp.y || 0) + 0.2), true, `Health pack ${hp.id} in ${mapId} overlaps an obstacle!`);
+      }
 
       for (const obs of cfg.obstacles) {
         assert.ok(obs.minX < obs.maxX && obs.minY < obs.maxY && obs.minZ < obs.maxZ);
@@ -2112,7 +2180,6 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
       'death-overlay',
       'loadout-modal',
       'loadout-primary-grid',
-      'loadout-secondary-grid',
       'btn-save-loadout',
       'pause-modal',
       'scoreboard-modal',
@@ -2138,9 +2205,65 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
     assert.ok(!html.includes('GUNSMITH ARMORY // 3-SLOT TACTICAL LOADOUT'), 'Old verbose loadout title must be removed');
     assert.ok(!html.includes('COMBAT TELEMETRY // BẢNG XẾP HẠNG TÁC CHIẾN'), 'Old verbose scoreboard title must be removed');
 
+    // Verify [B] Loadout Modal shows only primary weapon silhouette cards (no secondary/melee options, no stat bars/numbers)
+    assert.ok(!html.includes('id="loadout-secondary-grid"'), 'Secondary/melee grid must be removed from [B] Loadout Modal');
+    assert.ok(!html.includes('VŨ KHÍ PHỤ [2]'), 'Secondary weapon label must be removed from [B] Loadout Modal');
+    const loadoutModalStart = html.indexOf('id="loadout-modal"');
+    const pauseModalStart = html.indexOf('id="pause-modal"');
+    const loadoutModalHtml = html.slice(loadoutModalStart, pauseModalStart);
+    assert.ok(loadoutModalHtml.includes('weapon-silhouette-svg'), '[B] Loadout Modal must render SVG weapon silhouettes');
+    assert.ok(!loadoutModalHtml.includes('weapon-spec-bars'), '[B] Loadout Modal must not render stat bars');
+    assert.ok(!loadoutModalHtml.includes('weapon-dmg-pill'), '[B] Loadout Modal must not render damage/ammo stat pills');
+    assert.ok(!loadoutModalHtml.includes('data-loadout-slot="2"'), '[B] Loadout Modal must not include secondary weapon options');
+    assert.ok(!loadoutModalHtml.includes('data-loadout-slot="3"'), '[B] Loadout Modal must not include melee/knife options');
+
     // Verify CSS hides 2D HTML holo/red-dot overlay rings so 3D weapon optic reticle is unobstructed
     assert.match(css, /\.optic-holo-ring\s*\{\s*display:\s*none;/);
     assert.match(css, /\.optic-center-dot\s*\{\s*display:\s*none;/);
+  });
+
+  it('renders [B] Loadout Modal dynamically with distinct primary weapon SVG silhouettes and standardized secondary/melee set', async () => {
+    const { renderLoadoutModal, getWeaponSilhouetteSvg, applySelectedLoadoutAndNotify } = await import('../public/js/ui/lobbyAndModals.js');
+    const { loadoutPrimaryGrid, hotbarSlot1, hotbarSlot2, hotbarSlot3 } = await import('../public/js/ui/domElements.js');
+    const { appState } = await import('../public/js/ui/userPrefsAndKeys.js');
+    if (hotbarSlot1) hotbarSlot1.dataset ||= {};
+    if (hotbarSlot2) hotbarSlot2.dataset ||= {};
+    if (hotbarSlot3) hotbarSlot3.dataset ||= {};
+
+    const seenSvgs = new Set();
+    for (const wId of PRIMARY_WEAPONS) {
+      const svg = getWeaponSilhouetteSvg(wId);
+      assert.ok(svg.includes('<svg class="weapon-silhouette-svg"'), `${wId} must have an SVG silhouette`);
+      assert.ok(svg.includes('<path '), `${wId} SVG silhouette must contain vector path geometry`);
+      seenSvgs.add(svg);
+    }
+    assert.equal(seenSvgs.size, PRIMARY_WEAPONS.length, 'Each primary weapon must have a distinct visual SVG silhouette');
+
+    appState.selectedLoadout.primary = 'sniper';
+    appState.selectedLoadout.secondary = 'deagle';
+    let emittedLoadout = null;
+    appState.game = { setLoadout: () => {} };
+    appState.socket = { emit: (evt, payload) => { if (evt === 'updateLoadout') emittedLoadout = payload; } };
+
+    renderLoadoutModal();
+    const rendered = loadoutPrimaryGrid.innerHTML;
+    for (const wId of PRIMARY_WEAPONS) {
+      assert.ok(rendered.includes(`data-loadout-weapon="${wId}"`), `Rendered [B] modal must include primary weapon ${wId}`);
+      assert.ok(rendered.includes(`data-weapon-silhouette="${wId}"`), `Rendered [B] modal must include silhouette container for ${wId}`);
+    }
+    assert.ok(!rendered.includes('weapon-spec-bars'), 'Rendered [B] modal must not contain stat bars');
+    assert.ok(!rendered.includes('weapon-dmg-pill'), 'Rendered [B] modal must not contain stat numbers');
+    assert.ok(!rendered.includes('data-loadout-slot="2"'), 'Rendered [B] modal must not contain secondary weapons');
+    assert.ok(!rendered.includes('data-loadout-slot="3"'), 'Rendered [B] modal must not contain melee weapons');
+
+    applySelectedLoadoutAndNotify();
+    assert.equal(appState.selectedLoadout.secondary, DEFAULT_LOADOUT.secondary, 'Loadout secondary must standardize to DEFAULT_LOADOUT.secondary');
+    assert.equal(appState.selectedLoadout.melee, DEFAULT_LOADOUT.melee, 'Loadout melee must standardize to DEFAULT_LOADOUT.melee');
+    assert.deepEqual(emittedLoadout, {
+      primary: 'sniper',
+      secondary: DEFAULT_LOADOUT.secondary,
+      melee: DEFAULT_LOADOUT.melee,
+    });
   });
 
   it('renders TacticalMinimap across all 4 maps and updates sector coordinates, map label, and 30 FPS throttle', () => {

@@ -483,6 +483,7 @@ export class GrenadeMethods {
 
   syncGrenades(grenades = []) {
     if (!Array.isArray(grenades)) return;
+    if (grenades.length === 0 && this.activeGrenadeMeshes.size === 0) return;
     const now = performance.now();
     if (!this._seenGrenadeIds) {
       this._seenGrenadeIds = new Set();

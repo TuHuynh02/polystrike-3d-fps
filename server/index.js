@@ -1,10 +1,12 @@
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { Server as SocketIOServer } from 'socket.io';
 import { MATCH_CONFIG, getMapConfig } from '../shared/constants.js';
 import { RoomManager } from './roomManager.js';
+import { LAN_MODE, NET_CONFIG, TICK_HZ } from './room/sanitizers.js';
 import {
   safeHandler,
   guardedOn,
@@ -145,6 +147,7 @@ io.on('connection', (socket) => {
         mapName: mapCfg.name,
         killLimit: room.killLimit || (room.gameMode === 'tdm' ? (MATCH_CONFIG.TDM_KILL_LIMIT || 30) : MATCH_CONFIG.KILL_LIMIT),
         timeRemaining,
+        net: NET_CONFIG,
         player: {
           id: player.id,
           name: player.name,
@@ -343,9 +346,22 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
+// Non-loopback IPv4 addresses of this machine: the URLs teammates on the same LAN/Wi-Fi can open to play without Render.
+function lanAddresses() {
+  const out = [];
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const ni of list || []) {
+      if (ni.family === 'IPv4' && !ni.internal) out.push(ni.address);
+    }
+  }
+  return out;
+}
+
 server.listen(PORT, () => {
   console.log(`\n==================================================`);
   console.log(`🎯 POLYSTRIKE 3D FPS Server running at:`);
   console.log(`   👉 http://localhost:${ PORT }`);
+  for (const ip of lanAddresses()) console.log(`   🏢 LAN: http://${ ip }:${ PORT }`);
+  console.log(`   ⚙️  Tick rate: ${ TICK_HZ } Hz${ LAN_MODE ? ' (LAN mode)' : '' }`);
   console.log(`==================================================\n`);
 });

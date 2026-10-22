@@ -59,12 +59,12 @@ export const DEATH_BODY_MAX_MS = 1500;
 
 export class SceneWorldMethods {
   setupLights() {
-    this.hemiLight = new THREE.HemisphereLight(0xc4ddf7, 0x222933, 1.18);
+    this.hemiLight = new THREE.HemisphereLight(0xdbeafe, 0x566578, 1.3);
     this.hemiLight.position.set(0, 75, 0);
     this.scene.add(this.hemiLight);
 
     // Primary warm directional sunlight with static baked shadow map covering the arena
-    this.dirLight = new THREE.DirectionalLight(0xfff3e0, 1.56);
+    this.dirLight = new THREE.DirectionalLight(0xfff7eb, 2.6);
     this.dirLight.position.set(56, 86, 46);
     this.dirLight.castShadow = this.quality.shadowMapSize > 0;
     this.dirLight.shadow.mapSize.width = this.quality.shadowMapSize || 1;
@@ -81,12 +81,12 @@ export class SceneWorldMethods {
     this.scene.add(this.dirLight);
 
     // Cool steel rim light from opposite angle for smooth 3D wrap-around shading & specular highlights
-    this.rimLight = new THREE.DirectionalLight(0x7aa2c4, 0.92);
+    this.rimLight = new THREE.DirectionalLight(0x93c5fd, 1.38);
     this.rimLight.position.set(-58, 52, -52);
     this.scene.add(this.rimLight);
 
     // Central tactical command point light
-    this.citadelLight = new THREE.PointLight(0xe5a024, 2.2, 42, 1.4);
+    this.citadelLight = new THREE.PointLight(0xe5a024, 2.85, 52, 1.3);
     this.citadelLight.position.set(0, 8.5, 0);
     this.scene.add(this.citadelLight);
 
@@ -253,22 +253,26 @@ export class SceneWorldMethods {
 
     const theme = mapCfg.theme || {};
     const isDesert = theme.floorBase === '#27170c';
-    const fogHex = isDesert ? 0x241a12 : 0x0b1018;
+    const fogHex = isDesert ? 0x453528 : 0x1e2c3e;
     this.scene.background = new THREE.Color(fogHex);
-    this.scene.fog = new THREE.FogExp2(fogHex, (theme.fogDensity || 0.005) * 0.72);
+    this.scene.fog = new THREE.FogExp2(fogHex, (theme.fogDensity || 0.004) * 0.42);
 
     if (this.citadelLight) {
       this.citadelLight.color.setHex(isDesert ? 0xf59e0b : 0xe5a024);
+      this.citadelLight.intensity = 2.85;
     }
     if (this.rimLight) {
-      this.rimLight.color.setHex(isDesert ? 0xc29b70 : 0x6488a8);
+      this.rimLight.color.setHex(isDesert ? 0xe2b887 : 0x93c5fd);
+      this.rimLight.intensity = 1.38;
     }
     if (this.hemiLight) {
-      this.hemiLight.color.setHex(isDesert ? 0xfde68a : 0xb8d4f2);
-      this.hemiLight.groundColor.setHex(isDesert ? 0x291d14 : 0x1a1e24);
+      this.hemiLight.color.setHex(isDesert ? 0xfff3c4 : 0xdbeafe);
+      this.hemiLight.groundColor.setHex(isDesert ? 0x7c654d : 0x566578);
+      this.hemiLight.intensity = 1.88;
     }
     if (this.dirLight) {
-      this.dirLight.color.setHex(isDesert ? 0xffe8c2 : 0xfff1dc);
+      this.dirLight.color.setHex(isDesert ? 0xfff0d4 : 0xfff7eb);
+      this.dirLight.intensity = 2.25;
       const d = this.arenaHalfSize + 6;
       this.dirLight.shadow.camera.left = -d;
       this.dirLight.shadow.camera.right = d;
@@ -484,20 +488,28 @@ export class SceneWorldMethods {
         crossGroup.position.y = 1.25;
         group.add(crossGroup);
 
+        const isActive = Boolean(p.active);
+        crossGroup.visible = isActive;
+        holoRing.visible = isActive;
+        padMat.emissiveIntensity = isActive ? 0.55 : 0.05;
         this.scene.add(group);
-        item = { group, crossGroup, padMat, holoRing, type: pType, x: p.x, y: p.y, z: p.z, active: Boolean(p.active) };
+        item = { group, crossGroup, padMat, holoRing, type: pType, x: p.x, y: p.y, z: p.z, active: isActive };
         this.pickupMeshes.set(p.id, item);
       } else {
-        item.x = p.x;
-        item.y = p.y;
-        item.z = p.z;
-        item.group.position.set(p.x, p.y, p.z);
+        if (item.x !== p.x || item.y !== p.y || item.z !== p.z) {
+          item.x = p.x;
+          item.y = p.y;
+          item.z = p.z;
+          item.group.position.set(p.x, p.y, p.z);
+        }
+        const isActive = Boolean(p.active);
+        if (item.active !== isActive) {
+          item.active = isActive;
+          item.crossGroup.visible = isActive;
+          item.holoRing.visible = isActive;
+          item.padMat.emissiveIntensity = isActive ? 0.55 : 0.05;
+        }
       }
-
-      item.active = Boolean(p.active);
-      item.crossGroup.visible = Boolean(p.active);
-      item.holoRing.visible = Boolean(p.active);
-      item.padMat.emissiveIntensity = p.active ? 0.55 : 0.05;
     }
   }
 
@@ -584,17 +596,22 @@ export class SceneWorldMethods {
   }
 
   syncBarrels(barrelsData = []) {
+    let changed = false;
     for (const b of barrelsData) {
       let item = this.barrelMeshes.get(b.id);
+      const bx = b.x || 0;
+      const by = b.y || 0;
+      const bz = b.z || 0;
+      const isActive = Boolean(b.active !== false);
       if (!item) {
         const group = new THREE.Group();
-        group.position.set(b.x || 0, b.y || 0, b.z || 0);
+        group.position.set(bx, by, bz);
 
         const padGeo = new THREE.CylinderGeometry(0.68, 0.76, 0.08, 16);
         const padMat = new THREE.MeshStandardMaterial({
           color: 0x1e293b,
           emissive: 0xef4444,
-          emissiveIntensity: 0.55,
+          emissiveIntensity: isActive ? 0.55 : 0.06,
           roughness: 0.4,
           metalness: 0.6
         });
@@ -603,6 +620,7 @@ export class SceneWorldMethods {
         group.add(padMesh);
 
         const bodyGroup = new THREE.Group();
+        bodyGroup.visible = isActive;
         const barrelGeo = new THREE.CylinderGeometry(0.55, 0.55, 1.35, 16);
         barrelGeo.computeBoundingSphere();
         const barrelMat = new THREE.MeshStandardMaterial({
@@ -641,27 +659,34 @@ export class SceneWorldMethods {
           hitboxMesh,
           barrelMat,
           padMat,
-          x: b.x || 0,
-          y: b.y || 0,
-          z: b.z || 0,
+          x: bx,
+          y: by,
+          z: bz,
           hp: b.hp ?? (MATCH_CONFIG.BARREL_MAX_HP || 60),
-          active: Boolean(b.active !== false)
+          active: isActive
         };
         this.barrelMeshes.set(b.id, item);
+        changed = true;
       } else {
-        item.x = b.x || 0;
-        item.y = b.y || 0;
-        item.z = b.z || 0;
-        item.group.position.set(item.x, item.y, item.z);
+        if (item.x !== bx || item.y !== by || item.z !== bz) {
+          item.x = bx;
+          item.y = by;
+          item.z = bz;
+          item.group.position.set(bx, by, bz);
+          changed = true;
+        }
         if (typeof b.hp === 'number') item.hp = b.hp;
+        if (item.active !== isActive) {
+          item.active = isActive;
+          item.bodyGroup.visible = isActive;
+          item.padMat.emissiveIntensity = isActive ? 0.55 : 0.06;
+          changed = true;
+        }
       }
-
-      const isActive = Boolean(b.active !== false);
-      item.active = isActive;
-      item.bodyGroup.visible = isActive;
-      item.padMat.emissiveIntensity = isActive ? 0.55 : 0.06;
     }
-    this.rebuildHitboxList();
+    if (changed) {
+      this.rebuildHitboxList();
+    }
   }
 
   updateBarrelSingle(data) {
@@ -669,7 +694,7 @@ export class SceneWorldMethods {
     const item = this.barrelMeshes.get(data.id);
     if (!item) return;
     if (typeof data.hp === 'number') item.hp = data.hp;
-    if (typeof data.active === 'boolean') {
+    if (typeof data.active === 'boolean' && item.active !== data.active) {
       item.active = data.active;
       item.bodyGroup.visible = data.active;
       item.padMat.emissiveIntensity = data.active ? 0.55 : 0.06;
@@ -710,14 +735,21 @@ export class SceneWorldMethods {
   }
 
   syncDroppedWeapons(drops = []) {
-    const seen = new Set();
-    for (const d of drops) {
+    if ((!drops || drops.length === 0) && this.droppedWeaponMeshes.size === 0) return;
+    if (!this._seenDropIds) {
+      this._seenDropIds = new Set();
+    }
+    const seen = this._seenDropIds;
+    seen.clear();
+    for (let i = 0; i < drops.length; i++) {
+      const d = drops[i];
+      if (!d || !d.id) continue;
       seen.add(d.id);
       if (!this.droppedWeaponMeshes.has(d.id)) {
         this.addDroppedWeapon(d);
       }
     }
-    for (const id of Array.from(this.droppedWeaponMeshes.keys())) {
+    for (const id of this.droppedWeaponMeshes.keys()) {
       if (!seen.has(id)) {
         this.removeDroppedWeapon(id);
       }

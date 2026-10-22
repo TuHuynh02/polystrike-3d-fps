@@ -588,6 +588,18 @@ export class SnapshotInterpolator {
     this.clock.setRttMs(rttMs);
   }
 
+  /**
+   * Applies the server's `roomJoined.net` ({ interpMinMs, interpInitialMs }): the delay floor / start value follow the server
+   * tick rate (LAN mode runs 50 Hz). Before the first adaptive estimate the live delay is moved to the new start value.
+   */
+  configure(net) {
+    if (!net || this.fixedDelay) return;
+    const jb = this.jitter;
+    if (isNum(net.interpMinMs) && net.interpMinMs > 0) jb.minMs = Math.min(net.interpMinMs, jb.maxMs);
+    if (isNum(net.interpInitialMs) && net.interpInitialMs > 0) jb.initialMs = Math.max(jb.minMs, Math.min(net.interpInitialMs, jb.maxMs));
+    if (!jb.initialised) jb.rawMs = jb.targetMs = jb.currentMs = jb.initialMs;
+  }
+
   /** True when an envelope stamped `serverT` would be accepted (newer than the newest seen, or a new server epoch). */
   acceptsEnvelope(serverT) {
     if (!isNum(serverT)) return false;

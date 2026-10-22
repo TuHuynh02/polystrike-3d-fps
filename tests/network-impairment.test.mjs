@@ -172,9 +172,9 @@ describe('impairment profiles (real RoomManager -> simulated link -> real headle
     }
   });
 
-  it('bandwidth: one stateUpdate stream costs ~58 KB/s for 6 players (~101 KB/s for 12) at 25 Hz', () => {
+  it('bandwidth: one stateUpdate stream costs ~32 KB/s for 6 players at 25 Hz (hot/cold split; was ~58 KB/s with full entries)', () => {
     const r = R('udp', 'lan');
-    assert.ok(r.bytesPerSec > 40_000 && r.bytesPerSec < 80_000, `bytes/s ${r.bytesPerSec}`);
+    assert.ok(r.bytesPerSec > 20_000 && r.bytesPerSec < 40_000, `bytes/s ${r.bytesPerSec}`);
   });
 });
 

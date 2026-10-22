@@ -14,6 +14,7 @@ import {
   raySegmentAABB,
   stepGrenade
 } from '../../shared/constants.js';
+import { COLD_REFRESH_MS, COLD_REPEAT_MS } from '../../shared/playerDelta.js';
 import {
   KILL_ADRENALINE_HEAL,
   LAG_COMP_MAX_REWIND_MS,
@@ -72,6 +73,9 @@ import {
   sanitizeRoomCode,
   sanitizeTeam
 } from './sanitizers.js';
+
+// Ticks between full-refresh stateUpdates (~COLD_REFRESH_MS: 25 at 25 Hz, 50 at 50 Hz).
+const STATE_REFRESH_TICKS = Math.max(1, Math.round(COLD_REFRESH_MS / TICK_INTERVAL_MS));
 
 export class MatchLifecycleMethods {
   getLeaderboard(room) {
@@ -240,9 +244,13 @@ export class MatchLifecycleMethods {
     return list;
   }
 
-  serializePlayers(room) {
+  /**
+   * Player list for the wire. Without `delta` every entry is complete (roomJoined, lobby events). With
+   * `delta = { refresh }` (the periodic stateUpdate) the cold block (shared/playerDelta.js) is only included for a player
+   * while it changed within COLD_REPEAT_MS, or in a `refresh` snapshot; other entries carry the hot fields only.
+   */
+  serializePlayers(room, now = Date.now(), delta = null) {
     if (!room || !room.players) return [];
-    const now = Date.now();
     const list = new Array(room.players.size);
     let idx = 0;
     for (const p of room.players.values()) {
@@ -262,12 +270,43 @@ export class MatchLifecycleMethods {
         p._staticMeta = meta;
       }
       const invulnerable = Boolean(p.alive && p.invulnerableUntil && now < p.invulnerableUntil);
-      list[idx++] = {
+      const grenades = Number.isFinite(p.grenades) ? p.grenades : 1;
+      const armor = p.armor > 0 ? p.armor : 0;
+      const speedBoosted = Boolean(p.alive && p.speedBoostUntil > now);
+      const damageBoosted = Boolean(p.alive && p.damageBoostUntil > now);
+
+      let includeCold = true;
+      if (delta) {
+        // Change detection over the cold fields that clients actually read from snapshots. ammo / reserveAmmo are left out on
+        // purpose (they change with every shot and the owner gets them through `selfState`); they ride the periodic refresh.
+        // Boost timers are compared by their absolute end, so a running countdown does not count as a change.
+        const c = p._coldSent || (p._coldSent = {});
+        const speedUntil = speedBoosted ? p.speedBoostUntil : 0;
+        const damageUntil = damageBoosted ? p.damageBoostUntil : 0;
+        if (
+          c.name !== meta.name || c.color !== meta.color || c.team !== meta.team || c.ready !== Boolean(p.ready) ||
+          c.grenades !== grenades || c.armor !== armor || c.speedUntil !== speedUntil || c.damageUntil !== damageUntil ||
+          c.invulnerable !== invulnerable || c.kills !== (p.kills || 0) || c.deaths !== (p.deaths || 0) || c.streak !== (p.streak || 0)
+        ) {
+          c.name = meta.name;
+          c.color = meta.color;
+          c.team = meta.team;
+          c.ready = Boolean(p.ready);
+          c.grenades = grenades;
+          c.armor = armor;
+          c.speedUntil = speedUntil;
+          c.damageUntil = damageUntil;
+          c.invulnerable = invulnerable;
+          c.kills = p.kills || 0;
+          c.deaths = p.deaths || 0;
+          c.streak = p.streak || 0;
+          p._coldUntil = now + COLD_REPEAT_MS;
+        }
+        includeCold = delta.refresh || now < p._coldUntil;
+      }
+
+      const entry = {
         id: meta.id,
-        name: meta.name,
-        color: meta.color,
-        team: meta.team,
-        ready: Boolean(p.ready),
         x: round2(p.x),
         y: round2(p.y),
         z: round2(p.z),
@@ -281,20 +320,27 @@ export class MatchLifecycleMethods {
         sliding: Boolean(p.sliding || p.isSliding || p.moveState?.isSliding),
         lean: round2(p.lean),
         weapon: p.weapon,
-        ammo: Number.isFinite(p.ammo) ? p.ammo : 0,
-        reserveAmmo: Number.isFinite(p.reserveAmmo) ? p.reserveAmmo : 0,
-        grenades: Number.isFinite(p.grenades) ? p.grenades : 1,
         hp: Number.isFinite(p.hp) ? p.hp : 0,
-        ...(p.armor > 0 ? { armor: p.armor } : {}),
-        ...(p.alive && p.speedBoostUntil > now ? { speedBoostMs: Math.round(p.speedBoostUntil - now) } : {}),
-        ...(p.alive && p.damageBoostUntil > now ? { damageBoostMs: Math.round(p.damageBoostUntil - now) } : {}),
-        alive: Boolean(p.alive),
-        invulnerable,
-        invulnerableUntil: invulnerable ? p.invulnerableUntil : 0,
-        kills: p.kills || 0,
-        deaths: p.deaths || 0,
-        streak: p.streak || 0
+        alive: Boolean(p.alive)
       };
+      if (includeCold) {
+        entry.name = meta.name;
+        entry.color = meta.color;
+        entry.team = meta.team;
+        entry.ready = Boolean(p.ready);
+        entry.ammo = Number.isFinite(p.ammo) ? p.ammo : 0;
+        entry.reserveAmmo = Number.isFinite(p.reserveAmmo) ? p.reserveAmmo : 0;
+        entry.grenades = grenades;
+        if (armor > 0) entry.armor = armor;
+        if (speedBoosted) entry.speedBoostMs = Math.round(p.speedBoostUntil - now);
+        if (damageBoosted) entry.damageBoostMs = Math.round(p.damageBoostUntil - now);
+        entry.invulnerable = invulnerable;
+        entry.invulnerableUntil = invulnerable ? p.invulnerableUntil : 0;
+        entry.kills = p.kills || 0;
+        entry.deaths = p.deaths || 0;
+        entry.streak = p.streak || 0;
+      }
+      list[idx++] = entry;
     }
     return list;
   }
@@ -366,12 +412,13 @@ export class MatchLifecycleMethods {
 
         // Owner-only `selfState` reconciliation: immediate on state change (coalesced to at most 1 per tick), or periodic (~8.3 Hz)
         for (const p of room.players.values()) {
-          if (
-            p._selfStateDirty ||
-            this._selfStateSignature(p) !== p._selfStateSig ||
-            now - (p.lastSelfStateAt || 0) >= SELF_STATE_INTERVAL_MS
-          ) {
+          if (p._selfStateDirty || now - (p.lastSelfStateAt || 0) >= SELF_STATE_INTERVAL_MS) {
             this.sendSelfState(p, now, Boolean(p._selfStateReliable));
+          } else {
+            const sig = this._selfStateSignature(p);
+            if (sig !== p._selfStateSig) {
+              this.sendSelfState(p, now, Boolean(p._selfStateReliable), sig);
+            }
           }
         }
 
@@ -379,6 +426,11 @@ export class MatchLifecycleMethods {
         room.stateSeq = ((room.stateSeq || 0) + 1) | 0;
         const roomTarget = this.io.to(room.code);
         const emitter = process.env.SV_RELIABLE ? roomTarget : (roomTarget.volatile || roomTarget);
+        // Hot/cold split (shared/playerDelta.js): a periodic full-refresh snapshot (the first one of a room and then about once
+        // per second) carries everything; the snapshots in between carry only what changes every tick. Pickups and dropped
+        // weapons have their own reliable change events (`pickupState`, `weaponDropped`, `droppedWeaponsUpdate`), so in between
+        // they are left out (the client only applies them when the field is an array).
+        const refresh = (room.stateSeq - 1) % STATE_REFRESH_TICKS === 0;
         const statePayload = {
           seq: room.stateSeq,
           t: stateStampMs,
@@ -386,14 +438,14 @@ export class MatchLifecycleMethods {
           state: room.state,
           teamScores: room.gameMode === 'tdm' ? room.teamScores : undefined,
           timeRemaining,
-          pickups: room.pickups,
-          droppedWeapons: room.droppedWeapons,
+          pickups: refresh ? room.pickups : undefined,
+          droppedWeapons: refresh ? room.droppedWeapons : undefined,
           activeGrenades: this.serializeGrenades(room),
-          players: this.serializePlayers(room)
+          players: this.serializePlayers(room, now, { refresh })
         };
         emitter.emit('stateUpdate', statePayload);
         // size sample for /api/netstats (about once per second per room; the emit itself already encoded the packet)
-        if (room.stateSeq % 25 === 0) this.netStats.recordSnapshotBytes(JSON.stringify(statePayload).length);
+        if (room.stateSeq % STATE_REFRESH_TICKS === 0) this.netStats.recordSnapshotBytes(JSON.stringify(statePayload).length);
       } catch (err) {
         this._deferSelfState = false;
         console.error(`[tick] error in room ${room?.code}:`, err);
