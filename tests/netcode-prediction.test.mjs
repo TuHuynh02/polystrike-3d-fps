@@ -429,8 +429,8 @@ describe('input commands: world rules are enforced by the server', () => {
   });
 
   it('the playerMove socket event is gone: no handler, no rate-limit entry; inputBatch is guarded', () => {
-    const indexSrc = fs.readFileSync(path.join(ROOT_DIR, 'server/index.js'), 'utf8');
-    assert.ok(!/on\(\s*'playerMove'/.test(indexSrc), 'server/index.js must not register playerMove');
+    const indexSrc = fs.readFileSync(path.join(ROOT_DIR, 'server/socketHandlers.js'), 'utf8');
+    assert.ok(!/on\(\s*'playerMove'/.test(indexSrc), 'server/socketHandlers.js must not register playerMove');
     assert.match(indexSrc, /on\(\s*'inputBatch'/);
     assert.equal(RATE_LIMITS.playerMove, undefined);
     assert.deepEqual(RATE_LIMITS.inputBatch, { rate: 40, burst: 60 });

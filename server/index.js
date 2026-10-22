@@ -4,18 +4,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { Server as SocketIOServer } from 'socket.io';
-import { MATCH_CONFIG, getMapConfig } from '../shared/constants.js';
 import { RoomManager } from './roomManager.js';
-import { LAN_MODE, NET_CONFIG, TICK_HZ } from './room/sanitizers.js';
+import { attachGameSocketHandlers } from './socketHandlers.js';
+import { LanSignaling } from './lanSignaling.js';
+import { LAN_MODE, TICK_HZ } from './room/sanitizers.js';
 import { normalizeLanUrl } from '../shared/lanUrl.js';
 import {
-  safeHandler,
-  guardedOn,
-  createRateLimiter,
   parseCorsOrigins,
   createCorsOriginCheck,
-  createAllowRequest,
-  installSmartVolatile
+  createAllowRequest
 } from './socketGuard.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -71,13 +68,15 @@ const staticAssetOptions = {
 app.use('/assets', express.static(path.join(ROOT_DIR, 'public', 'assets'), staticAssetOptions));
 app.use(express.static(path.join(ROOT_DIR, 'public')));
 app.use('/shared', express.static(path.join(ROOT_DIR, 'shared')));
+// The game server core is isomorphic: an in-browser LAN host (public/js/lanHost) imports it. The Node entry point stays private.
+app.get('/server/index.js', (_req, res) => res.sendStatus(404));
+app.use('/server', express.static(path.join(ROOT_DIR, 'server'), { maxAge: '1h' }));
 app.use('/vendor/three', express.static(path.join(ROOT_DIR, 'node_modules/three/build')));
 // GLTFLoader & friends (examples/jsm). The import map in index.html maps `three` to /vendor/three/three.module.js
 // (same URL as the game's own import, so there is ONE three.js instance) and `three/addons/` to this folder.
 app.use('/vendor/three-examples', express.static(path.join(ROOT_DIR, 'node_modules/three/examples/jsm'), { maxAge: '7d' }));
 
 const roomManager = new RoomManager(io);
-const HOST_ONLY_MESSAGE = 'Chỉ chủ phòng mới có thể đổi map.';
 
 // Render.com Health Check Endpoint
 app.get('/healthz', (_req, res) => {
@@ -110,248 +109,12 @@ app.get('*', (_req, res) => {
   res.sendFile(path.join(ROOT_DIR, 'public/index.html'));
 });
 
+// Rendezvous for in-browser LAN rooms (a player's browser hosts the game; only the WebRTC handshake passes through here)
+const lanSignaling = new LanSignaling();
+
 io.on('connection', (socket) => {
-  installSmartVolatile(socket);
-  let currentRoomCode = null;
-
-  // Every event handler below is crash-proof (try/catch), rate limited per
-  // socket and, unless noted, requires a plain-object payload.
-  const limiter = createRateLimiter();
-  const on = (event, handler, options) => guardedOn(socket, limiter, event, handler, options);
-
-  on('joinRoom', (payload) => {
-    try {
-      // Leave previous room if any
-      if (currentRoomCode) {
-        socket.leave(currentRoomCode);
-        roomManager.removePlayer(socket.id);
-        currentRoomCode = null;
-      }
-
-      const result = roomManager.addHumanPlayer(socket, payload);
-      if (result.error) {
-        socket.emit('joinError', { message: result.error });
-        return;
-      }
-
-      const { room, player } = result;
-      currentRoomCode = room.code;
-      socket.join(room.code);
-      roomManager.startLatencyProbe(socket, player); // server-measured RTT for lag compensation (stopped in removePlayer)
-
-      const timeRemaining = room.state === 'WAITING'
-        ? MATCH_CONFIG.MATCH_DURATION_SEC
-        : Math.max(0, Math.ceil((room.matchEndsAt - Date.now()) / 1000));
-      const mapCfg = getMapConfig(room.mapId);
-
-      socket.emit('roomJoined', {
-        playerId: player.id,
-        roomCode: room.code,
-        isPublic: room.isPublic,
-        gameMode: room.gameMode || 'ffa',
-        state: room.state,
-        hostId: room.hostId,
-        teamScores: room.teamScores || { alpha: 0, bravo: 0 },
-        mapId: room.mapId,
-        mapName: mapCfg.name,
-        killLimit: room.killLimit || (room.gameMode === 'tdm' ? (MATCH_CONFIG.TDM_KILL_LIMIT || 30) : MATCH_CONFIG.KILL_LIMIT),
-        timeRemaining,
-        net: NET_CONFIG,
-        player: {
-          id: player.id,
-          name: player.name,
-          color: player.color,
-          team: player.team || null,
-          ready: Boolean(player.ready),
-          x: player.x,
-          y: player.y,
-          z: player.z,
-          yaw: player.yaw,
-          pitch: player.pitch,
-          weapon: player.weapon,
-          loadout: player.loadout,
-          hp: player.hp,
-          armor: player.armor || 0,
-          ammo: player.ammo,
-          reserveAmmo: player.reserveAmmo,
-          ammoByWeapon: player.ammoByWeapon,
-          reserveAmmoByWeapon: player.reserveAmmoByWeapon,
-          grenades: player.grenades ?? 1,
-          moveEpoch: player.moveEpoch,
-          // Secret 32-bit seed of this player's deterministic weapon spread: owner-only (this event goes to this socket alone)
-          spreadSeed: player.spreadSeed,
-          invulnerable: true,
-          invulnerableUntil: player.invulnerableUntil,
-          spawnProtectionMs: MATCH_CONFIG.SPAWN_PROTECTION_MS
-        },
-        players: roomManager.serializePlayers(room),
-        pickups: room.pickups,
-        barrels: room.barrels || [],
-        droppedWeapons: room.droppedWeapons || [],
-        activeGrenades: room.grenades || []
-      });
-
-      socket.to(room.code).emit('playerJoined', {
-        id: player.id,
-        name: player.name,
-        color: player.color,
-        team: player.team || null
-      });
-
-      if (room.gameMode === 'tdm') {
-        roomManager.broadcastTeamLobby(room);
-      }
-    } catch (err) {
-      if (currentRoomCode) {
-        try {
-          socket.leave(currentRoomCode);
-          roomManager.removePlayer(socket.id);
-        } catch {
-          // ignore rollback error
-        }
-        currentRoomCode = null;
-      }
-      console.error('Error in joinRoom:', err);
-      socket.emit('joinError', { message: 'Không thể tham gia phòng chơi. Vui lòng thử lại.' });
-    }
-  });
-
-  // Client input commands (client-side prediction): { e: moveEpoch, cmds: [{ seq, mf, mr, yaw, pitch, lean, btn, w, ss? }] }.
-  // Positions are never accepted from clients; commands are queued here and simulated on the server tick. A command with the
-  // FIRE bit (btn & 64) and a shot sequence `ss` is a shot, resolved entirely on the server.
-  on('inputBatch', (payload) => {
-    if (!currentRoomCode) return;
-    const room = roomManager.rooms.get(currentRoomCode);
-    if (!room) return;
-    const player = room.players.get(socket.id);
-    if (!player) return;
-    roomManager.handleInputBatch(room, player, payload);
-  });
-
-  // There is deliberately NO `shoot` event: a shot is the FIRE bit (+ `ss`) of an input command inside `inputBatch`. The server
-  // computes direction, spread and hits itself (RoomManager.processFireCommand -> resolveShot).
-
-  on('throwGrenade', (payload) => {
-    if (!currentRoomCode) return;
-    const room = roomManager.rooms.get(currentRoomCode);
-    if (!room) return;
-    const player = room.players.get(socket.id);
-    if (!player) return;
-    roomManager.handleThrowGrenade(room, player, payload);
-  });
-
-  on('reload', (payload) => {
-    if (!currentRoomCode) return;
-    const room = roomManager.rooms.get(currentRoomCode);
-    if (!room) return;
-    const player = room.players.get(socket.id);
-    if (!player) return;
-    roomManager.handleReload(room, player, payload?.weapon);
-  });
-
-  on('pickupWeapon', (payload) => {
-    if (!currentRoomCode) return;
-    const room = roomManager.rooms.get(currentRoomCode);
-    if (!room) return;
-    const player = room.players.get(socket.id);
-    if (!player) return;
-    roomManager.handlePickupWeapon(room, player, payload);
-  });
-
-  on('updateLoadout', (payload) => {
-    if (!currentRoomCode) return;
-    const room = roomManager.rooms.get(currentRoomCode);
-    if (!room) return;
-    const player = room.players.get(socket.id);
-    if (!player) return;
-    const loadout = roomManager.handleUpdateLoadout(room, player, payload);
-    if (loadout) {
-      socket.emit('loadoutUpdated', {
-        loadout,
-        weapon: player.weapon,
-        ammo: player.ammo,
-        reserveAmmo: player.reserveAmmo,
-        ammoByWeapon: player.ammoByWeapon,
-        reserveAmmoByWeapon: player.reserveAmmoByWeapon,
-        alive: player.alive
-      });
-    }
-  });
-
-  on('changeMap', (payload) => {
-    if (!currentRoomCode) return;
-    const room = roomManager.rooms.get(currentRoomCode);
-    if (!room) return;
-    const player = room.players.get(socket.id);
-    if (!player) return;
-    const result = roomManager.handleChangeMap(room, player, payload);
-    if (!result.ok) {
-      socket.emit('actionDenied', { action: 'changeMap', reason: result.error, message: HOST_ONLY_MESSAGE });
-    }
-  });
-
-  on('switchTeam', (payload) => {
-    if (!currentRoomCode) return;
-    const room = roomManager.rooms.get(currentRoomCode);
-    if (!room) return;
-    const player = room.players.get(socket.id);
-    if (!player) return;
-    const result = roomManager.handleSwitchTeam(room, player, payload || {});
-    if (!result.ok) {
-      socket.emit('actionDenied', { action: 'switchTeam', reason: result.error, message: result.message || result.error });
-    }
-  }, { expectObject: false });
-
-  on('setTeamReady', (payload) => {
-    if (!currentRoomCode) return;
-    const room = roomManager.rooms.get(currentRoomCode);
-    if (!room) return;
-    const player = room.players.get(socket.id);
-    if (!player) return;
-    const result = roomManager.handleSetTeamReady(room, player, payload || {});
-    if (!result.ok) {
-      socket.emit('actionDenied', { action: 'setTeamReady', reason: result.error, message: result.message || result.error });
-    }
-  }, { expectObject: false });
-
-  on('startTeamMatch', () => {
-    if (!currentRoomCode) return;
-    const room = roomManager.rooms.get(currentRoomCode);
-    if (!room) return;
-    const player = room.players.get(socket.id);
-    if (!player) return;
-    const result = roomManager.handleStartTeamMatch(room, player);
-    if (!result.ok) {
-      socket.emit('actionDenied', {
-        action: 'startTeamMatch',
-        reason: result.error,
-        message: result.message || (result.error === 'not_host' ? HOST_ONLY_MESSAGE : 'Cần ít nhất 1 người ở mỗi phe để bắt đầu trận đấu.')
-      });
-    }
-  }, { expectObject: false });
-
-  on('pingCheck', (clientSentAt, ack) => {
-    if (typeof ack === 'function') {
-      ack(clientSentAt);
-    }
-  }, { expectObject: false });
-
-  on('leaveRoom', () => {
-    if (currentRoomCode) {
-      socket.leave(currentRoomCode);
-      roomManager.removePlayer(socket.id);
-      currentRoomCode = null;
-    }
-  }, { expectObject: false });
-
-  // Cleanup must always run (even for a flood-disconnected socket), so it is
-  // crash-proofed but intentionally not rate limited.
-  socket.on('disconnect', safeHandler('disconnect', () => {
-    if (currentRoomCode) {
-      roomManager.removePlayer(socket.id);
-      currentRoomCode = null;
-    }
-  }));
+  attachGameSocketHandlers({ socket, roomManager });
+  lanSignaling.attach(socket);
 });
 
 const PORT = process.env.PORT || 3000;

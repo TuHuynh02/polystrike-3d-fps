@@ -73,6 +73,9 @@ import {
   sanitizeTeam
 } from './sanitizers.js';
 
+// Debug switch: send stateUpdate / shotFired reliably instead of volatile (no `process` in the browser LAN host)
+const SV_RELIABLE = typeof process !== 'undefined' && Boolean(process.env?.SV_RELIABLE);
+
 export class CombatSystemMethods {
   /**
    * Starts a fresh shooting session for a human (join, respawn, new match): a new random 32-bit `spreadSeed` and a clean
@@ -425,7 +428,7 @@ export class CombatSystemMethods {
     };
     if (dirs.length > 1) shotEvent.dirs = dirs.map((d) => roundVec(d, 10000));
     const shotTarget = this.io.to(room.code);
-    const shotEmitTarget = process.env.SV_RELIABLE ? shotTarget : (shotTarget.volatile || shotTarget);
+    const shotEmitTarget = SV_RELIABLE ? shotTarget : (shotTarget.volatile || shotTarget);
     shotEmitTarget.emit('shotFired', shotEvent);
 
     const dmgBoostMult = (shooter.damageBoostUntil && now < shooter.damageBoostUntil)

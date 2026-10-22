@@ -77,6 +77,9 @@ import {
 // Ticks between full-refresh stateUpdates (~COLD_REFRESH_MS: 25 at 25 Hz, 50 at 50 Hz).
 const STATE_REFRESH_TICKS = Math.max(1, Math.round(COLD_REFRESH_MS / TICK_INTERVAL_MS));
 
+// Debug switch: send stateUpdate / shotFired reliably instead of volatile (no `process` in the browser LAN host)
+const SV_RELIABLE = typeof process !== 'undefined' && Boolean(process.env?.SV_RELIABLE);
+
 export class MatchLifecycleMethods {
   getLeaderboard(room) {
     return Array.from(room.players.values())
@@ -425,7 +428,7 @@ export class MatchLifecycleMethods {
         // Broadcast compact state snapshot (use volatile on Socket.IO to prevent TCP bufferbloat)
         room.stateSeq = ((room.stateSeq || 0) + 1) | 0;
         const roomTarget = this.io.to(room.code);
-        const emitter = process.env.SV_RELIABLE ? roomTarget : (roomTarget.volatile || roomTarget);
+        const emitter = SV_RELIABLE ? roomTarget : (roomTarget.volatile || roomTarget);
         // Hot/cold split (shared/playerDelta.js): a periodic full-refresh snapshot (the first one of a room and then about once
         // per second) carries everything; the snapshots in between carry only what changes every tick. Pickups and dropped
         // weapons have their own reliable change events (`pickupState`, `weaponDropped`, `droppedWeaponsUpdate`), so in between

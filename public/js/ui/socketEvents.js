@@ -5,6 +5,7 @@ import {
   getMapConfig
 } from '../shared.js';
 import { installRejoinOnReconnect, SERVER_UNREACHABLE_MESSAGE } from '../networkAdapter.js';
+import { LAN_LOST_MESSAGE, lanErrorText } from '../lanHost/lanMode.js';
 import {
   canvasContainer,
   toastEl,
@@ -243,9 +244,12 @@ export function measurePing() {
 }
 
 export function initSocketEvents() {
-  const showServerUnreachable = () => {
+  const showServerUnreachable = (err) => {
     appState.serverErrorShown = true;
-    lobbyError.textContent = `${ SERVER_UNREACHABLE_MESSAGE }. Đang thử kết nối lại...`;
+    // An in-browser LAN room does not reconnect by itself: say what went wrong instead of "retrying".
+    lobbyError.textContent = appState.lanInfo
+      ? lanErrorText(err?.message)
+      : `${ SERVER_UNREACHABLE_MESSAGE }. Đang thử kết nối lại...`;
     lobbyError.classList.remove('hidden');
   };
   if (appState.netInitFailed) showServerUnreachable();
@@ -253,7 +257,7 @@ export function initSocketEvents() {
 
   installRejoinOnReconnect(appState.socket, {
     isInMatch: () => Boolean(appState.game.inMatch || appState.activeRoomCode),
-    onLost: () => showToast('⚠️ Mất kết nối — đang kết nối lại...'),
+    onLost: () => showToast(appState.lanInfo ? '⚠️ Mất kết nối LAN với chủ phòng' : '⚠️ Mất kết nối — đang kết nối lại...'),
     rejoin: () => {
       if (!appState.lastJoinPayload) return;
       appState.game.clearAllRemotePlayers();
@@ -264,6 +268,14 @@ export function initSocketEvents() {
 
 appState.socket.on('disconnect', () => {
   appState._pingInFlightAt = 0;
+  if (appState.lanInfo) {
+    // LAN room: the host left or the link dropped; there is no automatic reconnect, so go back to the lobby with the reason.
+    if (appState.game.inMatch || appState.activeRoomCode) leaveActiveRoom({ emitLeave: false });
+    appState.serverErrorShown = true;
+    lobbyError.textContent = LAN_LOST_MESSAGE;
+    lobbyError.classList.remove('hidden');
+    return;
+  }
   if (!appState.game.inMatch && !appState.activeRoomCode) showServerUnreachable();
 });
 appState.socket.on('connect', () => {
@@ -305,7 +317,7 @@ appState.socket.on('roomJoined', (data) => {
 
   // Update browser URL with ?room=CODE so copying URL directly from address bar works
   const shareUrl = getShareableRoomUrl(appState.activeRoomCode);
-  window.history.replaceState(null, '', `?room=${ appState.activeRoomCode }`);
+  window.history.replaceState(null, '', new URL(shareUrl).search);
 
   hudRoomCode.textContent = `#${ appState.activeRoomCode }`;
   sbRoomCode.textContent = `#${ appState.activeRoomCode }`;

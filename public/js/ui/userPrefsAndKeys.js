@@ -188,6 +188,7 @@ export const appState = {
   currentTeamScores: { alpha: 0, bravo: 0 },
   activeRoomCode: '',
   latestPlayers: [],
+  lanInfo: null, // { role: 'host'|'guest', code, ... } when this page plays in an in-browser LAN room
   playerStateCache: new PlayerStateCache(), // rebuilds complete player objects from hot-only stateUpdate entries
   hitmarkerTimer: null,
   floatingDmgTimer: null,

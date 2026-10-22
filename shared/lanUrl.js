@@ -56,3 +56,67 @@ export function parseCreateParams(search) {
     gameMode: params.get('mode') === 'tdm' ? 'tdm' : 'ffa'
   };
 }
+
+// ---- In-browser LAN rooms (a player's browser hosts the game, guests join through WebRTC) ----
+// Host page:   /?lanhost=CODE&name=&map=&mode=      (opened by "Chơi qua LAN" + "Tạo phòng riêng")
+// Guest link:  /?room=CODE&lan=1                     (the share link of such a room)
+
+export const LAN_HOST_PARAM = 'lanhost';
+export const LAN_GUEST_PARAM = 'lan';
+
+const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // same alphabet as the server's generateRoomCode
+
+/** 6-character room code from the same alphabet as server-generated codes (no 0/O/1/I). */
+export function generateLanRoomCode(randomBytes = (n) => globalThis.crypto.getRandomValues(new Uint8Array(n))) {
+  const bytes = randomBytes(6);
+  let code = '';
+  for (let i = 0; i < 6; i++) code += ROOM_CODE_ALPHABET[bytes[i] % ROOM_CODE_ALPHABET.length];
+  return code;
+}
+
+function cleanCode(raw) {
+  return String(raw ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+}
+
+export function buildLanHostUrl(origin, { code, name = '', mapId = '', gameMode = 'ffa' } = {}) {
+  const url = new URL('/', origin);
+  url.searchParams.set(LAN_HOST_PARAM, cleanCode(code));
+  const n = cleanName(name);
+  if (n) url.searchParams.set('name', n);
+  if (/^[a-z0-9_]{1,32}$/i.test(mapId)) url.searchParams.set('map', mapId);
+  url.searchParams.set('mode', gameMode === 'tdm' ? 'tdm' : 'ffa');
+  return url.toString();
+}
+
+/** `?lanhost=CODE&name=&map=&mode=` -> { code, name, mapId, gameMode } or null. */
+export function parseLanHostParams(search) {
+  let params;
+  try {
+    params = new URLSearchParams(search || '');
+  } catch {
+    return null;
+  }
+  const code = cleanCode(params.get(LAN_HOST_PARAM));
+  if (code.length !== 6) return null;
+  const map = params.get('map') || '';
+  return {
+    code,
+    name: cleanName(params.get('name')),
+    mapId: /^[a-z0-9_]{1,32}$/i.test(map) ? map : '',
+    gameMode: params.get('mode') === 'tdm' ? 'tdm' : 'ffa'
+  };
+}
+
+/** `?room=CODE&lan=1` -> { code } or null. */
+export function parseLanGuestParams(search) {
+  let params;
+  try {
+    params = new URLSearchParams(search || '');
+  } catch {
+    return null;
+  }
+  if (params.get(LAN_GUEST_PARAM) !== '1') return null;
+  const code = cleanCode(params.get('room'));
+  return code.length === 6 ? { code } : null;
+}
+

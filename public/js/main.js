@@ -2,6 +2,7 @@ import { WEAPONS } from '../shared/constants.js';
 import { SoundEffects } from './audio.js';
 import { Game3D } from './game3d.js';
 import { createNetworkClient, SERVER_UNREACHABLE_MESSAGE } from './networkAdapter.js';
+import { setupLanMode } from './lanHost/lanMode.js';
 import {
   canvasContainer,
   toastEl,
@@ -139,6 +140,7 @@ import {
   nextMatchCountdown,
   urlParams,
   invitedRoomParam,
+  lanState,
   escapeHtml,
   formatTime,
   getShareableRoomUrl
@@ -182,6 +184,9 @@ try {
     }
   };
 }
+// In-browser LAN room (?lanhost=CODE or ?room=CODE&lan=1): the game socket becomes a WebRTC/LAN socket, Render only does signaling.
+const lanInfo = netInitFailed ? null : await setupLanMode(netClient);
+lanState.active = Boolean(lanInfo && !lanInfo.error);
 const socket = netClient.socket;
 const sfx = new SoundEffects();
 if (typeof SoundEffects.prototype.playHeadshotDink !== 'function') {
@@ -192,6 +197,7 @@ if (typeof SoundEffects.prototype.playMultiKillTone !== 'function') {
 }
 
 appState.netClient = netClient;
+appState.lanInfo = lanInfo;
 appState.netInitFailed = netInitFailed;
 appState.socket = socket;
 appState.sfx = sfx;

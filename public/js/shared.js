@@ -8,3 +8,5 @@ export * from '../shared/hitboxes.js';
 export * from '../shared/lagCompensation.js';
 export * from '../shared/playerDelta.js';
 export * from '../shared/lanUrl.js';
+export * from '../shared/lanProtocol.js';
+export * from '../shared/lanClientSocket.js';

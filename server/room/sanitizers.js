@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto';
 import {
   DEFAULT_MAP_ID,
   MAPS,
@@ -12,8 +11,13 @@ import { INTERP_DELAY_MIN_MS, INTERP_DELAY_MS } from '../../shared/config.js';
 // runs 50 Hz because bandwidth is free on a LAN and every tick shaves latency off hit registration and remote-player motion.
 // TICK_HZ overrides either default. Capped to [20, 50] Hz: the lag-compensation history ring (LAG_COMP_MAX_SNAPSHOTS = 32 over
 // LAG_COMP_HISTORY_MS = 550) only holds 550 ms of history down to a 20 ms tick.
-export const LAN_MODE = /^(1|true|yes|on)$/i.test(process.env.LAN_MODE || '') || process.argv.includes('--lan');
-const requestedHz = Number(process.env.TICK_HZ);
+//
+// This module also runs in the browser (the in-browser LAN host, public/js/lanHost): there is no `process`, and a browser host is
+// by definition a LAN host.
+const nodeProcess = typeof process !== 'undefined' ? process : null;
+const env = nodeProcess?.env ?? {};
+export const LAN_MODE = !nodeProcess || /^(1|true|yes|on)$/i.test(env.LAN_MODE || '') || (nodeProcess.argv || []).includes('--lan');
+const requestedHz = Number(env.TICK_HZ);
 export const TICK_HZ = Math.min(50, Math.max(20, Number.isFinite(requestedHz) && requestedHz > 0 ? requestedHz : (LAN_MODE ? 50 : 25)));
 export const TICK_INTERVAL_MS = Math.round(1000 / TICK_HZ);
 
@@ -126,8 +130,11 @@ export { SHOT_REJECT };
 /** Interval (ms) of periodic owner-only `selfState` reconciliation (~8.3 Hz). */
 export const SELF_STATE_INTERVAL_MS = 120;
 
+// Web Crypto exists in browsers and in Node >= 19 (older Node: load node:crypto's copy, never executed in a browser).
+const webCrypto = globalThis.crypto ?? (await import('node:crypto')).webcrypto;
+
 export function randomSpreadSeed() {
-  return randomBytes(4).readUInt32BE(0);
+  return webCrypto.getRandomValues(new Uint32Array(1))[0];
 }
 
 export const roundTo = (v, k) => Math.round(v * k) / k;

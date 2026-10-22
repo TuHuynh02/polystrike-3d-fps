@@ -5,11 +5,14 @@ import {
   PRIMARY_WEAPONS,
   WEAPONS,
   buildLanCreateUrl,
+  buildLanHostUrl,
+  generateLanRoomCode,
   getMapConfig,
   normalizeLanUrl,
   parseCreateParams
 } from '../shared.js';
 import { SERVER_UNREACHABLE_MESSAGE } from '../networkAdapter.js';
+import { lanErrorText } from '../lanHost/lanMode.js';
 import {
   canvasContainer,
   toastEl,
@@ -25,6 +28,7 @@ import {
   btnQuickPlay,
   btnCreatePrivate,
   lanRoomHint,
+  lanP2pCheckbox,
   lanUrlInput,
   btnSaveLanUrl,
   roomCodeInput,
@@ -405,7 +409,9 @@ function getLobbyPlayerName() {
 export function requestJoinRoom({ mode = 'public', roomCode = '' }) {
   lobbyError.classList.add('hidden');
   if (!appState.socket.connected) {
-    lobbyError.textContent = `${ SERVER_UNREACHABLE_MESSAGE }. Vui lòng đợi hoặc tải lại trang.`;
+    lobbyError.textContent = appState.lanInfo && !appState.lanInfo.error
+      ? '🔌 Đang kết nối LAN tới chủ phòng, vui lòng đợi vài giây...'
+      : `${ SERVER_UNREACHABLE_MESSAGE }. Vui lòng đợi hoặc tải lại trang.`;
     lobbyError.classList.remove('hidden');
     return;
   }
@@ -791,6 +797,16 @@ btnQuickPlay.addEventListener('click', () => {
 });
 
 btnCreatePrivate.addEventListener('click', () => {
+  // "Chơi qua LAN": this browser becomes the game server of the room (page reload in host mode, see lanHost/lanMode.js)
+  if (lanP2pCheckbox?.checked) {
+    window.location.href = buildLanHostUrl(window.location.origin, {
+      code: generateLanRoomCode(),
+      name: getLobbyPlayerName(),
+      mapId: appState.selectedMapId,
+      gameMode: appState.selectedGameMode
+    });
+    return;
+  }
   // On the public site with an office LAN server configured, the private room is created there (see "LAN server" below)
   if (lanServerUrl) {
     window.location.href = buildLanCreateUrl(lanServerUrl, {
@@ -997,21 +1013,47 @@ export function initLanServerRoom() {
   });
   refreshLanServerUrl();
 
+  const applyLobbySelections = ({ name, mapId, gameMode }) => {
+    if (name) playerNameInput.value = name;
+    if (mapId && Object.hasOwn(MAPS, mapId)) {
+      appState.selectedMapId = mapId;
+      syncLobbyMapSelectionUi(mapId);
+    }
+    appState.selectedGameMode = gameMode === 'tdm' ? 'tdm' : 'ffa';
+    lobbyGameModeGrid?.querySelectorAll('.game-mode-option').forEach((el) => {
+      el.classList.toggle('active', el.dataset.mode === appState.selectedGameMode);
+    });
+  };
+
   // Landing on the LAN server from the public site (?create=private&name=&map=&mode=): create the private room right away.
   const lanCreate = parseCreateParams(window.location.search);
   if (lanCreate) {
     window.history.replaceState(null, '', window.location.pathname || '/'); // a reload must not create another room
-    if (lanCreate.name) playerNameInput.value = lanCreate.name;
-    if (lanCreate.mapId && Object.hasOwn(MAPS, lanCreate.mapId)) {
-      appState.selectedMapId = lanCreate.mapId;
-      syncLobbyMapSelectionUi(lanCreate.mapId);
-    }
-    appState.selectedGameMode = lanCreate.gameMode;
-    lobbyGameModeGrid?.querySelectorAll('.game-mode-option').forEach((el) => {
-      el.classList.toggle('active', el.dataset.mode === appState.selectedGameMode);
-    });
+    applyLobbySelections(lanCreate);
     const createNow = () => requestJoinRoom({ mode: 'private', roomCode: '' });
     if (appState.socket.connected) createNow();
     else appState.socket.once('connect', createNow);
+  }
+
+  // "Chơi qua LAN" (this browser hosts the room, guests join over WebRTC): see lanHost/lanMode.js
+  const lanPref = 'polystrike_lan_p2p';
+  if (lanP2pCheckbox) {
+    try { lanP2pCheckbox.checked = localStorage.getItem(lanPref) === '1'; } catch { /* storage unavailable */ }
+    lanP2pCheckbox.addEventListener('change', () => {
+      try { localStorage.setItem(lanPref, lanP2pCheckbox.checked ? '1' : '0'); } catch { /* storage unavailable */ }
+    });
+  }
+  const lan = appState.lanInfo;
+  if (lan?.error) {
+    applyLobbySelections(lan);
+    lobbyError.textContent = lanErrorText(lan.error);
+    lobbyError.classList.remove('hidden');
+  } else if (lan?.role === 'host') {
+    applyLobbySelections(lan);
+    requestJoinRoom({ mode: 'private', roomCode: lan.code });
+  } else if (lan?.role === 'guest' && !appState.socket.connected) {
+    appState.serverErrorShown = true; // cleared (and the message hidden) by the socket's `connect`
+    lobbyError.textContent = '🔌 Đang kết nối LAN tới chủ phòng...';
+    lobbyError.classList.remove('hidden');
   }
 }

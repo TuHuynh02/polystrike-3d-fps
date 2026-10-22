@@ -7,8 +7,10 @@
   "scripts": {
     "start": "node server/index.js",
     "lan": "node server/index.js --lan",
+    "lan:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-lan-autostart.ps1 -StartNow",
+    "lan:uninstall": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/uninstall-lan-autostart.ps1",
     "dev": "node --watch server/index.js",
-    "test": "node --test tests/game.test.mjs tests/server-authority.test.mjs tests/socket-guard.test.mjs tests/combat-rules.test.mjs tests/movement.test.mjs tests/netcode-prediction.test.mjs tests/hitboxes.test.mjs tests/snapshot-interpolation.test.mjs tests/shot-in-command.test.mjs tests/self-state.test.mjs tests/graphics-quality.test.mjs tests/network-client.test.mjs tests/network-impairment.test.mjs tests/lan-and-delta.test.mjs",
+    "test": "node --test tests/game.test.mjs tests/server-authority.test.mjs tests/socket-guard.test.mjs tests/combat-rules.test.mjs tests/movement.test.mjs tests/netcode-prediction.test.mjs tests/hitboxes.test.mjs tests/snapshot-interpolation.test.mjs tests/shot-in-command.test.mjs tests/self-state.test.mjs tests/graphics-quality.test.mjs tests/network-client.test.mjs tests/network-impairment.test.mjs tests/lan-and-delta.test.mjs tests/lan-host.test.mjs tests/lan-signaling.test.mjs",
     "test:ci": "node scripts/verify-ci.mjs"
   },
   "dependencies": {

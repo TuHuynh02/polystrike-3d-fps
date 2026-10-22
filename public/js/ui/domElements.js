@@ -16,6 +16,7 @@ export const lobbyError = document.getElementById('lobby-error');
 export const btnQuickPlay = document.getElementById('btn-quick-play');
 export const btnCreatePrivate = document.getElementById('btn-create-private');
 export const lanRoomHint = document.getElementById('lan-room-hint');
+export const lanP2pCheckbox = document.getElementById('lan-p2p-checkbox');
 export const lanUrlInput = document.getElementById('lan-url-input');
 export const btnSaveLanUrl = document.getElementById('btn-save-lan-url');
 export const roomCodeInput = document.getElementById('room-code-input');
@@ -160,9 +161,14 @@ if (invitedRoomParam) {
   roomCodeInput.value = invitedRoomParam;
 }
 
+// True on pages that play in an in-browser LAN room (set by main.js): their share links carry `lan=1` so guests join over WebRTC.
+export const lanState = { active: false };
+
 export function getShareableRoomUrl(code) {
   const url = new URL(window.location.href);
+  for (const key of ['lanhost', 'name', 'map', 'mode', 'create', 'lan']) url.searchParams.delete(key);
   url.searchParams.set('room', code);
+  if (lanState.active) url.searchParams.set('lan', '1');
   return url.toString();
 }
 
