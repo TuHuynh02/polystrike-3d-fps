@@ -147,38 +147,60 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
   pelvisGroup.position.set(0, 0.80, 0);
   group.add(pelvisGroup);
 
+  // Separate visual pelvis container from pelvisGroup so lean animation can smoothly tilt/bridge the waist
+  // while pelvisHitboxProxy on pelvisGroup remains at exact (0, hipY, 0) server parity.
+  const pelvisVisualGroup = new THREE.Group();
+  pelvisGroup.add(pelvisVisualGroup);
+
   // Anatomical Pelvis & Hip Block
   const pelvisCore = new THREE.Mesh(
     getCachedGeo('pelvisCore', () => new THREE.CylinderGeometry(0.168, 0.154, 0.19, 22)),
     bduMat
   );
-  pelvisCore.scale.set(1.36, 1.08, 0.94);
+  pelvisCore.scale.set(1.42, 1.10, 0.96);
   pelvisCore.castShadow = true;
   tagBodyHitbox(pelvisCore);
-  pelvisGroup.add(pelvisCore);
+  pelvisVisualGroup.add(pelvisCore);
+
+  // Upper Pelvis / Waist Socket Dome centered at the spine pivot (y = 0.096)
+  const waistSocketDome = new THREE.Mesh(
+    getCachedGeo('waistSocketDome', () => new THREE.SphereGeometry(0.172, 20, 14)),
+    bduMat
+  );
+  waistSocketDome.scale.set(1.38, 0.92, 0.92);
+  waistSocketDome.position.set(0, 0.092, 0);
+
+  // Contoured Hip Socket Caps concentric with the left/right thigh hipBall joints at x = +-0.145, y = 0
+  const hipSocketGeo = getCachedGeo('hipSocketCap', () => new THREE.SphereGeometry(0.126, 18, 14));
+  const hipSocketL = new THREE.Mesh(hipSocketGeo, bduMat);
+  hipSocketL.scale.set(1.04, 1.04, 1.02);
+  hipSocketL.position.set(-0.145, 0, 0);
+  const hipSocketR = new THREE.Mesh(hipSocketGeo, bduMat);
+  hipSocketR.scale.set(1.04, 1.04, 1.02);
+  hipSocketR.position.set(0.145, 0, 0);
 
   // Contoured Gluteal & Groin Anatomical Volumes
   const groinGuard = new THREE.Mesh(
-    getCachedGeo('groinGuard', () => new THREE.CapsuleGeometry(0.074, 0.075, 10, 14)),
+    getCachedGeo('groinGuard', () => new THREE.CapsuleGeometry(0.082, 0.080, 10, 14)),
     bduMat
   );
-  groinGuard.position.set(0, -0.035, -0.062);
+  groinGuard.position.set(0, -0.032, -0.056);
   groinGuard.castShadow = false;
 
-  const gluteGeo = getCachedGeo('gluteContour', () => new THREE.SphereGeometry(0.096, 14, 12));
+  const gluteGeo = getCachedGeo('gluteContour', () => new THREE.SphereGeometry(0.104, 14, 12));
   const gluteL = new THREE.Mesh(gluteGeo, bduMat);
-  gluteL.scale.set(1.08, 1.12, 0.92);
-  gluteL.position.set(-0.088, -0.018, 0.072);
+  gluteL.scale.set(1.12, 1.14, 0.96);
+  gluteL.position.set(-0.102, -0.016, 0.068);
   const gluteR = new THREE.Mesh(gluteGeo, bduMat);
-  gluteR.scale.set(1.08, 1.12, 0.92);
-  gluteR.position.set(0.088, -0.018, 0.072);
+  gluteR.scale.set(1.12, 1.14, 0.96);
+  gluteR.position.set(0.102, -0.016, 0.068);
 
   // Ronin Padded MOLLE Battle Belt + Inner Velcro Belt + AustriAlpin Cobra Buckle
   const beltRing = new THREE.Mesh(
     getCachedGeo('beltRing', () => new THREE.CylinderGeometry(0.185, 0.185, 0.068, 22)),
     vestMat
   );
-  beltRing.scale.set(1.38, 1.08, 0.96);
+  beltRing.scale.set(1.42, 1.08, 0.98);
   beltRing.position.set(0, 0.065, 0);
   beltRing.castShadow = false;
 
@@ -186,7 +208,7 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     getCachedGeo('beltInnerStrap', () => new THREE.CylinderGeometry(0.188, 0.188, 0.030, 22)),
     webbingMat
   );
-  beltInnerStrap.scale.set(1.38, 1.08, 0.96);
+  beltInnerStrap.scale.set(1.42, 1.08, 0.98);
   beltInnerStrap.position.set(0, 0.065, 0);
   beltInnerStrap.castShadow = false;
 
@@ -196,7 +218,7 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
   );
   cobraBuckle.rotation.z = Math.PI / 2;
   cobraBuckle.scale.set(1, 1, 0.52);
-  cobraBuckle.position.set(0, 0.065, -0.162);
+  cobraBuckle.position.set(0, 0.065, -0.166);
   cobraBuckle.castShadow = false;
 
   // Two M67 Fragmentation Grenades clipped on front-side belt (Spherical Body + Fuze + Safety Lever + Pull Ring)
@@ -216,24 +238,24 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     const gPin = new THREE.Mesh(gRingGeo, chromeMat);
     gPin.position.set(-0.012, 0.036, 0.008);
     gGroup.add(gBody, gFuze, gSpoon, gPin);
-    gGroup.position.set(xPos, 0.052, -0.135);
+    gGroup.position.set(xPos, 0.052, -0.138);
     return gGroup;
   };
-  const fragL = buildBeltGrenade(-0.155);
-  const fragR = buildBeltGrenade(0.155);
+  const fragL = buildBeltGrenade(-0.158);
+  const fragR = buildBeltGrenade(0.158);
 
   // Left Hip Contoured Double Pistol Mag Pouches & Rear Rolled Dump Pouch + Cylindrical IFAK Trauma Roll
   const sidePouchGeo = getCachedGeo('sidePouchContoured', () => new THREE.CapsuleGeometry(0.024, 0.055, 8, 12));
   const sidePouchL1 = new THREE.Mesh(sidePouchGeo, vestMat);
-  sidePouchL1.position.set(-0.225, 0.058, -0.032);
+  sidePouchL1.position.set(-0.232, 0.058, -0.032);
   const sidePouchL2 = new THREE.Mesh(sidePouchGeo, vestMat);
-  sidePouchL2.position.set(-0.225, 0.058, 0.022);
+  sidePouchL2.position.set(-0.232, 0.058, 0.022);
 
   const dumpPouchRear = new THREE.Mesh(
     getCachedGeo('dumpPouchRear', () => new THREE.CapsuleGeometry(0.046, 0.078, 10, 14)),
     webbingMat
   );
-  dumpPouchRear.position.set(-0.125, 0.028, 0.162);
+  dumpPouchRear.position.set(-0.125, 0.028, 0.165);
 
   const ifakRollRear = new THREE.Mesh(
     getCachedGeo('ifakRollRear', () => {
@@ -243,16 +265,19 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     }),
     vestMat
   );
-  ifakRollRear.position.set(0.062, 0.062, 0.168);
+  ifakRollRear.position.set(0.062, 0.062, 0.172);
 
   const ifakCross = new THREE.Mesh(
     getCachedGeo('ifakCross', () => new THREE.CylinderGeometry(0.018, 0.018, 0.012, 14)),
     mainMat
   );
   ifakCross.rotation.x = Math.PI / 2;
-  ifakCross.position.set(0.062, 0.062, 0.204);
+  ifakCross.position.set(0.062, 0.062, 0.208);
 
-  pelvisGroup.add(
+  pelvisVisualGroup.add(
+    waistSocketDome,
+    hipSocketL,
+    hipSocketR,
     groinGuard,
     gluteL,
     gluteR,
@@ -273,14 +298,28 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
   upperBodyGroup.position.set(0, 0.10, 0); // World y = 0.90
   pelvisGroup.add(upperBodyGroup);
 
-  // Primary Anatomical Torso Hitbox & BDU Combat Shirt Core
-  const torsoGeo = getCachedGeo('torsoGeo', () => new THREE.CylinderGeometry(0.238, 0.176, 0.58, 22));
+  // Separate visual torso container from chestGroup so lean/prone articulation keeps the waist connected
+  // while chestGroup (parent of torsoHitboxProxy & headGroup) matches shared/hitboxes.js identically.
+  const torsoVisualGroup = new THREE.Group();
+  upperBodyGroup.add(torsoVisualGroup);
+
+  // Primary Anatomical Torso Hitbox & BDU Combat Shirt Core (bottom cap at y = 0 pivot so prone pitch never protrudes)
+  const torsoGeo = getCachedGeo('torsoGeo', () => new THREE.CylinderGeometry(0.238, 0.176, 0.56, 22));
   const torsoMesh = new THREE.Mesh(torsoGeo, bduMat);
-  torsoMesh.scale.set(1.38, 1.08, 0.92);
-  torsoMesh.position.set(0, 0.28, 0);
+  torsoMesh.scale.set(1.38, 1.06, 0.92);
+  torsoMesh.position.set(0, 0.295, 0);
   torsoMesh.castShadow = true;
   tagBodyHitbox(torsoMesh);
-  upperBodyGroup.add(torsoMesh);
+  torsoVisualGroup.add(torsoMesh);
+
+  // Concentric Lumbar Ball Joint centered right at the upperBodyGroup pivot (0, 0, 0)
+  const lumbarBallJoint = new THREE.Mesh(
+    getCachedGeo('lumbarBallJoint', () => new THREE.SphereGeometry(0.174, 20, 14)),
+    bduMat
+  );
+  lumbarBallJoint.scale.set(1.38, 0.94, 0.92);
+  lumbarBallJoint.position.set(0, 0.004, 0);
+  torsoVisualGroup.add(lumbarBallJoint);
 
   // Nested Chest Group inside Spine (upperBodyGroup) for hierarchical rig compatibility
   const chestGroup = new THREE.Group();
@@ -297,18 +336,28 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
   upperChestBroad.position.set(0, 0.40, 0);
   upperChestBroad.castShadow = true;
   tagBodyHitbox(upperChestBroad);
-  chestGroup.add(upperChestBroad);
+  torsoVisualGroup.add(upperChestBroad);
+
+  // Shoulder / Armpit Socket Bridges (connect upper torso to deltoid pivots at x = +-0.255, y = 0.46)
+  const shoulderSocketGeo = getCachedGeo('shoulderSocketBridge', () => new THREE.SphereGeometry(0.102, 14, 12));
+  const shoulderSocketL = new THREE.Mesh(shoulderSocketGeo, bduMat);
+  shoulderSocketL.scale.set(1.18, 1.14, 1.08);
+  shoulderSocketL.position.set(-0.230, 0.450, -0.012);
+  const shoulderSocketR = new THREE.Mesh(shoulderSocketGeo, bduMat);
+  shoulderSocketR.scale.set(1.18, 1.14, 1.08);
+  shoulderSocketR.position.set(0.232, 0.450, 0.005);
+  torsoVisualGroup.add(shoulderSocketL, shoulderSocketR);
 
   // Anatomical Trapezius Shoulder Slopes (smooth organic transition from neck to deltoids)
-  const trapGeo = getCachedGeo('trapeziusSlope', () => new THREE.CapsuleGeometry(0.054, 0.145, 8, 12));
+  const trapGeo = getCachedGeo('trapeziusSlope', () => new THREE.CapsuleGeometry(0.058, 0.16, 8, 12));
   const trapeziusL = new THREE.Mesh(trapGeo, bduMat);
-  trapeziusL.position.set(-0.122, 0.512, 0.008);
-  trapeziusL.rotation.z = 0.46;
-  trapeziusL.scale.set(1.0, 1.0, 0.92);
+  trapeziusL.position.set(-0.135, 0.508, 0.006);
+  trapeziusL.rotation.z = 0.52;
+  trapeziusL.scale.set(1.0, 1.0, 0.94);
   const trapeziusR = new THREE.Mesh(trapGeo, bduMat);
-  trapeziusR.position.set(0.122, 0.512, 0.008);
-  trapeziusR.rotation.z = -0.46;
-  trapeziusR.scale.set(1.0, 1.0, 0.92);
+  trapeziusR.position.set(0.135, 0.508, 0.006);
+  trapeziusR.rotation.z = -0.52;
+  trapeziusR.scale.set(1.0, 1.0, 0.94);
 
   // Sculpted Contoured Front SAPI Plate Carrier Bag (Smooth Rounded Capsule instead of faceted 8-sided prism)
   const frontPlateCore = new THREE.Mesh(
@@ -411,7 +460,7 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     rangerTab.position.set(mx - 0.003, 0.328, -0.205);
     rangerTab.rotation.z = -0.07;
 
-    chestGroup.add(pouch, magInsert, rangerTab);
+    torsoVisualGroup.add(pouch, magInsert, rangerTab);
   }
 
   // Juggernaut Chest ATAK Tactical Mount + Operator Patch + U94 PTT Radio Switch + Glowstick
@@ -466,25 +515,25 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
 
   // BDU Zipped Collar & Sculpted Human Neck with Folded Shemagh Neck Gaiter
   const bduCollar = new THREE.Mesh(
-    getCachedGeo('bduCollar', () => new THREE.CylinderGeometry(0.120, 0.142, 0.088, 20)),
+    getCachedGeo('bduCollar', () => new THREE.CylinderGeometry(0.126, 0.148, 0.096, 20)),
     bduMat
   );
-  bduCollar.position.set(0, 0.555, -0.005);
+  bduCollar.position.set(0, 0.556, -0.005);
 
   const shemaghRing = new THREE.Mesh(
-    getCachedGeo('shemaghRing', () => new THREE.TorusGeometry(0.105, 0.028, 12, 22)),
+    getCachedGeo('shemaghRing', () => new THREE.TorusGeometry(0.108, 0.032, 12, 22)),
     vestMat
   );
   shemaghRing.rotation.x = Math.PI / 2 + 0.08;
-  shemaghRing.position.set(0, 0.582, -0.006);
+  shemaghRing.position.set(0, 0.585, -0.006);
 
   const neckGaiter = new THREE.Mesh(
-    getCachedGeo('neckGaiter', () => new THREE.CylinderGeometry(0.088, 0.104, 0.14, 20)),
+    getCachedGeo('neckGaiter', () => new THREE.CylinderGeometry(0.096, 0.110, 0.14, 20)),
     webbingMat
   );
   neckGaiter.position.set(0, 0.615, -0.008);
 
-  chestGroup.add(
+  torsoVisualGroup.add(
     trapeziusL,
     trapeziusR,
     frontPlateCore,
@@ -512,6 +561,23 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
   const headGroup = new THREE.Group();
   headGroup.position.set(0, 0.64, 0); // World y = 1.54
   chestGroup.add(headGroup);
+
+  // Articulated Neck Ball Pivot & Upper Cervical Column:
+  // Bottom hemisphere of upperNeckColumn is centered at y = 0 (exact headGroup pivot) so pitching up in prone
+  // rotates the sphere in place inside neckGaiter without swinging a negative lever arm out the throat.
+  const neckPivotBall = new THREE.Mesh(
+    getCachedGeo('neckPivotBall', () => new THREE.SphereGeometry(0.098, 16, 14)),
+    webbingMat
+  );
+  neckPivotBall.position.set(0, 0, -0.008);
+
+  const upperNeckColumn = new THREE.Mesh(
+    getCachedGeo('upperNeckColumn', () => new THREE.CapsuleGeometry(0.092, 0.095, 12, 16)),
+    webbingMat
+  );
+  upperNeckColumn.scale.set(1.04, 1.0, 1.08);
+  upperNeckColumn.position.set(0, 0.0475, -0.010);
+  headGroup.add(neckPivotBall, upperNeckColumn);
 
   // Primary Headshot Collider & Sculpted Cranium Base
   const headGeo = getCachedGeo('headGeo', () => new THREE.CapsuleGeometry(0.136, 0.11, 16, 22));
@@ -763,11 +829,19 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
   );
 
   // ==================== 4. ANATOMICAL ARMS, BDU SLEEVES, ELBOW PADS & MECHANIX GLOVES ====================
+  // Canonical bone-space hierarchy along -Y:
+  //   rightArm (shoulder pivot at (0,0,0)) -> rightForearm (elbow pivot at (0,-ARM_UPPER_LEN,0)) -> rightHand (wrist pivot at (0,-ARM_LOWER_LEN,0))
+  //   leftArm  (shoulder pivot at (0,0,0)) -> leftForearm  (elbow pivot at (0,-ARM_UPPER_LEN,0)) -> leftHand  (wrist pivot at (0,-ARM_LOWER_LEN,0))
+  // Analytical 2-bone Law-of-Cosines IK (poseOperatorForWeapon) rotates each shoulder, elbow, and wrist so both
+  // hands grip the exact handle and foregrip of all 11 weapons without ever detaching or stretching joints.
   const armPivot = new THREE.Group();
   armPivot.position.set(0, 0.46, 0); // World y = 1.36
   chestGroup.add(armPivot);
 
-  const deltoidCapGeo = getCachedGeo('deltoidCap', () => new THREE.SphereGeometry(0.094, 16, 14));
+  const ARM_UPPER_LEN = 0.295;
+  const ARM_LOWER_LEN = 0.295;
+
+  const deltoidCapGeo = getCachedGeo('deltoidCap', () => new THREE.SphereGeometry(0.098, 16, 14));
   const armPocketGeo = getCachedGeo('armPocketContoured', () => new THREE.CapsuleGeometry(0.022, 0.068, 8, 12));
   const unitPatchGeo = getCachedGeo('unitPatchContoured', () => {
     const g = new THREE.CapsuleGeometry(0.026, 0.018, 6, 12);
@@ -779,166 +853,177 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     const sGroup = new THREE.Group();
 
     const deltoidCap = new THREE.Mesh(deltoidCapGeo, bduMat);
-    deltoidCap.scale.set(1.12, 1.24, 1.12);
+    deltoidCap.scale.set(1.14, 1.22, 1.14);
 
-    // Contoured BDU Zippered Upper-Arm Pocket + Unit Identification Velcro Patch
     const armPocket = new THREE.Mesh(armPocketGeo, bduMat);
     armPocket.scale.set(0.75, 1, 1.85);
-    armPocket.position.set(sideSign * 0.082, -0.036, 0);
-    armPocket.rotation.z = -sideSign * 0.12;
+    armPocket.position.set(sideSign * 0.072, -ARM_UPPER_LEN * 0.34, 0);
 
     const unitPatch = new THREE.Mesh(unitPatchGeo, mainMat);
-    unitPatch.position.set(sideSign * 0.101, -0.034, 0);
-    unitPatch.rotation.z = -sideSign * 0.12;
+    unitPatch.position.set(sideSign * 0.090, -ARM_UPPER_LEN * 0.34 + 0.002, 0);
 
     sGroup.add(deltoidCap, armPocket, unitPatch);
     return sGroup;
   };
 
   const handKnuckleGeo = getCachedGeo('handKnuckleContoured', () => {
-    const g = new THREE.CapsuleGeometry(0.011, 0.044, 8, 10);
+    const g = new THREE.CapsuleGeometry(0.012, 0.046, 8, 10);
     g.rotateX(Math.PI / 2);
     return g;
   });
-  const handThumbGeo = getCachedGeo('handThumb', () => new THREE.CapsuleGeometry(0.010, 0.034, 6, 10));
-  const handFingerGeo = getCachedGeo('handFinger', () => new THREE.CapsuleGeometry(0.0085, 0.036, 6, 10));
+  const handThumbGeo = getCachedGeo('handThumb', () => new THREE.CapsuleGeometry(0.011, 0.036, 6, 10));
+  const handFingerGeo = getCachedGeo('handFinger', () => new THREE.CapsuleGeometry(0.0095, 0.038, 6, 10));
+  const wristBallGeo = getCachedGeo('wristBallJoint', () => new THREE.SphereGeometry(0.047, 12, 10));
 
-  // Hierarchical Right Arm: rightArm (shoulder pivot) -> rightForearm (elbow pivot) -> rightHand (5-finger grip)
+  // Hierarchical Right Arm: rightArm (shoulder pivot) -> rightForearm (elbow pivot) -> rightHand (5-finger pistol grip)
   const rightArm = new THREE.Group();
-  rightArm.position.set(0.335, 0.01, 0);
+  rightArm.position.set(0.250, 0.0, -0.010);
   const rightShoulder = buildTacticalShoulder(1);
 
   const rightBicep = new THREE.Mesh(
-    getCachedGeo('rightBicep', () => new THREE.CapsuleGeometry(0.065, 0.19, 12, 16)),
+    getCachedGeo('rightBicep', () => new THREE.CapsuleGeometry(0.068, ARM_UPPER_LEN, 12, 16)),
     bduMat
   );
-  rightBicep.scale.set(1.15, 1.08, 1.15);
-  rightBicep.position.set(0.015, -0.11, -0.07);
-  rightBicep.rotation.set(0.58, 0, -0.06);
+  rightBicep.scale.set(1.12, 1.0, 1.12);
+  rightBicep.position.set(0, -ARM_UPPER_LEN * 0.5, 0);
   rightBicep.castShadow = true;
   tagBodyHitbox(rightBicep);
 
   const rightElbow = new THREE.Mesh(
-    getCachedGeo('rightElbow', () => new THREE.SphereGeometry(0.056, 14, 12)),
+    getCachedGeo('rightElbow', () => new THREE.SphereGeometry(0.064, 14, 12)),
     armorMat
   );
-  rightElbow.position.set(0.030, -0.20, -0.17);
+  rightElbow.position.set(0, -ARM_UPPER_LEN, 0.006);
 
   const rightForearm = new THREE.Group();
-  rightForearm.position.set(0.030, -0.20, -0.17);
+  rightForearm.position.set(0, -ARM_UPPER_LEN, 0);
 
-  const rightForearmMesh = new THREE.Mesh(
-    getCachedGeo('rightForearmMesh', () => new THREE.CylinderGeometry(0.056, 0.042, 0.25, 18)),
+  const rightForearmElbowCap = new THREE.Mesh(
+    getCachedGeo('rightForearmElbowCap', () => new THREE.SphereGeometry(0.062, 14, 12)),
     bduMat
   );
-  rightForearmMesh.position.set(-0.030, 0.04, -0.12);
-  rightForearmMesh.rotation.set(1.34, -0.20, 0);
+
+  const rightForearmMesh = new THREE.Mesh(
+    getCachedGeo('rightForearmMesh', () => new THREE.CylinderGeometry(0.060, 0.046, ARM_LOWER_LEN, 18)),
+    bduMat
+  );
+  rightForearmMesh.position.set(0, -ARM_LOWER_LEN * 0.5, 0);
   rightForearmMesh.castShadow = true;
   tagBodyHitbox(rightForearmMesh);
 
   const rightCuff = new THREE.Mesh(
-    getCachedGeo('rightCuff', () => new THREE.CylinderGeometry(0.046, 0.044, 0.055, 16)),
+    getCachedGeo('rightCuff', () => new THREE.CylinderGeometry(0.049, 0.047, 0.056, 16)),
     webbingMat
   );
-  rightCuff.position.set(-0.045, 0.065, -0.195);
-  rightCuff.rotation.set(1.34, -0.20, 0);
+  rightCuff.position.set(0, -ARM_LOWER_LEN * 0.85, 0);
 
   const rightHand = new THREE.Group();
-  rightHand.position.set(-0.055, 0.08, -0.235);
+  rightHand.position.set(0, -ARM_LOWER_LEN, 0);
+
+  const rightWristBall = new THREE.Mesh(wristBallGeo, bootMat);
   const rPalm = new THREE.Mesh(
-    getCachedGeo('rPalm', () => new THREE.CapsuleGeometry(0.024, 0.038, 8, 12)),
+    getCachedGeo('rPalm', () => new THREE.CapsuleGeometry(0.028, 0.044, 8, 12)),
     bootMat
   );
+  rPalm.scale.set(1.08, 1.25, 1.10);
+  rPalm.position.set(-0.006, 0.006, -0.022);
   rPalm.rotation.x = Math.PI / 2.2;
   const rKnuckle = new THREE.Mesh(handKnuckleGeo, armorMat);
-  rKnuckle.position.set(0.004, 0.025, 0);
+  rKnuckle.position.set(0.004, 0.026, -0.022);
   const rThumb = new THREE.Mesh(handThumbGeo, bootMat);
-  rThumb.position.set(-0.026, 0.012, -0.016);
+  rThumb.position.set(-0.026, 0.018, -0.026);
   rThumb.rotation.set(0.42, 0.32, 0.52);
-  rightHand.add(rPalm, rKnuckle, rThumb);
+  rightHand.add(rightWristBall, rPalm, rKnuckle, rThumb);
   for (let f = 0; f < 4; f++) {
     const rFinger = new THREE.Mesh(handFingerGeo, bootMat);
-    rFinger.position.set(-0.014, -0.004 - f * 0.014, -0.030 + (f === 0 ? -0.012 : 0));
+    rFinger.position.set(-0.014, 0.010 - f * 0.012, -0.036 + (f === 0 ? -0.010 : 0));
     rFinger.rotation.z = Math.PI / 2;
-    rFinger.rotation.y = f === 0 ? -0.32 : 0.08;
+    rFinger.rotation.y = f === 0 ? -0.28 : 0.08;
     rightHand.add(rFinger);
   }
 
-  rightForearm.add(rightForearmMesh, rightCuff, rightHand);
+  rightForearm.add(rightForearmElbowCap, rightForearmMesh, rightCuff, rightHand);
   rightArm.add(rightShoulder, rightBicep, rightElbow, rightForearm);
 
   // Hierarchical Left Arm: leftArm (shoulder pivot) -> leftForearm (elbow pivot) -> leftHand (5-finger C-clamp grip)
   const leftArm = new THREE.Group();
-  leftArm.position.set(-0.335, 0.01, 0);
+  leftArm.position.set(-0.245, 0.0, -0.020);
   const leftShoulder = buildTacticalShoulder(-1);
 
   const leftBicep = new THREE.Mesh(
-    getCachedGeo('leftBicep', () => new THREE.CapsuleGeometry(0.063, 0.20, 12, 16)),
+    getCachedGeo('leftBicep', () => new THREE.CapsuleGeometry(0.066, ARM_UPPER_LEN, 12, 16)),
     bduMat
   );
-  leftBicep.scale.set(1.15, 1.08, 1.15);
-  leftBicep.position.set(0.035, -0.10, -0.10);
-  leftBicep.rotation.set(0.75, -0.42, 0.30);
+  leftBicep.scale.set(1.12, 1.0, 1.12);
+  leftBicep.position.set(0, -ARM_UPPER_LEN * 0.5, 0);
   leftBicep.castShadow = true;
   tagBodyHitbox(leftBicep);
 
   const leftElbow = new THREE.Mesh(
-    getCachedGeo('leftElbow', () => new THREE.SphereGeometry(0.055, 14, 12)),
+    getCachedGeo('leftElbow', () => new THREE.SphereGeometry(0.062, 14, 12)),
     armorMat
   );
-  leftElbow.position.set(0.125, -0.18, -0.23);
+  leftElbow.position.set(0, -ARM_UPPER_LEN, 0.006);
 
   const leftForearm = new THREE.Group();
-  leftForearm.position.set(0.125, -0.18, -0.23);
+  leftForearm.position.set(0, -ARM_UPPER_LEN, 0);
 
-  const leftForearmMesh = new THREE.Mesh(
-    getCachedGeo('leftForearmMesh', () => new THREE.CylinderGeometry(0.055, 0.041, 0.31, 18)),
+  const leftForearmElbowCap = new THREE.Mesh(
+    getCachedGeo('leftForearmElbowCap', () => new THREE.SphereGeometry(0.060, 14, 12)),
     bduMat
   );
-  leftForearmMesh.position.set(0.20, 0.05, -0.16);
-  leftForearmMesh.rotation.set(1.38, 0, -0.82);
+
+  const leftForearmMesh = new THREE.Mesh(
+    getCachedGeo('leftForearmMesh', () => new THREE.CylinderGeometry(0.059, 0.045, ARM_LOWER_LEN, 18)),
+    bduMat
+  );
+  leftForearmMesh.position.set(0, -ARM_LOWER_LEN * 0.5, 0);
   leftForearmMesh.castShadow = true;
   tagBodyHitbox(leftForearmMesh);
 
   const leftWristWatch = new THREE.Mesh(
-    getCachedGeo('leftWristWatch', () => new THREE.CylinderGeometry(0.044, 0.044, 0.045, 16)),
+    getCachedGeo('leftWristWatch', () => new THREE.CylinderGeometry(0.048, 0.047, 0.045, 16)),
     armorMat
   );
-  leftWristWatch.position.set(0.32, 0.072, -0.25);
-  leftWristWatch.rotation.set(1.38, 0, -0.82);
+  leftWristWatch.position.set(0, -ARM_LOWER_LEN * 0.85, 0);
+
   const leftWatchDial = new THREE.Mesh(
-    getCachedGeo('leftWatchDial', () => new THREE.CylinderGeometry(0.018, 0.018, 0.010, 16)),
+    getCachedGeo('leftWatchDial', () => new THREE.CylinderGeometry(0.018, 0.018, 0.012, 16)),
     mainMat
   );
-  leftWatchDial.position.set(0.312, 0.092, -0.25);
-  leftWatchDial.rotation.set(0.24, 0, 0.32);
+  leftWatchDial.position.set(0, -ARM_LOWER_LEN * 0.85, -0.044);
+  leftWatchDial.rotation.x = Math.PI / 2;
 
   const leftHand = new THREE.Group();
-  leftHand.position.set(0.40, 0.09, -0.31);
+  leftHand.position.set(0, -ARM_LOWER_LEN, 0);
+
+  const leftWristBall = new THREE.Mesh(wristBallGeo, bootMat);
   const lPalm = new THREE.Mesh(
-    getCachedGeo('lPalm', () => new THREE.CapsuleGeometry(0.024, 0.040, 8, 12)),
+    getCachedGeo('lPalm', () => new THREE.CapsuleGeometry(0.028, 0.044, 8, 12)),
     bootMat
   );
+  lPalm.scale.set(1.08, 1.25, 1.10);
+  lPalm.position.set(0.006, 0.006, -0.022);
   lPalm.rotation.x = Math.PI / 2;
   const lKnuckle = new THREE.Mesh(handKnuckleGeo, armorMat);
-  lKnuckle.position.set(-0.004, 0.024, 0);
+  lKnuckle.position.set(-0.004, 0.026, -0.020);
   const lThumb = new THREE.Mesh(handThumbGeo, bootMat);
-  lThumb.position.set(-0.016, 0.026, -0.016);
+  lThumb.position.set(-0.014, 0.030, -0.024);
   lThumb.rotation.set(0.2, -0.38, -0.75);
-  leftHand.add(lPalm, lKnuckle, lThumb);
+  leftHand.add(leftWristBall, lPalm, lKnuckle, lThumb);
   for (let f = 0; f < 4; f++) {
     const lFinger = new THREE.Mesh(handFingerGeo, bootMat);
-    lFinger.position.set(0.015, -0.014, -0.032 + f * 0.018);
+    lFinger.position.set(0.016, 0.002, -0.038 + f * 0.014);
     lFinger.rotation.z = Math.PI / 2.3;
     leftHand.add(lFinger);
   }
 
-  leftForearm.add(leftForearmMesh, leftWristWatch, leftWatchDial, leftHand);
+  leftForearm.add(leftForearmElbowCap, leftForearmMesh, leftWristWatch, leftWatchDial, leftHand);
   leftArm.add(leftShoulder, leftBicep, leftElbow, leftForearm);
 
   // Held 3D Weapon aligned with both hands (deduplicate weapon BufferGeometries via RIG_GEO_CACHE)
   const gunHolder = new THREE.Group();
-  gunHolder.position.set(0.27, -0.03, -0.42);
+  gunHolder.position.set(0.125, -0.065, -0.325);
   const gunMesh = createWeaponMesh(playerData.weapon || 'rifle', false);
   gunMesh.traverse((child) => {
     if (child.isMesh && child.geometry) {
@@ -971,8 +1056,10 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     return g;
   });
 
-  const hipBallGeo = getCachedGeo('hipBall', () => new THREE.SphereGeometry(0.105, 16, 14));
-  const quadMuscleGeo = getCachedGeo('quadMuscleContour', () => new THREE.CapsuleGeometry(0.072, 0.14, 8, 12));
+  // Full-radius hip ball & distal thigh condyle sphere so flat cylinder caps never protrude at hip or knee
+  const hipBallGeo = getCachedGeo('hipBall', () => new THREE.SphereGeometry(0.125, 18, 14));
+  const thighKneeCapGeo = getCachedGeo('thighKneeCap', () => new THREE.SphereGeometry(0.096, 16, 14));
+  const quadMuscleGeo = getCachedGeo('quadMuscleContour', () => new THREE.CapsuleGeometry(0.076, 0.16, 8, 12));
   const cargoPocketGeo = getCachedGeo('cargoPocketContoured', () => {
     const g = new THREE.CapsuleGeometry(0.026, 0.105, 8, 12);
     g.scale(0.82, 1, 2.2);
@@ -993,15 +1080,16 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
   const thighStrapRGeo = getCachedGeo('thighStrapR', () => new THREE.TorusGeometry(0.106, 0.013, 10, 20));
   const thighStrapLGeo = getCachedGeo('thighStrapL', () => new THREE.TorusGeometry(0.104, 0.012, 10, 20));
   const tqPouchGeo = getCachedGeo('tqPouchContoured', () => new THREE.CapsuleGeometry(0.022, 0.072, 8, 12));
-  const kneeSphereGeo = getCachedGeo('kneeSphere', () => new THREE.SphereGeometry(0.080, 14, 12));
-  const kneePadBaseGeo = getCachedGeo('kneePadBase', () => new THREE.CapsuleGeometry(0.056, 0.068, 10, 14));
+  const kneeSphereGeo = getCachedGeo('kneeSphere', () => new THREE.SphereGeometry(0.095, 16, 14));
+  const kneePadBaseGeo = getCachedGeo('kneePadBase', () => new THREE.CapsuleGeometry(0.058, 0.072, 10, 14));
   // Contoured Curved Hard Knee Cap (replaces flat BoxGeometry)
   const kneeHardCapGeo = getCachedGeo('kneeHardCapCurved', () => {
-    const g = new THREE.CylinderGeometry(0.066, 0.062, 0.088, 16, 1, false, Math.PI * 0.68, Math.PI * 0.64);
+    const g = new THREE.CylinderGeometry(0.072, 0.068, 0.094, 16, 1, false, Math.PI * 0.66, Math.PI * 0.68);
     return g;
   });
-  const kneeStrapGeo = getCachedGeo('kneeStrap', () => new THREE.TorusGeometry(0.082, 0.011, 8, 18));
-  const calfMuscleGeo = getCachedGeo('calfMuscle', () => new THREE.SphereGeometry(0.078, 14, 12));
+  const kneeStrapGeo = getCachedGeo('kneeStrap', () => new THREE.TorusGeometry(0.092, 0.012, 8, 18));
+  const calfMuscleGeo = getCachedGeo('calfMuscle', () => new THREE.SphereGeometry(0.080, 14, 12));
+  const ankleSphereGeo = getCachedGeo('ankleSphere', () => new THREE.SphereGeometry(0.068, 14, 12));
   const bootCollarGeo = getCachedGeo('bootCollar', () => new THREE.CylinderGeometry(0.072, 0.078, 0.095, 18));
   const bootUpperGeo = getCachedGeo('bootUpper', () => new THREE.CapsuleGeometry(0.058, 0.135, 12, 16));
   const bootHeelGeo = getCachedGeo('bootHeel', () => new THREE.CylinderGeometry(0.057, 0.062, 0.078, 16));
@@ -1020,8 +1108,14 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     tagBodyHitbox(hipLegMesh);
 
     const hipBall = new THREE.Mesh(hipBallGeo, bduMat);
+    hipBall.scale.set(1.02, 1.08, 1.02);
+    hipBall.position.set(0, 0.005, 0);
+
+    const thighKneeCap = new THREE.Mesh(thighKneeCapGeo, bduMat);
+    thighKneeCap.position.set(0, -0.38, 0);
+
     const quadMuscle = new THREE.Mesh(quadMuscleGeo, bduMat);
-    quadMuscle.scale.set(1.04, 1.0, 0.92);
+    quadMuscle.scale.set(1.04, 1.0, 0.94);
     quadMuscle.position.set(0, -0.175, -0.028);
 
     // Contoured BDU Thigh Cargo Pocket + Beveled Flap
@@ -1029,7 +1123,7 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     cargoPocket.position.set(sideSign * 0.094, -0.185, -0.005);
     const pocketFlap = new THREE.Mesh(pocketFlapGeo, vestMat);
     pocketFlap.position.set(sideSign * 0.098, -0.115, -0.005);
-    hipLegMesh.add(hipBall, quadMuscle, cargoPocket, pocketFlap);
+    hipLegMesh.add(hipBall, thighKneeCap, quadMuscle, cargoPocket, pocketFlap);
 
     // Right-Side Safariland Drop-Leg Tactical Kydex Pistol Holster + Holstered Sidearm + Thigh Straps
     if (sideSign > 0) {
@@ -1064,12 +1158,14 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
 
     const kneeSphere = new THREE.Mesh(kneeSphereGeo, bduMat);
     const kneePadBase = new THREE.Mesh(kneePadBaseGeo, vestMat);
-    kneePadBase.position.set(0, 0.005, -0.046);
+    kneePadBase.position.set(0, -0.018, -0.054);
+    kneePadBase.rotation.x = -0.06;
     const kneeHardCap = new THREE.Mesh(kneeHardCapGeo, armorMat);
-    kneeHardCap.position.set(0, 0.005, -0.048);
+    kneeHardCap.position.set(0, -0.018, -0.056);
+    kneeHardCap.rotation.x = -0.06;
     const kneeStrap = new THREE.Mesh(kneeStrapGeo, webbingMat);
     kneeStrap.rotation.x = Math.PI / 2;
-    kneeStrap.position.set(0, 0.005, 0);
+    kneeStrap.position.set(0, -0.020, 0);
 
     // Lower Leg (Shin & Gastrocnemius Calf Muscle + Contoured Combat Boot)
     const shinMesh = new THREE.Mesh(shinGeo, bduMat);
@@ -1077,8 +1173,11 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     tagBodyHitbox(shinMesh);
 
     const calfMuscle = new THREE.Mesh(calfMuscleGeo, bduMat);
-    calfMuscle.scale.set(0.94, 1.42, 1.08);
+    calfMuscle.scale.set(0.96, 1.44, 1.10);
     calfMuscle.position.set(0, -0.125, 0.028);
+
+    const ankleSphere = new THREE.Mesh(ankleSphereGeo, bduMat);
+    ankleSphere.position.set(0, -0.34, 0);
 
     // Salomon / Lowa Tactical Combat Boot (Ankle Collar, Contoured Upper, Heel Counter, Toe Cap & Lugged Outsole)
     const bootCollar = new THREE.Mesh(bootCollarGeo, vestMat);
@@ -1098,6 +1197,7 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
 
     shinMesh.add(
       calfMuscle,
+      ankleSphere,
       bootCollar,
       bootUpper,
       bootHeel,
@@ -1174,14 +1274,20 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
   const rightShinHitboxProxy = hitboxProxyById.shin_r;
 
   // Batch static sub-meshes per material within each animated bone scope to cut per-player draw calls
-  // Also attach a cached inverted-hull outline per bone scope for remote operators (!isShowcase)
+  // Each arm bone segment (upper arm, forearm, hand) is batched in its own canonical -Y bone frame BEFORE
+  // poseOperatorForWeapon applies the 2-bone IK rotations, preserving live shoulder/elbow/wrist joints.
   const useEnemyOutline = !isShowcase;
   const initialOutlineMat = options.isTeammate ? TEAMMATE_OUTLINE_MAT : ENEMY_OUTLINE_MAT;
   const outlineMeshes = [
-    batchBoneScope(pelvisGroup, 'pelvis', new Set([upperBodyGroup, pelvisHitboxProxy]), pelvisCore, useEnemyOutline, initialOutlineMat),
-    batchBoneScope(upperBodyGroup, 'chest', new Set([headGroup, armPivot, torsoHitboxProxy]), torsoMesh, useEnemyOutline, initialOutlineMat),
+    batchBoneScope(pelvisVisualGroup, 'pelvis', new Set(), pelvisCore, useEnemyOutline, initialOutlineMat),
+    batchBoneScope(torsoVisualGroup, 'chest', new Set(), torsoMesh, useEnemyOutline, initialOutlineMat),
     batchBoneScope(headGroup, 'head', new Set([headHitboxProxy]), headMesh, useEnemyOutline, initialOutlineMat),
-    batchBoneScope(armPivot, 'arms', new Set([gunHolder]), null, useEnemyOutline, initialOutlineMat),
+    batchBoneScope(rightArm, 'arm_upper_r', new Set([rightForearm]), rightBicep, useEnemyOutline, initialOutlineMat),
+    batchBoneScope(rightForearm, 'arm_lower_r', new Set([rightHand]), rightForearmMesh, useEnemyOutline, initialOutlineMat),
+    batchBoneScope(rightHand, 'hand_r', new Set(), null, useEnemyOutline, initialOutlineMat),
+    batchBoneScope(leftArm, 'arm_upper_l', new Set([leftForearm]), leftBicep, useEnemyOutline, initialOutlineMat),
+    batchBoneScope(leftForearm, 'arm_lower_l', new Set([leftHand]), leftForearmMesh, useEnemyOutline, initialOutlineMat),
+    batchBoneScope(leftHand, 'hand_l', new Set(), null, useEnemyOutline, initialOutlineMat),
     batchBoneScope(leftLeg, 'leg_l', new Set([leftKneePivot, leftLegHitboxProxy]), leftLeg, useEnemyOutline, initialOutlineMat),
     batchBoneScope(rightLeg, 'leg_r', new Set([rightKneePivot, rightLegHitboxProxy]), rightLeg, useEnemyOutline, initialOutlineMat),
     batchBoneScope(leftKneePivot, 'shin_l', new Set([leftShinHitboxProxy]), leftLegData.shinMesh, useEnemyOutline, initialOutlineMat),
@@ -1206,7 +1312,7 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     }
   };
 
-  return {
+  const rig = {
     id: playerData.id,
     name: playerData.name,
     team: playerData.team || null,
@@ -1215,9 +1321,11 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     root: group,
     bodyGroup: pelvisGroup,
     pelvisGroup,
+    pelvisVisualGroup,
     pelvisCore,
     hips: pelvisGroup,
     upperBodyGroup,
+    torsoVisualGroup,
     spine: upperBodyGroup,
     chest: chestGroup,
     headGroup,
@@ -1250,7 +1358,9 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     outlineMeshes,
     setOperatorColor,
     setTeamOutline,
+    poseForWeapon: (wId) => poseOperatorForWeapon(rig, wId),
     currentWeapon: playerData.weapon || 'rifle',
+    _posedWeapon: null,
     targetPos: new THREE.Vector3(playerData.x || 0, playerData.y || 0, playerData.z || 0),
     targetYaw: playerData.yaw || 0,
     targetPitch: playerData.pitch || 0,
@@ -1267,6 +1377,138 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     walkPhase: 0,
     lastShotFlashAt: 0
   };
+
+  poseOperatorForWeapon(rig, rig.currentWeapon);
+  return rig;
+}
+
+const TP_WEAPON_SCALE = 1.12;
+const IK_ARM_UPPER_LEN = 0.295;
+const IK_ARM_LOWER_LEN = 0.295;
+
+// Third-person weapon mount poses & local grip coordinates (matching viewmodelRig.js weapon geometry):
+// Buttpad rests cleanly against the front right shoulder pocket (z < -0.025 in armPivot) without piercing the chest/back,
+// while rightHand and leftHand are solved via analytical 2-bone IK to grip the exact pistol grip & foregrip/support points.
+const WEAPON_THIRD_PERSON_POSES = {
+  rifle:   { pos: [0.125, -0.065, -0.325], rot: [0, 0.22, 0], effScale: [0.76, 0.76, 0.55], rGrip: [0.012, -0.105, 0.115], lGrip: [-0.022, -0.055, -0.330] },
+  m4a1:    { pos: [0.125, -0.065, -0.325], rot: [0, 0.22, 0], effScale: [0.76, 0.76, 0.55], rGrip: [0.012, -0.102, 0.105], lGrip: [-0.022, -0.055, -0.330] },
+  scar:    { pos: [0.125, -0.065, -0.325], rot: [0, 0.22, 0], effScale: [0.76, 0.76, 0.55], rGrip: [0.012, -0.102, 0.115], lGrip: [-0.020, -0.082, -0.335] },
+  lmg:     { pos: [0.125, -0.072, -0.320], rot: [0, 0.23, 0], effScale: [0.76, 0.76, 0.54], rGrip: [0.012, -0.112, 0.115], lGrip: [-0.024, -0.055, -0.345] },
+  shotgun: { pos: [0.125, -0.065, -0.335], rot: [0, 0.22, 0], effScale: [0.76, 0.76, 0.54], rGrip: [0.012, -0.095, 0.155], lGrip: [-0.020, -0.042, -0.330] },
+  sniper:  { pos: [0.125, -0.065, -0.345], rot: [0, 0.22, 0], effScale: [0.76, 0.76, 0.53], rGrip: [0.012, -0.095, 0.195], lGrip: [-0.022, -0.048, -0.310] },
+  smg:     { pos: [0.118, -0.065, -0.315], rot: [0, 0.20, 0], effScale: [0.78, 0.78, 0.62], rGrip: [0.012, -0.102, 0.068], lGrip: [-0.018, -0.105, -0.185] },
+  pistol:  { pos: [0.045, -0.045, -0.410], rot: [0, 0.06, 0], effScale: [0.84, 0.84, 0.80], rGrip: [0.012, -0.088, 0.082], lGrip: [-0.018, -0.088,  0.055] },
+  deagle:  { pos: [0.045, -0.045, -0.410], rot: [0, 0.06, 0], effScale: [0.84, 0.84, 0.80], rGrip: [0.012, -0.088, 0.082], lGrip: [-0.018, -0.088,  0.055] },
+  glock:   { pos: [0.045, -0.045, -0.410], rot: [0, 0.06, 0], effScale: [0.84, 0.84, 0.80], rGrip: [0.012, -0.088, 0.082], lGrip: [-0.018, -0.088,  0.055] },
+  knife:   { pos: [0.105, -0.085, -0.315], rot: [0.12, 0.26, -0.14], effScale: [0.88, 0.88, 0.85], rGrip: [0.012, -0.045, -0.068], lGrip: [-0.095, -0.082, -0.055] }
+};
+
+const _ikDir = new THREE.Vector3();
+const _ikUnit = new THREE.Vector3();
+const _ikPole = new THREE.Vector3();
+const _ikD1 = new THREE.Vector3();
+const _ikY1 = new THREE.Vector3();
+const _ikX1 = new THREE.Vector3();
+const _ikZ1 = new THREE.Vector3();
+const _ikMat4 = new THREE.Matrix4();
+const _ikParentQuat = new THREE.Quaternion();
+const _ikTargetR = new THREE.Vector3();
+const _ikTargetL = new THREE.Vector3();
+const _ikWristOffsetR = new THREE.Vector3();
+const _ikWristOffsetL = new THREE.Vector3();
+const _ikPoleR = new THREE.Vector3(0.45, -0.82, 0.42);
+const _ikPoleL = new THREE.Vector3(-0.48, -0.82, 0.38);
+
+/**
+ * Analytical 2-bone Law-of-Cosines IK solver for canonical -Y upper-arm (`armGroup`) and forearm (`forearmGroup`) bones.
+ */
+function solveArmTwoBoneIK(armGroup, forearmGroup, handGroup, targetWristPos, poleDir, targetHandQuat) {
+  const L1 = IK_ARM_UPPER_LEN;
+  const L2 = IK_ARM_LOWER_LEN;
+  _ikDir.subVectors(targetWristPos, armGroup.position);
+  const rawDist = _ikDir.length();
+  const minReach = Math.abs(L1 - L2) + 0.01;
+  const maxReach = L1 + L2 - 0.002;
+  const d = Math.max(minReach, Math.min(maxReach, rawDist));
+
+  if (rawDist > 1e-6) {
+    _ikUnit.copy(_ikDir).divideScalar(rawDist);
+  } else {
+    _ikUnit.set(0, 0, -1);
+  }
+
+  // Project pole vector perpendicular to shoulder-to-wrist line
+  const dotPole = poleDir.dot(_ikUnit);
+  _ikPole.copy(poleDir).addScaledVector(_ikUnit, -dotPole);
+  if (_ikPole.lengthSq() < 1e-6) {
+    _ikPole.set(0, -1, 0);
+  } else {
+    _ikPole.normalize();
+  }
+
+  // Law of Cosines for shoulder-to-elbow projection x and perpendicular height h
+  const x = (L1 * L1 - L2 * L2 + d * d) / (2 * d);
+  const h = Math.sqrt(Math.max(0, L1 * L1 - x * x));
+
+  // Upper arm unit direction d1 from shoulder to elbow; local -Y points along d1, so local +Y = -d1
+  _ikD1.copy(_ikUnit).multiplyScalar(x / L1).addScaledVector(_ikPole, h / L1).normalize();
+  _ikY1.copy(_ikD1).negate();
+  _ikX1.crossVectors(_ikPole, _ikUnit).normalize();
+  _ikZ1.crossVectors(_ikX1, _ikY1).normalize();
+
+  _ikMat4.makeBasis(_ikX1, _ikY1, _ikZ1);
+  armGroup.quaternion.setFromRotationMatrix(_ikMat4);
+
+  // Interior elbow flexion angle around local +X hinge axis
+  const cosElbow = Math.max(-1, Math.min(1, (d * d - L1 * L1 - L2 * L2) / (2 * L1 * L2)));
+  const elbowAngle = Math.acos(cosElbow);
+  forearmGroup.rotation.set(elbowAngle, 0, 0);
+
+  // Align hand orientation with weapon grip frame
+  if (handGroup && targetHandQuat) {
+    _ikParentQuat.copy(armGroup.quaternion).multiply(forearmGroup.quaternion).invert();
+    handGroup.quaternion.copy(_ikParentQuat).multiply(targetHandQuat);
+  }
+}
+
+/**
+ * Poses the operator's gunHolder and solves analytical 2-bone IK for both arms/forearms/hands for the given weapon.
+ */
+export function poseOperatorForWeapon(rp, weaponId = 'rifle') {
+  if (!rp || !rp.gunHolder || !rp.rightArm || !rp.leftArm || !rp.rightForearm || !rp.leftForearm) return;
+  const pose = WEAPON_THIRD_PERSON_POSES[weaponId] || WEAPON_THIRD_PERSON_POSES.rifle;
+
+  rp.gunHolder.position.set(pose.pos[0], pose.pos[1], pose.pos[2]);
+  rp.gunHolder.rotation.set(pose.rot[0], pose.rot[1], pose.rot[2]);
+  rp.gunHolder.scale.set(
+    pose.effScale[0] / TP_WEAPON_SCALE,
+    pose.effScale[1] / TP_WEAPON_SCALE,
+    pose.effScale[2] / TP_WEAPON_SCALE
+  );
+
+  const qGun = rp.gunHolder.quaternion;
+
+  // Compute exact 3D pistol-grip & foregrip coordinates in armPivot space, then offset to wrist ball center
+  _ikTargetR.set(
+    pose.rGrip[0] * pose.effScale[0],
+    pose.rGrip[1] * pose.effScale[1],
+    pose.rGrip[2] * pose.effScale[2]
+  ).applyQuaternion(qGun).add(rp.gunHolder.position);
+  _ikWristOffsetR.set(0.006, -0.006, 0.022).applyQuaternion(qGun);
+  _ikTargetR.add(_ikWristOffsetR);
+
+  _ikTargetL.set(
+    pose.lGrip[0] * pose.effScale[0],
+    pose.lGrip[1] * pose.effScale[1],
+    pose.lGrip[2] * pose.effScale[2]
+  ).applyQuaternion(qGun).add(rp.gunHolder.position);
+  _ikWristOffsetL.set(-0.006, -0.006, 0.022).applyQuaternion(qGun);
+  _ikTargetL.add(_ikWristOffsetL);
+
+  solveArmTwoBoneIK(rp.rightArm, rp.rightForearm, rp.rightHand, _ikTargetR, _ikPoleR, qGun);
+  solveArmTwoBoneIK(rp.leftArm, rp.leftForearm, rp.leftHand, _ikTargetL, _ikPoleL, qGun);
+
+  rp._posedWeapon = weaponId;
 }
 
 export const createHumanoidPlayerRig = createRemotePlayerMesh;

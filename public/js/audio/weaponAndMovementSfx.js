@@ -528,23 +528,54 @@ export class WeaponAndMovementSfxMethods {
     if (!ctx || !this.noiseBuffer) return;
     const now = ctx.currentTime;
 
+    // 1. Tactical knee-pad drop thump
+    const thud = ctx.createOscillator();
+    const thudGain = ctx.createGain();
+    thud.type = 'sine';
+    thud.frequency.setValueAtTime(165, now);
+    thud.frequency.exponentialRampToValueAtTime(42, now + 0.11);
+    thudGain.gain.setValueAtTime(0.18, now);
+    thudGain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+    thud.connect(thudGain);
+    thudGain.connect(ctx.destination);
+    this._bindSourceCleanup(thud, [thudGain], null, 0.14);
+    thud.start(now);
+    thud.stop(now + 0.125);
+
+    // 2. High-speed floor gravel/cloth slide friction scrape
     const noise = ctx.createBufferSource();
     noise.buffer = this.noiseBuffer;
     const filter = ctx.createBiquadFilter();
     filter.type = 'bandpass';
-    filter.frequency.setValueAtTime(780, now);
-    filter.frequency.exponentialRampToValueAtTime(240, now + 0.38);
+    filter.frequency.setValueAtTime(1120, now);
+    filter.frequency.exponentialRampToValueAtTime(250, now + 0.46);
+    filter.Q.setValueAtTime(1.1, now);
 
     const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.18, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+    gain.gain.setValueAtTime(0.21, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.48);
 
     noise.connect(filter);
     filter.connect(gain);
     gain.connect(ctx.destination);
-    this._bindSourceCleanup(noise, [filter, gain], null, 0.43);
+    this._bindSourceCleanup(noise, [filter, gain], null, 0.51);
     noise.start(now);
-    noise.stop(now + 0.42);
+    noise.stop(now + 0.49);
+
+    // 3. Subtle Neon High-Gear kinetic surge whoosh
+    const surge = ctx.createOscillator();
+    const surgeGain = ctx.createGain();
+    surge.type = 'triangle';
+    surge.frequency.setValueAtTime(280, now);
+    surge.frequency.exponentialRampToValueAtTime(560, now + 0.08);
+    surge.frequency.exponentialRampToValueAtTime(190, now + 0.32);
+    surgeGain.gain.setValueAtTime(0.075, now);
+    surgeGain.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
+    surge.connect(surgeGain);
+    surgeGain.connect(ctx.destination);
+    this._bindSourceCleanup(surge, [surgeGain], null, 0.36);
+    surge.start(now);
+    surge.stop(now + 0.35);
   }
 
   playLand(intensity = 1.0) {

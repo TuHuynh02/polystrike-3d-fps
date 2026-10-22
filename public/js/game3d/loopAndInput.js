@@ -472,6 +472,7 @@ export class LoopAndInputMethods {
         this.adsToggleActive = false;
         this.isAiming = false;
         this.isSprinting = false;
+        this._slideTapActive = false;
         this.cancelGrenadeCooking();
         setWeaponAdsCulling(this.viewmodelMeshes[this.currentWeapon], false);
         this.callbacks.onAimChange?.(false, this.currentWeapon);
@@ -630,6 +631,29 @@ export class LoopAndInputMethods {
       if (e.code === 'Digit1') this.switchSlot(1);
       else if (e.code === 'Digit2') this.switchSlot(2);
       else if (e.code === 'Digit3') this.switchSlot(3);
+      else if ((e.code === 'KeyC' || e.code === 'ControlLeft' || e.code === 'ControlRight') && this.alive) {
+        if (this.isSliding) {
+          // CoD Slide-Cancel: tapping Crouch again mid-slide immediately cancels the slide latch
+          this._slideTapActive = false;
+          this.keys.KeyC = false;
+          this.keys.ControlLeft = false;
+        } else if (
+          this.onGround &&
+          !this.crouching &&
+          !this.prone &&
+          commandTimeMs((this.prediction?.nextSeq || 0) + 1) >= (this.slideCooldownUntil || 0) &&
+          Math.hypot(this.velocity.x, this.velocity.z) >= (MATCH_CONFIG.SLIDE_MIN_SPEED || 3.6)
+        ) {
+          // Tap-to-Slide: a single tap commits to the full slide and auto-stands/sprints when the slide ends
+          this._slideTapActive = true;
+        }
+      }
+      else if ((e.code === 'Space' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') && this.isSliding) {
+        // Pressing Jump or Sprint mid-slide cancels the tap-slide crouch latch (Slide-Cancel / Bunny-Hop)
+        this._slideTapActive = false;
+        this.keys.KeyC = false;
+        this.keys.ControlLeft = false;
+      }
       else if (e.code === 'KeyB') {
         this.callbacks.onLoadoutToggle?.();
       }
@@ -641,6 +665,7 @@ export class LoopAndInputMethods {
         if (this.prone) {
           this.isSprinting = false;
           this.isSliding = false;
+          this._slideTapActive = false;
           this.crouching = false;
         }
       }

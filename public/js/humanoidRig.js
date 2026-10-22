@@ -12,7 +12,8 @@ export {
 } from './rig/rigMaterialsAndBatching.js';
 export {
   createRemotePlayerMesh,
-  createHumanoidPlayerRig
+  createHumanoidPlayerRig,
+  poseOperatorForWeapon
 } from './rig/operatorMeshBuilder.js';
 export {
   animateHumanoidRig,

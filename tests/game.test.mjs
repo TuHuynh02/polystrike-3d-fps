@@ -1038,6 +1038,11 @@ describe('3. Player 3D Humanoid Rig, Hitboxes & Visibility Synchronization', () 
     rp.crouching = true;
     animateHumanoidRig(rp, 0.05, 1000, true, 5.0);
     const crouchHipY = rp.pelvisGroup.position.y;
+    assert.ok(
+      Math.abs(Math.hypot(rp.leftLeg.position.x, rp.leftLeg.position.z) - 0.145) < 1e-6 &&
+      Math.abs(Math.hypot(rp.rightLeg.position.x, rp.rightLeg.position.z) - 0.145) < 1e-6,
+      'Hip sockets must stay locked to pelvis hip radius (0.145m) during walking twist'
+    );
 
     rp.crouching = false;
     rp.prone = true;
@@ -1046,6 +1051,46 @@ describe('3. Player 3D Humanoid Rig, Hitboxes & Visibility Synchronization', () 
       animateHumanoidRig(rp, 0.05, 1050 + i * 50, true, 2.0);
     }
     assert.ok(rp.pelvisGroup.position.y < crouchHipY, 'Prone hip height must be lower than crouch hip height');
+
+    // Verify live hierarchical arm bones (shoulder -> elbow -> wrist) and 2-bone IK across all 11 weapons
+    for (const bone of [rp.rightArm, rp.rightForearm, rp.rightHand, rp.leftArm, rp.leftForearm, rp.leftHand]) {
+      assert.ok(bone instanceof THREE.Group, 'Arm hierarchy bones must remain live THREE.Group nodes');
+      assert.ok(bone.children.some((c) => c.isMesh), 'Each arm bone segment must retain its own batched mesh');
+    }
+    for (const wId of WEAPON_ORDER) {
+      rp.currentWeapon = wId;
+      rp.poseForWeapon(wId);
+      assert.equal(rp._posedWeapon, wId, `poseForWeapon must update _posedWeapon for ${wId}`);
+      rp.armPivot.updateMatrixWorld(true);
+      const rShoulder = new THREE.Vector3().setFromMatrixPosition(rp.rightArm.matrixWorld);
+      const rElbow = new THREE.Vector3().setFromMatrixPosition(rp.rightForearm.matrixWorld);
+      const rWrist = new THREE.Vector3().setFromMatrixPosition(rp.rightHand.matrixWorld);
+      const lShoulder = new THREE.Vector3().setFromMatrixPosition(rp.leftArm.matrixWorld);
+      const lElbow = new THREE.Vector3().setFromMatrixPosition(rp.leftForearm.matrixWorld);
+      const lWrist = new THREE.Vector3().setFromMatrixPosition(rp.leftHand.matrixWorld);
+      assert.ok(Math.abs(rShoulder.distanceTo(rElbow) - 0.295) < 1e-3, `Right upper arm length must remain locked for ${wId}`);
+      assert.ok(Math.abs(rElbow.distanceTo(rWrist) - 0.295) < 1e-3, `Right forearm length must remain locked for ${wId}`);
+      assert.ok(Math.abs(lShoulder.distanceTo(lElbow) - 0.295) < 1e-3, `Left upper arm length must remain locked for ${wId}`);
+      assert.ok(Math.abs(lElbow.distanceTo(lWrist) - 0.295) < 1e-3, `Left forearm length must remain locked for ${wId}`);
+    }
+
+    // Verify crouch arm pitch compensation keeps arms/weapon level when crouched at pitch = 0, and waist bridges lean
+    rp.prone = false;
+    rp.crouching = true;
+    rp.sliding = false;
+    rp.lean = 1;
+    rp.targetPitch = 0;
+    for (let i = 0; i < 40; i++) {
+      animateHumanoidRig(rp, 0.05, 0, false, 0);
+    }
+    assert.ok(
+      Math.abs(rp.upperBodyGroup.rotation.x + rp.armPivot.rotation.x) < 0.02,
+      'Crouch arm pitch must compensate upperBodyGroup crouch pitch so weapon stays level'
+    );
+    assert.ok(
+      rp.pelvisVisualGroup && rp.torsoVisualGroup && rp.torsoVisualGroup.position.x < -0.10,
+      'Torso & pelvis visual groups must counter-bridge waist shear during Q/E lean'
+    );
 
     // No floating name / health-bar sprite above the head any more (names live in the scoreboard / kill feed only)
     assert.equal('labelInfo' in rp, false, 'rig must not carry a nameplate');
@@ -2016,6 +2061,7 @@ describe('6. Terrain/Map Collision, AABB Raycasting, Entity Physics & 3D Renderi
     assert.equal(game.viewmodelMeshes.rifle.userData.isAdsCulled, true);
 
     // Lose PointerLock abruptly -> all active combat/movement latches must reset cleanly
+    game._slideTapActive = true;
     game.exitPointerLock();
     assert.equal(game.isPointerLocked, false);
     assert.equal(pointerLockState, false);
@@ -2024,6 +2070,7 @@ describe('6. Terrain/Map Collision, AABB Raycasting, Entity Physics & 3D Renderi
     assert.equal(game.adsToggleActive, false);
     assert.equal(game.isAiming, false);
     assert.equal(game.isSprinting, false);
+    assert.equal(game._slideTapActive, false);
     assert.equal(aimChangedState, false);
     assert.equal(game.viewmodelMeshes.rifle.userData.isAdsCulled, false);
   });
@@ -2117,6 +2164,30 @@ describe('6. Terrain/Map Collision, AABB Raycasting, Entity Physics & 3D Renderi
     const stepsRun = Math.round((hitch.simTimeMs - 0) / (FIXED_DT * 1000));
     assert.ok(stepsRun <= 6, `ran ${stepsRun} steps for a 5s hitch`);
     assert.ok(hitch.position.z <= z0);
+
+    // CoD Tap-to-Slide, Slide-Cancel, and cooldown non-latching
+    const { game: gSlide } = makeGame();
+    gSlide.keys.KeyW = true;
+    gSlide.keys.ShiftLeft = true;
+    for (let i = 0; i < 20; i++) gSlide.advanceFixedPhysics(FIXED_DT);
+    // Tap KeyC (keydown + immediate keyup before next fixed step)
+    const noop = () => {};
+    globalThis.window.dispatchEvent({ type: 'keydown', code: 'KeyC', preventDefault: noop, stopPropagation: noop });
+    globalThis.window.dispatchEvent({ type: 'keyup', code: 'KeyC', preventDefault: noop, stopPropagation: noop });
+    assert.equal(gSlide._slideTapActive, true, 'tap KeyC at sprint speed latches _slideTapActive');
+    for (let i = 0; i < 10; i++) gSlide.advanceFixedPhysics(FIXED_DT);
+    assert.equal(gSlide.isSliding, true, 'tap-slide stays active after KeyC release');
+    // Tap KeyC again mid-slide -> Slide-Cancel
+    globalThis.window.dispatchEvent({ type: 'keydown', code: 'KeyC', preventDefault: noop, stopPropagation: noop });
+    globalThis.window.dispatchEvent({ type: 'keyup', code: 'KeyC', preventDefault: noop, stopPropagation: noop });
+    assert.equal(gSlide._slideTapActive, false, 're-tapping KeyC mid-slide clears _slideTapActive');
+    gSlide.advanceFixedPhysics(FIXED_DT);
+    assert.equal(gSlide.isSliding, false, 'slide is cancelled on next step');
+    assert.equal(gSlide.crouching, false, 'player returns to standing/sprinting after slide-cancel');
+    // Tapping KeyC immediately while still on slide cooldown must NOT latch _slideTapActive
+    globalThis.window.dispatchEvent({ type: 'keydown', code: 'KeyC', preventDefault: noop, stopPropagation: noop });
+    globalThis.window.dispatchEvent({ type: 'keyup', code: 'KeyC', preventDefault: noop, stopPropagation: noop });
+    assert.equal(gSlide._slideTapActive, false, 'tapping KeyC during slide cooldown must not latch _slideTapActive');
   });
 });
 

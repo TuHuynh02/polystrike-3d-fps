@@ -39,7 +39,7 @@ export function createMovementState(init = {}) {
   };
 }
 
-function tryTriggerSlide(s, nowMs, result) {
+function tryTriggerSlide(s, nowMs, result, wishDirX = 0, wishDirZ = 0, wishLen = 0) {
   if (!s.onGround || s.isSliding) return false;
   if (nowMs < s.slideCooldownUntil) return false;
 
@@ -50,12 +50,18 @@ function tryTriggerSlide(s, nowMs, result) {
   s.isSliding = true;
   s.isSprinting = false;
   s.prone = false;
-  s.slideUntil = nowMs + (MATCH_CONFIG.SLIDE_DURATION_MS || 620);
-  s.slideCooldownUntil = nowMs + (MATCH_CONFIG.SLIDE_COOLDOWN_MS || 900);
+  s.slideUntil = nowMs + (MATCH_CONFIG.SLIDE_DURATION_MS || 680);
+  s.slideCooldownUntil = nowMs + (MATCH_CONFIG.SLIDE_COOLDOWN_MS || 750);
 
-  s.slideDirX = s.vx / horizSpeed;
-  s.slideDirZ = s.vz / horizSpeed;
-  const burstSpeed = MATCH_CONFIG.SLIDE_INITIAL_SPEED || 10.4;
+  // CoD Omnimovement / Valorant Neon High-Gear whip-slide: redirect burst along active WASD wishDir if held
+  if (wishLen > 0.001) {
+    s.slideDirX = wishDirX;
+    s.slideDirZ = wishDirZ;
+  } else {
+    s.slideDirX = s.vx / horizSpeed;
+    s.slideDirZ = s.vz / horizSpeed;
+  }
+  const burstSpeed = MATCH_CONFIG.SLIDE_INITIAL_SPEED || 10.6;
   s.vx = s.slideDirX * burstSpeed;
   s.vz = s.slideDirZ * burstSpeed;
 
@@ -71,7 +77,7 @@ function tryTriggerSlide(s, nowMs, result) {
  *   yaw                     view yaw in radians
  *   wantsCrouch             crouch key held
  *   wantsSprint             sprint key held AND game rules allow it (not reloading / not just fired);
- *                           the step additionally requires forward movement, no crouch/slide/ADS
+ *                           the step additionally requires directional movement, no crouch/slide/ADS
  *   wantsJump               jump key held
  *   inputEnabled            false while the pointer is unlocked (jumps are neither queued nor consumed)
  *   isAiming, isAdsHeld     ADS state; sprinting while ADS was toggled (not held) cancels ADS (see result)
@@ -93,12 +99,26 @@ export function stepPlayerMovement(s, input, dt, mapCfg, nowMs) {
     s.isSliding = false;
   }
 
+  // Wish direction on the XZ plane (computed early so omnidirectional sprint & whip-slide can use it)
+  const forwardX = -Math.sin(yaw);
+  const forwardZ = -Math.cos(yaw);
+  const rightX = Math.cos(yaw);
+  const rightZ = -Math.sin(yaw);
+
+  let wishDirX = forwardX * moveForward + rightX * moveRight;
+  let wishDirZ = forwardZ * moveForward + rightZ * moveRight;
+  const wishLen = Math.hypot(wishDirX, wishDirZ);
+  if (wishLen > 0.001) {
+    wishDirX /= wishLen;
+    wishDirZ /= wishLen;
+  }
+
   const wantsCrouch = Boolean(input.wantsCrouch);
   if (wantsCrouch && s.prone) {
     s.prone = false;
   }
   const wantsSprintInput = Boolean(input.wantsSprint) &&
-    moveForward > 0 &&
+    (moveForward !== 0 || moveRight !== 0) &&
     !wantsCrouch &&
     !s.isSliding;
   if (wantsSprintInput && isAiming && !input.isAdsHeld) {
@@ -112,29 +132,15 @@ export function stepPlayerMovement(s, input, dt, mapCfg, nowMs) {
   }
 
   if (wantsCrouch && !s.crouching && !s.isSliding && s.onGround) {
-    tryTriggerSlide(s, nowMs, result);
+    tryTriggerSlide(s, nowMs, result, wishDirX, wishDirZ, wishLen);
   }
-  const slideDur = MATCH_CONFIG.SLIDE_DURATION_MS || 620;
-  if (!wantsCrouch && s.isSliding && nowMs - (s.slideUntil - slideDur) > 220) {
+  const slideDur = MATCH_CONFIG.SLIDE_DURATION_MS || 680;
+  if (!wantsCrouch && s.isSliding && nowMs - (s.slideUntil - slideDur) > 120) {
     s.isSliding = false;
   }
 
   s.crouching = (wantsCrouch || s.isSliding) && !s.prone;
   s.isSprinting = wantsSprint && !s.crouching && !s.prone;
-
-  // Wish direction on the XZ plane
-  const forwardX = -Math.sin(yaw);
-  const forwardZ = -Math.cos(yaw);
-  const rightX = Math.cos(yaw);
-  const rightZ = -Math.sin(yaw);
-
-  let wishDirX = forwardX * moveForward + rightX * moveRight;
-  let wishDirZ = forwardZ * moveForward + rightZ * moveRight;
-  const wishLen = Math.hypot(wishDirX, wishDirZ);
-  if (wishLen > 0.001) {
-    wishDirX /= wishLen;
-    wishDirZ /= wishLen;
-  }
 
   const weaponMoveMult = input.weaponMoveMult || 1.0;
   const baseTargetSpeed = s.isSliding
@@ -151,11 +157,18 @@ export function stepPlayerMovement(s, input, dt, mapCfg, nowMs) {
   const targetSpeed = baseTargetSpeed * (s.isSliding ? 1.0 : weaponMoveMult);
 
   if (s.isSliding) {
-    const slideFriction = MATCH_CONFIG.SLIDE_FRICTION || 2.6;
+    const slideFriction = MATCH_CONFIG.SLIDE_FRICTION || 2.25;
     s.vx *= Math.max(0, 1 - slideFriction * dt);
     s.vz *= Math.max(0, 1 - slideFriction * dt);
-    s.vx += wishDirX * 4.8 * dt;
-    s.vz += wishDirZ * 4.8 * dt;
+    if (wishLen > 0.001) {
+      s.vx += wishDirX * 5.6 * dt;
+      s.vz += wishDirZ * 5.6 * dt;
+      const curSlideSpd = Math.hypot(s.vx, s.vz);
+      if (curSlideSpd > 0.1) {
+        s.slideDirX = s.vx / curSlideSpd;
+        s.slideDirZ = s.vz / curSlideSpd;
+      }
+    }
   } else if (s.onGround) {
     if (wishLen > 0.001) {
       const wishVx = wishDirX * targetSpeed;

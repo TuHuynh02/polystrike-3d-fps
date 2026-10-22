@@ -311,6 +311,7 @@ export class RemotePlayersMethods {
           }
         });
         rp.gunHolder.add(rp.gunMesh);
+        rp.poseForWeapon?.(p.weapon);
       }
 
       if (rp.hp !== p.hp) {

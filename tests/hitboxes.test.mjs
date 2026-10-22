@@ -366,11 +366,12 @@ describe('raycastPlayerHitbox (server entry point) keeps its contract on top of 
 
 describe('Client proxy meshes are built from the shared definition', () => {
   /** Settles the rig into the rest pose of the given networked state (blends/lerps converge with a large dt). */
-  function settledRig({ crouching = false, prone = false, lean = 0, pitch = 0, yaw = 0, pos = { x: 1.5, y: 0.25, z: -2 } }) {
+  function settledRig({ crouching = false, sliding = false, prone = false, lean = 0, pitch = 0, yaw = 0, pos = { x: 1.5, y: 0.25, z: -2 } }) {
     const rp = createRemotePlayerMesh({ id: 'p1', name: 'Parity', x: pos.x, y: pos.y, z: pos.z });
     rp.group.position.set(pos.x, pos.y, pos.z);
     rp.group.rotation.y = yaw;
     rp.crouching = crouching;
+    rp.sliding = sliding;
     rp.prone = prone;
     rp.lean = lean;
     rp.targetPitch = pitch;
@@ -451,6 +452,7 @@ describe('Client proxy meshes are built from the shared definition', () => {
   for (const [label, state, posture] of [
     ['standing', {}, 'stand'],
     ['crouching', { crouching: true }, 'crouch'],
+    ['sliding', { crouching: true, sliding: true }, 'slide'],
     ['prone', { prone: true }, 'prone'],
     ['crouching + prone flag (prone wins)', { crouching: true, prone: true }, 'prone']
   ]) {
@@ -463,6 +465,35 @@ describe('Client proxy meshes are built from the shared definition', () => {
       });
     }
   }
+
+  it('active slide animation keeps head/torso/pelvis hitboxes aligned with server and keeps legs above floor', () => {
+    const pos = { x: 0, y: 0, z: 0 };
+    const rp = createRemotePlayerMesh({ id: 'p_slide', name: 'Slide', x: 0, y: 0, z: 0 });
+    rp.group.position.set(0, 0, 0);
+    rp.group.rotation.y = 0;
+    rp.crouching = true;
+    rp.sliding = true;
+    for (let i = 0; i < 60; i++) animateHumanoidRig(rp, 0.05, 1000, true, 0.3);
+    rp.group.updateMatrixWorld(true);
+
+    const shared = getHitboxParts('slide', 0, 0, pos, 0);
+    for (const id of ['head', 'torso', 'pelvis']) {
+      const mesh = rp.hitboxParts.find((m) => m.userData.partId === id);
+      const box = part(shared, id);
+      const c = new THREE.Vector3().setFromMatrixPosition(mesh.matrixWorld);
+      const dist = Math.hypot(c.x - box.center.x, c.y - box.center.y, c.z - box.center.z);
+      assert.ok(dist < 0.025, `active slide ${id} hitbox deviation ${(dist * 100).toFixed(2)} cm`);
+    }
+
+    const leftKneeWorld = new THREE.Vector3().setFromMatrixPosition(rp.leftKneePivot.matrixWorld);
+    const rightKneeWorld = new THREE.Vector3().setFromMatrixPosition(rp.rightKneePivot.matrixWorld);
+    const leftAnkleWorld = new THREE.Vector3(0, -0.34, 0).applyMatrix4(rp.leftShin.matrixWorld);
+    const rightAnkleWorld = new THREE.Vector3(0, -0.34, 0).applyMatrix4(rp.rightShin.matrixWorld);
+    assert.ok(leftKneeWorld.y > 0.15 && rightKneeWorld.y > 0.15, `knees must stay above floor: L=${leftKneeWorld.y}, R=${rightKneeWorld.y}`);
+    assert.ok(leftAnkleWorld.y >= 0.0 && rightAnkleWorld.y >= 0.0, `ankles must not clip underground: L=${leftAnkleWorld.y}, R=${rightAnkleWorld.y}`);
+    assert.ok(leftAnkleWorld.z < -0.35, `lead ankle should extend forward (-Z): z=${leftAnkleWorld.z}`);
+    assert.ok(rightAnkleWorld.z > 0.05, `trail ankle should tuck back (+Z): z=${rightAnkleWorld.z}`);
+  });
 
   it('also matches while leaning and looking up / down', () => {
     const pos = { x: -3, y: 0, z: 4 };

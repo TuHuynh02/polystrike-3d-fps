@@ -396,6 +396,9 @@ const game = appState.game = new Game3D(canvasContainer, {
       hudStance.textContent = labels[stance] || stance;
       hudStance.classList.toggle('slide', stance === 'SLIDE');
       hudStance.classList.toggle('sprint', stance === 'SPRINT');
+      if (hudScreen) {
+        hudScreen.classList.toggle('sliding-rush', stance === 'SLIDE');
+      }
     }
   },
   onJumpPad: () => {
@@ -410,6 +413,9 @@ const game = appState.game = new Game3D(canvasContainer, {
   },
   onSlide: () => {
     appState.sfx.playSlide();
+    if (hudScreen) {
+      hudScreen.classList.add('sliding-rush');
+    }
   },
   onLand: (intensity) => {
     appState.sfx.playLand(intensity);

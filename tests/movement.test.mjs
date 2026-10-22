@@ -347,6 +347,45 @@ describe('shared/movement.js - ground, air, jump and slide behaviour', () => {
     assert.ok(s.vy > 7);
   });
 
+  it('supports omnidirectional sprint, Neon directional whip-slide into wishDir, and instant slide-cancel', () => {
+    // 1. Omnidirectional sprint (sideways strafe sprint reaches SPRINT_SPEED)
+    const strafeSprint = runSteps(
+      createMovementState({ y: 0, onGround: true }),
+      makeInput({ moveRight: 1, wantsSprint: true }),
+      60,
+      FLAT_MAP
+    ).state;
+    assert.equal(strafeSprint.isSprinting, true);
+    assert.ok(Math.abs(Math.hypot(strafeSprint.vx, strafeSprint.vz) - MATCH_CONFIG.SPRINT_SPEED) < 1e-6);
+
+    // 2. Directional whip-slide: running forward (-Z) then pressing crouch + right (+X) whips slide into +X
+    const whip = createMovementState({ y: 0, onGround: true, vz: -8.5 });
+    let nowMs = 1000;
+    nowMs += FIXED_DT * 1000;
+    const r = stepPlayerMovement(
+      whip,
+      makeInput({ moveRight: 1, wantsCrouch: true, yaw: 0 }),
+      FIXED_DT,
+      FLAT_MAP,
+      nowMs
+    );
+    assert.equal(r.slideStarted, true);
+    assert.equal(whip.isSliding, true);
+    assert.ok(whip.vx > 9.0, `expected sideways whip-slide burst on +X, got vx=${whip.vx}`);
+    assert.ok(Math.abs(whip.vz) < 1e-6, `expected forward velocity redirected into wishDir, got vz=${whip.vz}`);
+
+    // 3. Mid-slide cancel when wantsCrouch is released after initial knee-drop (~167ms into 680ms slide)
+    for (let i = 0; i < 10; i++) {
+      nowMs += FIXED_DT * 1000;
+      stepPlayerMovement(whip, makeInput({ moveRight: 1, wantsCrouch: true, yaw: 0 }), FIXED_DT, FLAT_MAP, nowMs);
+    }
+    assert.equal(whip.isSliding, true);
+    nowMs += FIXED_DT * 1000;
+    stepPlayerMovement(whip, makeInput({ moveForward: 1, wantsSprint: true, wantsCrouch: false }), FIXED_DT, FLAT_MAP, nowMs);
+    assert.equal(whip.isSliding, false);
+    assert.equal(whip.crouching, false);
+  });
+
   it('ADS toggle is cancelled by sprinting and reported through aimCancelled', () => {
     const s = createMovementState({ y: 0, onGround: true });
     const r = stepPlayerMovement(s, makeInput({ moveForward: 1, wantsSprint: true, isAiming: true, isAdsHeld: false }), FIXED_DT, FLAT_MAP, 1000);

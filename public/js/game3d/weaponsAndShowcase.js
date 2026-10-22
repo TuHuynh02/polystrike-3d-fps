@@ -188,6 +188,7 @@ export class WeaponsAndShowcaseMethods {
       disposeObject3D(op.gunMesh);
       op.gunMesh = this.createShowcaseWeaponMesh(weaponId);
       op.gunHolder.add(op.gunMesh);
+      op.poseForWeapon?.(weaponId);
     }
     op.armPivot.rotation.x = -0.22;
     this.callbacks.onWeaponSwitchSound?.();

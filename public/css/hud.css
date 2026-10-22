@@ -1037,8 +1037,29 @@
 }
 
 .stance-badge.slide {
-  color: var(--accent);
-  border-color: var(--accent);
+  color: #38bdf8;
+  border-color: #38bdf8;
+  border-left-color: #38bdf8;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.35);
+}
+
+#hud-screen::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.14s ease-out;
+  background:
+    radial-gradient(ellipse at 50% 50%, transparent 58%, rgba(56, 189, 248, 0.16) 86%, rgba(229, 160, 36, 0.22) 100%),
+    repeating-conic-gradient(from 0deg at 50% 52%, rgba(56, 189, 248, 0.05) 0deg 1.5deg, transparent 1.5deg 9deg);
+  mask-image: radial-gradient(circle at 50% 50%, transparent 62%, #000 92%);
+  -webkit-mask-image: radial-gradient(circle at 50% 50%, transparent 62%, #000 92%);
+  z-index: 19;
+}
+
+#hud-screen.sliding-rush::before {
+  opacity: 1;
 }
 
 .stance-badge.sprint {

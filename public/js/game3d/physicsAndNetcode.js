@@ -88,6 +88,7 @@ export class PhysicsAndNetcodeMethods {
       setWeaponAdsCulling(this.viewmodelMeshes[wId], false);
     }
     this.isSliding = false;
+    this._slideTapActive = false;
     this.crouching = false;
     this.prone = false;
     this.currentLean = 0;
@@ -247,6 +248,15 @@ export class PhysicsAndNetcodeMethods {
       this.physPrev.stepOffsetY = this.stepOffsetY || 0;
 
       // One input command per fixed step: simulated here with the exact code the server runs, then sent in `inputBatch`
+      const nextSimMs = commandTimeMs(this.prediction.nextSeq + 1);
+      if (this._slideTapActive && this.isSliding && nextSimMs >= this.slideUntil) {
+        this._slideTapActive = false;
+      }
+      f.wantsCrouch = Boolean(
+        this.keys.KeyC ||
+        this.keys.ControlLeft ||
+        (this._slideTapActive && (this.isSliding || !this.crouching))
+      );
       f.yaw = this.yaw;
       f.pitch = this.pitch;
       f.lean = this.currentLean;
@@ -268,7 +278,7 @@ export class PhysicsAndNetcodeMethods {
           this.pendingFire = null; // switched weapons / died before the shot could leave
         } else if (
           isFireIntervalOk(
-            commandTimeMs(this.prediction.nextSeq + 1),
+            nextSimMs,
             this.lastFireCmdTimeMs,
             getEffectiveFireRateMs(WEAPONS[this.currentWeapon], this.isAiming)
           )
@@ -288,6 +298,9 @@ export class PhysicsAndNetcodeMethods {
       const res = stepCommand(this.moveState, cmd, mapCfg, this.cmdScratchInput);
       this.syncMoveStateOut();
       this.prediction.record(cmd, this.moveState);
+      if (!this.isSliding) {
+        this._slideTapActive = false;
+      }
 
       if ((cmd.btn & BTN.FIRE) !== 0) {
         this.shotSeq = cmd.ss;
@@ -316,7 +329,10 @@ export class PhysicsAndNetcodeMethods {
         this.adsToggleActive = false;
         this.callbacks.onAimChange?.(false, this.currentWeapon);
       }
-      if (res.slideStarted) this.callbacks.onSlide?.();
+      if (res.slideStarted) {
+        this.landingDipVel = Math.min(this.landingDipVel || 0, -1.35);
+        this.callbacks.onSlide?.();
+      }
       if (res.jumpPadTriggered) this.callbacks.onJumpPad?.(res.jumpPadTriggered);
       else if (res.jumped) this.callbacks.onJump?.();
       if (res.landed) {
@@ -538,6 +554,7 @@ export class PhysicsAndNetcodeMethods {
     if (typeof state.alive === 'boolean') {
       this.alive = state.alive;
       if (!this.alive) {
+        this._slideTapActive = false;
         this.pendingFire = null;
         this.predictedShots.length = 0;
         this.reloadingUntil = 0;
@@ -767,7 +784,7 @@ export class PhysicsAndNetcodeMethods {
     this.currentLean += (targetLean - this.currentLean) * Math.min(1, dt * 18);
     if (Math.abs(this.currentLean) < 0.005) this.currentLean = 0;
 
-    // Smooth eye height interpolation
+    // Smooth eye height interpolation (snappier drop when entering CoD/Neon low slide)
     const targetEye = this.prone
       ? 0.52
       : this.isSliding
@@ -775,7 +792,7 @@ export class PhysicsAndNetcodeMethods {
         : this.crouching
           ? 1.04
           : 1.62;
-    this.currentEyeHeight += (targetEye - this.currentEyeHeight) * Math.min(1, dt * 13);
+    this.currentEyeHeight += (targetEye - this.currentEyeHeight) * Math.min(1, dt * (this.isSliding ? 20 : 13));
 
     this.landingDip += this.landingDipVel * dt;
     this.landingDipVel -= this.landingDip * 140 * dt;
@@ -807,7 +824,7 @@ export class PhysicsAndNetcodeMethods {
     // Apply pending weapon recoil impulse and auto-recover smoothly after firing stops
     const effectiveFireRateMs = getEffectiveFireRateMs(cfg, this.isAiming);
     const recDelay = Math.max(cfg.recoilRecoveryDelayMs || 0, effectiveFireRateMs + 28);
-    const stanceRecBoost = this.prone ? 1.30 : (this.crouching && !this.isSliding) ? 1.15 : 1.0;
+    const stanceRecBoost = this.prone ? 1.30 : this.isSliding ? 1.22 : this.crouching ? 1.15 : 1.0;
     this.crosshairRecoilKick = Math.max(0, this.crosshairRecoilKick - dt * (cfg.recoilRecovery || 14.0) * stanceRecBoost * 0.018);
 
     if (this.pendingRecoilPitch || this.pendingRecoilYaw) {
@@ -852,7 +869,7 @@ export class PhysicsAndNetcodeMethods {
     this.currentBloom = Math.max(0, this.currentBloom - (cfg.bloomDecay || 0.14) * dt);
     this.effectiveSpread = this.computeEffectiveSpread(cfg);
     const isMoving = horizSpeed > 0.65 || !this.onGround;
-    const isStanceSteady = Boolean(this.onGround && (this.prone || (this.crouching && !this.isSliding)));
+    const isStanceSteady = Boolean(this.onGround && (this.prone || this.crouching || this.isSliding));
     this.callbacks.onSpreadUpdate?.(
       this.effectiveSpread,
       this.isAiming,
@@ -869,12 +886,19 @@ export class PhysicsAndNetcodeMethods {
     this.flinchPitch = 0;
     this.flinchRoll = 0;
 
-    // Camera Strafe Roll, Slide Tilt & Tactical Q/E Lean Roll
+    // Camera Strafe Roll, CoD/Neon Dynamic Slide Cant & Tactical Q/E Lean Roll
     const leanRoll = -this.currentLean * (MATCH_CONFIG.LEAN_ROLL_ANGLE || 0.145);
+    const slideLateralDot = this.isSliding ? (rightX * this.slideDir.x + rightZ * this.slideDir.z) : 0;
+    const slideSpeedRatio = this.isSliding
+      ? Math.min(1.2, horizSpeed / (MATCH_CONFIG.SLIDE_INITIAL_SPEED || 10.6))
+      : 0;
+    const slideRoll = this.isSliding
+      ? (0.115 - slideLateralDot * 0.055) * (0.65 + 0.35 * slideSpeedRatio)
+      : 0;
     const targetRoll = (this.isSliding
-      ? 0.055
+      ? slideRoll
       : -moveRight * (this.isSprinting ? 0.026 : 0.016)) + leanRoll;
-    this.cameraRoll += (targetRoll - this.cameraRoll) * Math.min(1, dt * 14);
+    this.cameraRoll += (targetRoll - this.cameraRoll) * Math.min(1, dt * (this.isSliding ? 18 : 14));
 
     const leanOffset = this.currentLean * (MATCH_CONFIG.LEAN_OFFSET || 0.42);
     const leanDropY = Math.abs(this.currentLean) * -0.055;
@@ -903,11 +927,11 @@ export class PhysicsAndNetcodeMethods {
     this.camera.quaternion.setFromEuler(this.tmpEuler);
     this.updateGrenadePreview(now);
 
-    // Smooth Dynamic FOV (+0.25x / 1.25x zoomFov 54.4 for Holo & Red-Dot optics, 26 for Sniper)
+    // Smooth Dynamic FOV (+0.25x / 1.25x zoomFov 54.4 for Holo & Red-Dot optics, 26 for Sniper, up to 81.5° rush on CoD/Neon slide burst)
     const targetFov = this.isAiming
       ? cfg.zoomFov
       : this.isSliding
-        ? 77
+        ? 75.5 + slideSpeedRatio * 6.0
         : this.isSprinting
           ? 74
           : 68;
@@ -948,15 +972,20 @@ export class PhysicsAndNetcodeMethods {
       this.grenadeThrowUntil <= now &&
       this.meleeSwingUntil <= now;
     const adsPos = activeVm?.userData?.adsPosition || { x: 0.0, y: -0.1208, z: -0.1278 };
+    const isTacSlidePose = this.isSliding && !isAimingSteady && !isReloading;
+    const slideRumbleX = isTacSlidePose ? Math.sin(now * 0.048) * 0.0022 * slideSpeedRatio : 0;
+    const slideRumbleY = isTacSlidePose ? Math.cos(now * 0.062) * 0.0026 * slideSpeedRatio : 0;
     const targetVmX = isAimingSteady
       ? adsPos.x
-      : (this.isSprinting ? 0.17 : 0.24) + this.currentLean * 0.03;
+      : (isTacSlidePose ? 0.135 : this.isSprinting ? 0.17 : 0.24) + this.currentLean * 0.03 + slideRumbleX;
     const targetVmY = (isReloading
       ? -0.27
       : isAimingSteady
         ? adsPos.y
-        : -0.21) + equipDropY + this.landingDip * (isAimingSteady ? 0 : 0.45);
-    const targetVmZ = isAimingSteady ? adsPos.z : -0.40;
+        : isTacSlidePose
+          ? -0.172 + slideRumbleY
+          : -0.21) + equipDropY + this.landingDip * (isAimingSteady ? 0 : 0.45);
+    const targetVmZ = isAimingSteady ? adsPos.z : isTacSlidePose ? -0.355 : -0.40;
 
     const bobAmp = isAimingSteady ? 0 : this.isSprinting ? 1.35 : 0.95;
     const bobX = Math.cos(this.weaponBobTime * 0.5) * 0.012 * bobAmp;
@@ -1036,8 +1065,11 @@ export class PhysicsAndNetcodeMethods {
       targetRotX = -0.22;
       targetRotY = 0.36;
       targetRotZ = 0.18;
-    } else if (this.isSliding) {
-      targetRotZ = 0.38;
+    } else if (this.isSliding && !isAimingSteady) {
+      // Call of Duty Tac-Stance / Valorant Neon 40-degree inward canted weapon slide posture
+      targetRotX += 0.065;
+      targetRotY += 0.165;
+      targetRotZ = 0.68 - slideLateralDot * 0.12;
     }
 
     if (!isReloading && boltMesh && typeof boltMesh.userData.baseZ === 'number') {

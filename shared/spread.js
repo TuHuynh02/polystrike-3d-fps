@@ -133,19 +133,22 @@ export function computeSpreadAmount(cfg, ctx) {
     ? (cfg.proneSpreadMult || 0.35)
     : (ctx.crouching && !ctx.sliding)
       ? (cfg.crouchSpreadMult || 0.55)
-      : 1.0;
+      : ctx.sliding
+        ? 0.72
+        : 1.0;
 
   // Tactical FPS movement penalty:
   // - Prone crawl / Crouch-peek stay controlled and accurate
+  // - CoD Tac-Stance / Valorant Neon slide keeps weapon braced for accurate corner slide-peeks
   // - ADS walking tightens spread by ~32% compared to hipfire
-  // - Standing / Sprinting / Sliding hipfire run-and-gun incurs a heavy spread penalty
+  // - Standing / Sprinting hipfire run-and-gun incurs a heavy spread penalty
   const speedRatio = Math.min(1.65, horizSpeed / MATCH_CONFIG.WALK_SPEED);
   const moveStanceMult = isProneSteady
     ? 0.22
     : isCrouchSteady
       ? 0.38
       : ctx.sliding
-        ? (aiming ? 0.82 : 1.25)
+        ? (aiming ? 0.34 : 0.52)
         : (aiming ? 0.58 : 1.15);
   const movePenalty = speedRatio > 0.12
     ? Math.pow(speedRatio, 1.15) * (cfg.moveSpread || 0.095) * moveStanceMult
@@ -219,9 +222,9 @@ export function consumeShot(state, weaponId, cfg, timeMs, pose, scratch = { bloo
     shotIndex: pre.shotIndex
   });
 
-  const isLowPosture = Boolean(onGround && (pose.prone || (pose.crouching && !pose.sliding)));
-  const moveBloomMult = moving ? (isLowPosture ? 1.15 : MOVE_BLOOM_MULT) : 1.0;
-  const stanceBloomMult = pose.prone ? 0.55 : (pose.crouching && !pose.sliding) ? 0.75 : 1.0;
+  const isLowPosture = Boolean(onGround && (pose.prone || pose.crouching || pose.sliding));
+  const moveBloomMult = moving ? (pose.sliding ? 1.12 : isLowPosture ? 1.15 : MOVE_BLOOM_MULT) : 1.0;
+  const stanceBloomMult = pose.prone ? 0.55 : pose.sliding ? 0.68 : pose.crouching ? 0.75 : 1.0;
   state.weapon = weaponId;
   state.bloom = Math.min(
     (cfg.bloomMax || 0.018) * moveBloomMult,
