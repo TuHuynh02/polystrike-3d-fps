@@ -161,6 +161,7 @@ import {
 } from './ui/hudController.js';
 import {
   applyRestoredUserPrefs,
+  initLanServerRoom,
   initLobbyAndModalListeners,
   toggleLoadoutModal
 } from './ui/lobbyAndModals.js';
@@ -588,4 +589,5 @@ window.addEventListener('touchend', unlockAudioOnGesture, { capture: true, passi
 applyRestoredUserPrefs();
 initLobbyAndModalListeners();
 initSocketEvents();
+initLanServerRoom(); // private rooms on the office LAN server (settings + ?create=private landing)
 socket.on('teamLobbyState', (data) => handleTeamLobbyState(data));

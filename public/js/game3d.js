@@ -92,7 +92,9 @@ export class Game3D {
     this.scene.add(this.camera);
 
     this.renderer = new THREE.WebGLRenderer({
-      antialias: Boolean(this.quality.antialias) && window.devicePixelRatio <= 1.5,
+      // MSAA follows the tier on every screen: the render scale is capped by maxPixelRatio (<= 1.35), so a 175 % / 200 %
+      // display no longer loses anti-aliasing (it used to fall back to jagged, upscaled edges)
+      antialias: Boolean(this.quality.antialias),
       powerPreference: 'high-performance'
     });
     this.renderer.setSize(window.innerWidth, window.innerHeight);

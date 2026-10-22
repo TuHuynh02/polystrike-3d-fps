@@ -91,7 +91,7 @@ export function buildAssaultRifleGeometry(weaponId, group, mats) {
     barrel.rotation.x = Math.PI / 2;
     barrel.position.set(0, 0.005, -0.56);
 
-    const cleaningRod = new THREE.Mesh(new THREE.CylinderGeometry(0.0045, 0.0045, 0.34, 14), chromeMetal);
+    const cleaningRod = new THREE.Mesh(new THREE.CylinderGeometry(0.0045, 0.0045, 0.34, 16), chromeMetal);
     cleaningRod.rotation.x = Math.PI / 2;
     cleaningRod.position.set(0, -0.015, -0.60);
 
@@ -187,7 +187,7 @@ export function buildAssaultRifleGeometry(weaponId, group, mats) {
     upperReceiver.scale.set(0.95, 1.05, 1);
     upperReceiver.position.set(0, 0.028, 0.01);
 
-    const forwardAssist = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.011, 0.048, 14), gunMetal);
+    const forwardAssist = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.011, 0.048, 16), gunMetal);
     forwardAssist.rotation.x = Math.PI / 2;
     forwardAssist.rotation.y = 0.22;
     forwardAssist.position.set(0.038, 0.024, 0.11);
@@ -224,7 +224,7 @@ export function buildAssaultRifleGeometry(weaponId, group, mats) {
     // Side-Offset AN/PEQ-15 Tactical Laser Box near Front of Handguard (clear of Holo sightline)
     const peqBox = new THREE.Mesh(roundedBox(0.046, 0.022, 0.092), fdePolymerMat);
     peqBox.position.set(0.024, 0.074, -0.39);
-    const peqLens = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.007, 0.014, 14), reticleMat);
+    const peqLens = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.007, 0.014, 16), reticleMat);
     peqLens.rotation.x = Math.PI / 2;
     peqLens.position.set(0.028, 0.074, -0.44);
 

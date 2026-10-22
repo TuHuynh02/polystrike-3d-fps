@@ -11,6 +11,10 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # Optional: the office LAN server (a PC running `npm run lan`). "Create private room" on this public site then sends
+      # players there, and the share link is the LAN link. Set it in the Render dashboard (Environment) or uncomment:
+      # - key: LAN_SERVER_URL
+      #   value: http://192.168.2.161:3000
       # Optional: comma-separated browser origins allowed to connect from other
       # sites (the ?server=<this-url> flow). Leave unset for same-origin only.
       # Add it in the Render dashboard (Environment) or uncomment:

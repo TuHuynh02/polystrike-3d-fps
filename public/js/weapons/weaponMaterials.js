@@ -218,7 +218,7 @@ export function buildErgonomicGripAndTrigger(yPos, zPos, gripMat, metalMat, bore
   gripCore.rotation.x = -0.28;
   gripCore.position.set(0, -0.068, 0.012);
 
-  const beavertail = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.024, 0.045, 14), gripMat);
+  const beavertail = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.024, 0.045, 16), gripMat);
   beavertail.rotation.x = -0.55;
   beavertail.position.set(0, -0.014, 0.028);
 
@@ -228,7 +228,7 @@ export function buildErgonomicGripAndTrigger(yPos, zPos, gripMat, metalMat, bore
   gripBase.rotation.x = -0.28;
 
   // Ambidextrous Fire Selector Switch on Receiver Side (sized to sit flush on both pistol & rifle frames)
-  const selectorPin = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.056, 12), metalMat);
+  const selectorPin = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.056, 16), metalMat);
   selectorPin.rotation.z = Math.PI / 2;
   selectorPin.position.set(0, 0.012, -0.008);
   const selectorLever = new THREE.Mesh(roundedBox(0.060, 0.007, 0.024), boreMat);
@@ -337,14 +337,14 @@ export function buildDetailedOptic(type, yPos, zPos, darkMetal, gunMetal, accent
     // Kobra / Aimpoint Open Reflex Red-Dot Housing with Wide Clear Lens & Slim Hood
     const riserMount = new THREE.Mesh(roundedBox(0.044, 0.010, 0.072), darkMetal);
     riserMount.position.set(0, 0.002, -0.004);
-    const clampBolt = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.050, 8), gunMetal);
+    const clampBolt = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.050, 16), gunMetal);
     clampBolt.rotation.z = Math.PI / 2;
     clampBolt.position.set(0, 0.002, 0.008);
 
     const emitterDeck = new THREE.Mesh(roundedBox(0.054, 0.007, 0.064), gunMetal);
     emitterDeck.position.set(0, 0.010, -0.004);
 
-    const windageDial = new THREE.Mesh(new THREE.CylinderGeometry(0.0065, 0.0065, 0.010, 10), darkMetal);
+    const windageDial = new THREE.Mesh(new THREE.CylinderGeometry(0.0065, 0.0065, 0.010, 16), darkMetal);
     windageDial.rotation.z = Math.PI / 2;
     windageDial.position.set(0.029, 0.010, -0.014);
 
@@ -390,7 +390,7 @@ export function buildDetailedOptic(type, yPos, zPos, darkMetal, gunMetal, accent
     // EOTech EXPS3 Holographic Weapon Sight — Slim 20mm Hood Depth & Wide Clear Rectangular Window
     const baseMount = new THREE.Mesh(roundedBox(0.056, 0.010, 0.074), gunMetal);
     baseMount.position.set(0, 0.002, 0.002);
-    const batteryCyl = new THREE.Mesh(new THREE.CylinderGeometry(0.0065, 0.0065, 0.052, 10), darkMetal);
+    const batteryCyl = new THREE.Mesh(new THREE.CylinderGeometry(0.0065, 0.0065, 0.052, 16), darkMetal);
     batteryCyl.rotation.z = Math.PI / 2;
     batteryCyl.position.set(0, 0.007, -0.026);
 

@@ -10,7 +10,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -19,6 +19,7 @@ import { RoomManager } from '../server/roomManager.js';
 import { NET_CONFIG, TICK_INTERVAL_MS } from '../server/room/sanitizers.js';
 import { COLD_KEYS, COLD_REPEAT_MS, PlayerStateCache, isColdEntry } from '../shared/playerDelta.js';
 import { INTERP_DELAY_MIN_MS, INTERP_DELAY_MS } from '../shared/config.js';
+import { buildLanCreateUrl, normalizeLanUrl, parseCreateParams } from '../shared/lanUrl.js';
 
 const { SnapshotInterpolator } = await import('../public/js/snapshotBuffer.js');
 
@@ -235,5 +236,46 @@ describe('PlayerStateCache (client)', () => {
     assert.equal(b[0].name, 'Bravo');
     assert.equal(cache.byId.has('p1'), false);
     assert.deepEqual(cache.merge(undefined), []);
+  });
+});
+
+describe('private rooms on the LAN server', () => {
+  it('normalizeLanUrl accepts hosts / http(s) URLs and reduces them to an origin', () => {
+    assert.equal(normalizeLanUrl('192.168.2.161:3000'), 'http://192.168.2.161:3000');
+    assert.equal(normalizeLanUrl(' http://pc-office:3000/some/path?x=1 '), 'http://pc-office:3000');
+    assert.equal(normalizeLanUrl('https://lan.example.com/'), 'https://lan.example.com');
+    for (const bad of ['', '   ', null, undefined, 42, 'javascript:alert(1)', 'ftp://host', 'file:///etc/passwd', 'http://', 'a'.repeat(300)]) {
+      assert.equal(normalizeLanUrl(bad), '', `rejects ${String(bad).slice(0, 20)}`);
+    }
+  });
+
+  it('buildLanCreateUrl and parseCreateParams round-trip and sanitise', () => {
+    const url = buildLanCreateUrl('http://192.168.2.161:3000', { name: '<b>Tu"</b>', mapId: 'cyber_citadel', gameMode: 'tdm' });
+    assert.ok(url.startsWith('http://192.168.2.161:3000/?create=private'));
+    const parsed = parseCreateParams(new URL(url).search);
+    assert.deepEqual(parsed, { name: 'bTu/b', mapId: 'cyber_citadel', gameMode: 'tdm' });
+    assert.equal(parseCreateParams('?room=ABC123'), null, 'an ordinary invite link is not a create request');
+    assert.equal(parseCreateParams('?create=public'), null);
+    assert.deepEqual(parseCreateParams('?create=private&map=../../x&mode=weird&name=' + 'n'.repeat(40)), { name: 'n'.repeat(16), mapId: '', gameMode: 'ffa' });
+  });
+
+  it('GET /api/config reports LAN_SERVER_URL (normalised) and null when unset', async () => {
+    const run = async (env, port) => {
+      const child = spawn(process.execPath, ['server/index.js'], { cwd: ROOT_DIR, env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PORT: String(port), ...env }, stdio: 'ignore' });
+      try {
+        for (let i = 0; i < 50; i++) {
+          try {
+            return await (await fetch(`http://127.0.0.1:${ port }/api/config`)).json();
+          } catch {
+            await new Promise((r) => setTimeout(r, 100));
+          }
+        }
+        throw new Error('server did not start');
+      } finally {
+        child.kill();
+      }
+    };
+    assert.deepEqual(await run({ LAN_SERVER_URL: '192.168.2.161:3000' }, 3961), { lanUrl: 'http://192.168.2.161:3000' });
+    assert.deepEqual(await run({ LAN_SERVER_URL: 'javascript:alert(1)' }, 3962), { lanUrl: null });
   });
 });

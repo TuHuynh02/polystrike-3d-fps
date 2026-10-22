@@ -44,7 +44,7 @@ export function buildSidearmMeleeGeometry(weaponId, group, mats) {
       const groove = new THREE.Mesh(new THREE.TorusGeometry(0.021, 0.004, 6, 12), darkMetal);
       groove.position.set(0, -0.01 - g * 0.032, -0.075 + g * 0.008);
       groove.rotation.x = Math.PI / 2 + 0.24;
-      const screw = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.032, 8), chromeMetal);
+      const screw = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.032, 16), chromeMetal);
       screw.rotation.z = Math.PI / 2;
       screw.position.set(0, -0.01 - g * 0.032, -0.075 + g * 0.008);
       group.add(groove, screw);
@@ -55,7 +55,7 @@ export function buildSidearmMeleeGeometry(weaponId, group, mats) {
     fingerRing.rotation.y = Math.PI / 2;
     fingerRing.position.set(0, -0.128, -0.052);
 
-    const bolsterGuard = new THREE.Mesh(new THREE.CylinderGeometry(0.020, 0.022, 0.072, 10), gunMetal);
+    const bolsterGuard = new THREE.Mesh(new THREE.CylinderGeometry(0.020, 0.022, 0.072, 16), gunMetal);
     bolsterGuard.rotation.x = Math.PI / 2;
     bolsterGuard.scale.set(0.88, 1, 0.58);
     bolsterGuard.position.set(0, 0.036, -0.098);
@@ -100,11 +100,11 @@ export function buildSidearmMeleeGeometry(weaponId, group, mats) {
     const gripAsm = buildErgonomicGripAndTrigger(-0.036, 0.075, polymerMat, darkMetal, chromeMetal);
 
     // Underbarrel SureFire X300 Weapon Light / Tactical Laser Module
-    const lightBody = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.095, 10), darkMetal);
+    const lightBody = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.095, 16), darkMetal);
     lightBody.rotation.x = Math.PI / 2;
     lightBody.scale.set(1.05, 0.78, 1);
     lightBody.position.set(0, -0.046, -0.115);
-    const lightBezel = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.018, 0.028, 14), gunMetal);
+    const lightBezel = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.018, 0.028, 16), gunMetal);
     lightBezel.rotation.x = Math.PI / 2;
     lightBezel.position.set(0, -0.046, -0.172);
     const lightLens = new THREE.Mesh(new THREE.CircleGeometry(0.014, 14), reticleMat);
@@ -113,13 +113,13 @@ export function buildSidearmMeleeGeometry(weaponId, group, mats) {
     // Precision Cylindrical Barrel + Threaded Tip + Dark Bore Hole
     const barrelLen = isDeagle ? 0.24 : 0.21;
     const barrel = new THREE.Mesh(
-      new THREE.CylinderGeometry(isDeagle ? 0.017 : 0.013, isDeagle ? 0.017 : 0.013, barrelLen, 14),
+      new THREE.CylinderGeometry(isDeagle ? 0.017 : 0.013, isDeagle ? 0.017 : 0.013, barrelLen, 16),
       isDeagle ? chromeMetal : darkMetal
     );
     barrel.rotation.x = Math.PI / 2;
     barrel.position.set(0, 0.028, -0.14);
     const muzzleBore = new THREE.Mesh(
-      new THREE.CylinderGeometry(isDeagle ? 0.012 : 0.009, isDeagle ? 0.012 : 0.009, 0.012, 10),
+      new THREE.CylinderGeometry(isDeagle ? 0.012 : 0.009, isDeagle ? 0.012 : 0.009, 0.012, 16),
       boreHoleMat
     );
     muzzleBore.rotation.x = Math.PI / 2;
@@ -133,7 +133,7 @@ export function buildSidearmMeleeGeometry(weaponId, group, mats) {
       slideMat
     );
     const slideCrown = new THREE.Mesh(
-      new THREE.CylinderGeometry(isDeagle ? 0.039 : 0.033, isDeagle ? 0.039 : 0.033, slideLen, 12),
+      new THREE.CylinderGeometry(isDeagle ? 0.039 : 0.033, isDeagle ? 0.039 : 0.033, slideLen, 16),
       slideMat
     );
     slideCrown.rotation.x = Math.PI / 2;
@@ -155,7 +155,7 @@ export function buildSidearmMeleeGeometry(weaponId, group, mats) {
 
     // Glock 18C Fire Selector Switch on Rear Left of Slide
     if (isGlock) {
-      const selector = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.012, 10), accentMat);
+      const selector = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.012, 16), accentMat);
       selector.rotation.z = Math.PI / 2;
       selector.position.set(-0.036, 0.008, 0.11);
       boltMesh.add(selector);

@@ -1,9 +1,13 @@
 import {
   DEFAULT_LOADOUT,
   DEFAULT_MAP_ID,
+  MAPS,
   PRIMARY_WEAPONS,
   WEAPONS,
-  getMapConfig
+  buildLanCreateUrl,
+  getMapConfig,
+  normalizeLanUrl,
+  parseCreateParams
 } from '../shared.js';
 import { SERVER_UNREACHABLE_MESSAGE } from '../networkAdapter.js';
 import {
@@ -20,6 +24,9 @@ import {
   lobbyError,
   btnQuickPlay,
   btnCreatePrivate,
+  lanRoomHint,
+  lanUrlInput,
+  btnSaveLanUrl,
   roomCodeInput,
   btnJoinCode,
   btnRefreshRooms,
@@ -390,6 +397,11 @@ export function applyRestoredUserPrefs() {
   }
 }
 
+function getLobbyPlayerName() {
+  const rawName = playerNameInput.value.trim();
+  return (rawName.replace(/[<>&"'`]/g, '').trim().slice(0, 16)) || userPrefs.playerName || 'Striker';
+}
+
 export function requestJoinRoom({ mode = 'public', roomCode = '' }) {
   lobbyError.classList.add('hidden');
   if (!appState.socket.connected) {
@@ -397,8 +409,7 @@ export function requestJoinRoom({ mode = 'public', roomCode = '' }) {
     lobbyError.classList.remove('hidden');
     return;
   }
-  const rawName = playerNameInput.value.trim();
-  const name = (rawName.replace(/[<>&"'`]/g, '').trim().slice(0, 16)) || userPrefs.playerName || 'Striker';
+  const name = getLobbyPlayerName();
 
   const standardSecondary = DEFAULT_LOADOUT?.secondary || 'pistol';
   const standardMelee = DEFAULT_LOADOUT?.melee || 'knife';
@@ -780,6 +791,15 @@ btnQuickPlay.addEventListener('click', () => {
 });
 
 btnCreatePrivate.addEventListener('click', () => {
+  // On the public site with an office LAN server configured, the private room is created there (see "LAN server" below)
+  if (lanServerUrl) {
+    window.location.href = buildLanCreateUrl(lanServerUrl, {
+      name: getLobbyPlayerName(),
+      mapId: appState.selectedMapId,
+      gameMode: appState.selectedGameMode
+    });
+    return;
+  }
   requestJoinRoom({ mode: 'private', roomCode: '' });
 });
 
@@ -922,3 +942,76 @@ btnRefreshRooms.addEventListener('click', fetchActiveRooms);
 fetchActiveRooms();
 }
 
+// ---- LAN server for private rooms ----
+// Quick play / public rooms stay on this server. "Create private room" navigates to the office LAN server instead (when one is
+// configured via LAN_SERVER_URL on the public server or typed below), which creates the room at 50 Hz and hands out LAN links.
+const LAN_URL_STORAGE_KEY = 'polystrike_lan_url';
+let lanServerUrl = ''; // '' = create private rooms on this server
+
+function readSavedLanUrl() {
+  try {
+    return localStorage.getItem(LAN_URL_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+async function refreshLanServerUrl() {
+  let url = normalizeLanUrl(readSavedLanUrl());
+  if (!url) {
+    try {
+      const res = await fetch('/api/config', { cache: 'no-store' });
+      if (res.ok) url = normalizeLanUrl((await res.json()).lanUrl);
+    } catch {
+      // offline or an older server: private rooms are created here
+    }
+  }
+  lanServerUrl = url && url !== window.location.origin ? url : '';
+  if (lanRoomHint) {
+    lanRoomHint.textContent = lanServerUrl ? `Phòng riêng sẽ mở trên server LAN ${ lanServerUrl } (máy host cần đang chạy npm run lan).` : '';
+    lanRoomHint.classList.toggle('hidden', !lanServerUrl);
+  }
+}
+
+/** Called from main.js once appState.socket exists. */
+export function initLanServerRoom() {
+  if (lanUrlInput) lanUrlInput.value = readSavedLanUrl();
+  btnSaveLanUrl?.addEventListener('click', async () => {
+    const raw = lanUrlInput.value.trim();
+    const url = normalizeLanUrl(raw);
+    if (raw && !url) {
+      lobbyError.textContent = 'Địa chỉ server LAN không hợp lệ (ví dụ 192.168.2.161:3000).';
+      lobbyError.classList.remove('hidden');
+      return;
+    }
+    lobbyError.classList.add('hidden');
+    try {
+      if (url) localStorage.setItem(LAN_URL_STORAGE_KEY, url);
+      else localStorage.removeItem(LAN_URL_STORAGE_KEY);
+    } catch {
+      // storage unavailable: the address only applies until reload
+    }
+    lanUrlInput.value = url;
+    await refreshLanServerUrl();
+    showToast(lanServerUrl ? '✅ Đã lưu server LAN' : 'Đã xóa server LAN: phòng riêng tạo trên server này');
+  });
+  refreshLanServerUrl();
+
+  // Landing on the LAN server from the public site (?create=private&name=&map=&mode=): create the private room right away.
+  const lanCreate = parseCreateParams(window.location.search);
+  if (lanCreate) {
+    window.history.replaceState(null, '', window.location.pathname || '/'); // a reload must not create another room
+    if (lanCreate.name) playerNameInput.value = lanCreate.name;
+    if (lanCreate.mapId && Object.hasOwn(MAPS, lanCreate.mapId)) {
+      appState.selectedMapId = lanCreate.mapId;
+      syncLobbyMapSelectionUi(lanCreate.mapId);
+    }
+    appState.selectedGameMode = lanCreate.gameMode;
+    lobbyGameModeGrid?.querySelectorAll('.game-mode-option').forEach((el) => {
+      el.classList.toggle('active', el.dataset.mode === appState.selectedGameMode);
+    });
+    const createNow = () => requestJoinRoom({ mode: 'private', roomCode: '' });
+    if (appState.socket.connected) createNow();
+    else appState.socket.once('connect', createNow);
+  }
+}

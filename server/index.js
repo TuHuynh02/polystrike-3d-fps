@@ -7,6 +7,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { MATCH_CONFIG, getMapConfig } from '../shared/constants.js';
 import { RoomManager } from './roomManager.js';
 import { LAN_MODE, NET_CONFIG, TICK_HZ } from './room/sanitizers.js';
+import { normalizeLanUrl } from '../shared/lanUrl.js';
 import {
   safeHandler,
   guardedOn,
@@ -87,6 +88,14 @@ app.get('/healthz', (_req, res) => {
 app.get('/api/netstats', (_req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json(roomManager.getNetStats());
+});
+
+// LAN_SERVER_URL (e.g. "http://192.168.2.161:3000"): the office LAN server that "create private room" sends players to when
+// this server is the public one (Render). Unset = private rooms are created on this very server.
+const LAN_SERVER_URL = normalizeLanUrl(process.env.LAN_SERVER_URL);
+app.get('/api/config', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ lanUrl: LAN_SERVER_URL || null });
 });
 
 // REST endpoint for active rooms summary

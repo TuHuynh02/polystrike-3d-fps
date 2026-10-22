@@ -269,6 +269,15 @@
           <button id="btn-create-private" class="btn btn-secondary btn-large">
             <span>🔒 TẠO PHÒNG RIÊNG</span>
           </button>
+          <div id="lan-room-hint" class="field-hint lan-room-hint hidden"></div>
+          <details class="lan-settings">
+            <summary>⚙ Server LAN cho phòng riêng</summary>
+            <div class="join-code-row">
+              <input type="text" id="lan-url-input" class="text-input" maxlength="120" placeholder="vd: 192.168.2.161:3000" autocomplete="off" />
+              <button type="button" id="btn-save-lan-url" class="btn btn-outline">LƯU</button>
+            </div>
+            <div class="field-hint">Máy host chạy <code>npm run lan</code>. Để trống = tạo phòng riêng ngay trên server này.</div>
+          </details>
 
           <div class="divider"><span>MÃ PHÒNG</span></div>
 

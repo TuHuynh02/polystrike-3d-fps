@@ -169,10 +169,10 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
     muzzleBore.rotation.x = Math.PI / 2;
     muzzleBore.position.set(0, 0.032, -0.96);
 
-    const bipodL = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.34, 14), chromeMetal);
+    const bipodL = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.34, 16), chromeMetal);
     bipodL.rotation.x = Math.PI / 2;
     bipodL.position.set(-0.048, -0.048, -0.52);
-    const bipodR = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.34, 14), chromeMetal);
+    const bipodR = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.34, 16), chromeMetal);
     bipodR.rotation.x = Math.PI / 2;
     bipodR.position.set(0.048, -0.048, -0.52);
 
@@ -201,13 +201,13 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
     for (let c = 0; c < 6; c++) {
       const cx = -0.075 + c * 0.012;
       const cy = 0.105 + c * 0.018;
-      const cart = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.009, 0.052, 12), brassMat);
+      const cart = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.009, 0.052, 16), brassMat);
       cart.rotation.x = Math.PI / 2;
       cart.position.set(cx, cy, 0.018);
       const bulletTip = new THREE.Mesh(new THREE.ConeGeometry(0.0078, 0.024, 12), copperMat);
       bulletTip.rotation.x = -Math.PI / 2;
       bulletTip.position.set(cx, cy, -0.018);
-      const link = new THREE.Mesh(new THREE.CylinderGeometry(0.0098, 0.0098, 0.022, 12), darkMetal);
+      const link = new THREE.Mesh(new THREE.CylinderGeometry(0.0098, 0.0098, 0.022, 16), darkMetal);
       link.rotation.x = Math.PI / 2;
       link.position.set(cx, cy, 0.016);
       magMesh.add(cart, bulletTip, link);
@@ -425,7 +425,7 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
     brakeBaffle1.position.set(0, 0.042, -1.14);
     const brakeBaffle2 = new THREE.Mesh(roundedBox(0.072, 0.028, 0.022), boreHoleMat);
     brakeBaffle2.position.set(0, 0.042, -1.18);
-    const muzzleBore = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.018, 10), boreHoleMat);
+    const muzzleBore = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.018, 16), boreHoleMat);
     muzzleBore.rotation.x = Math.PI / 2;
     muzzleBore.position.set(0, 0.042, -1.218);
 
@@ -433,10 +433,10 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
     const bipodMount = new THREE.Mesh(roundedBox(0.062, 0.038, 0.055), darkMetal);
     bipodMount.position.set(0, -0.052, -0.40);
     for (const side of [-1, 1]) {
-      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.010, 0.010, 0.29, 10), gunMetal);
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.010, 0.010, 0.29, 16), gunMetal);
       leg.rotation.x = Math.PI / 2;
       leg.position.set(side * 0.044, -0.058, -0.52);
-      const spring = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.09, 10), chromeMetal);
+      const spring = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.09, 16), chromeMetal);
       spring.rotation.x = Math.PI / 2;
       spring.position.set(side * 0.044, -0.058, -0.46);
       group.add(leg, spring);
@@ -480,12 +480,12 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
     const lensRear = new THREE.Mesh(new THREE.CircleGeometry(0.033, 18), coatedScopeLensMat);
     lensRear.position.set(0, 0.135, 0.196);
 
-    const elevTurret = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.034, 14), gunMetal);
+    const elevTurret = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.034, 16), gunMetal);
     elevTurret.position.set(0, 0.172, -0.05);
-    const windTurret = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.030, 14), gunMetal);
+    const windTurret = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.030, 16), gunMetal);
     windTurret.rotation.z = Math.PI / 2;
     windTurret.position.set(0.036, 0.135, -0.05);
-    const parallaxTurret = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.028, 14), gunMetal);
+    const parallaxTurret = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.028, 16), gunMetal);
     parallaxTurret.rotation.z = Math.PI / 2;
     parallaxTurret.position.set(-0.035, 0.135, -0.05);
 
@@ -503,10 +503,10 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
 
     // Fluted Bolt Carrier & Bent Tactical Bolt Handle (`boltMesh`)
     boltMesh = new THREE.Group();
-    const boltBody = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.16, 12), chromeMetal);
+    const boltBody = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.16, 16), chromeMetal);
     boltBody.rotation.x = Math.PI / 2;
     boltBody.position.set(0.018, 0, 0);
-    const boltStem = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.007, 0.058, 8), gunMetal);
+    const boltStem = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.007, 0.058, 16), gunMetal);
     boltStem.rotation.z = Math.PI / 2 + 0.35;
     boltStem.position.set(0.044, -0.01, 0.04);
     const boltKnob = new THREE.Mesh(new THREE.SphereGeometry(0.018, 12, 10), darkMetal);
