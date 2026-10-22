@@ -19,7 +19,7 @@ export function getCachedGeo(key, factoryFn) {
 const _identMat4 = new THREE.Matrix4();
 
 export const ENEMY_OUTLINE_MAT = new THREE.MeshBasicMaterial({
-  color: 0xd41f30,
+  color: 0xff2a3a,
   side: THREE.BackSide,
   depthTest: true,
   depthWrite: true,
@@ -44,63 +44,7 @@ export const TEAMMATE_OUTLINE_MAT = new THREE.MeshBasicMaterial({
 });
 TEAMMATE_OUTLINE_MAT.userData = { shared: true, matSlotKey: 'teammateOutline' };
 
-let BLOB_SHADOW_GEO = null;
-let BLOB_SHADOW_MAT = null;
-
-/**
- * Soft ground contact shadow for remote operators. The world shadow map is baked once (autoUpdate = false), so moving
- * characters cast no shadow; this one flat quad per player (shared geometry + material) grounds them for ~0 cost.
- */
-export function createBlobShadowMesh(radius = 0.62) {
-  if (!BLOB_SHADOW_GEO) {
-    BLOB_SHADOW_GEO = new THREE.PlaneGeometry(1, 1);
-    BLOB_SHADOW_GEO.rotateX(-Math.PI / 2);
-    BLOB_SHADOW_GEO.userData = { shared: true };
-  }
-  if (!BLOB_SHADOW_MAT) {
-    let map = null;
-    if (typeof document !== 'undefined') {
-      const canvas = document.createElement('canvas');
-      canvas.width = 64;
-      canvas.height = 64;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        const grad = ctx.createRadialGradient(32, 32, 2, 32, 32, 32);
-        grad.addColorStop(0, 'rgba(0,0,0,0.62)');
-        grad.addColorStop(0.55, 'rgba(0,0,0,0.26)');
-        grad.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, 0, 64, 64);
-        map = new THREE.CanvasTexture(canvas);
-        map.userData = { shared: true };
-      }
-    }
-    BLOB_SHADOW_MAT = new THREE.MeshBasicMaterial({
-      map,
-      color: map ? 0xffffff : 0x000000,
-      opacity: map ? 1 : 0.3,
-      transparent: true,
-      depthWrite: false,
-      fog: false,
-      toneMapped: false,
-      polygonOffset: true,
-      polygonOffsetFactor: -2,
-      polygonOffsetUnits: -2
-    });
-    BLOB_SHADOW_MAT.userData = { shared: true, matSlotKey: 'blobShadow' };
-  }
-  const mesh = new THREE.Mesh(BLOB_SHADOW_GEO, BLOB_SHADOW_MAT);
-  mesh.name = 'blobShadow';
-  mesh.scale.set(radius * 2, 1, radius * 2);
-  mesh.position.y = 0.03;
-  mesh.renderOrder = -1;
-  mesh.castShadow = false;
-  mesh.receiveShadow = false;
-  mesh.userData = { noOutline: true };
-  return mesh;
-}
-
-function createInflatedOutlineGeo(entries, inflate = 0.006) {
+function createInflatedOutlineGeo(entries, inflate = 0.011) {
   const merged = mergeTransformedGeometries(entries);
   const pos = merged.attributes?.position;
   if (!pos) return merged;
@@ -243,7 +187,7 @@ export function batchBoneScope(scopeRoot, boneScopeId, stopNodes, primaryMesh = 
 
   if (withOutline && allOutlineEntries && allOutlineEntries.length > 0) {
     const outlineGeo = getCachedGeo(`outline_rig_v2_${boneScopeId}`, () =>
-      createInflatedOutlineGeo(allOutlineEntries, 0.006)
+      createInflatedOutlineGeo(allOutlineEntries, 0.011)
     );
     const outlineMesh = new THREE.Mesh(outlineGeo, outlineMat);
     outlineMesh.name = `outline_${boneScopeId}`;

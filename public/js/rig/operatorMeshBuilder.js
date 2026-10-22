@@ -6,17 +6,10 @@ import {
   HITBOX_PROXY_MAT,
   TEAMMATE_OUTLINE_MAT,
   batchBoneScope,
-  createBlobShadowMesh,
   createProceduralMaterial,
   getCachedGeo,
   getCachedMat
 } from './rigMaterialsAndBatching.js';
-
-// Visual-only proportion tuning (the shared hitboxes in shared/hitboxes.js stay untouched): a human head is ~1/7.5 of the body
-// height and the shoulders ~0.42 m wide, the original rig had a 1/4.6 head and 0.67 m shoulders. The scales live in child
-// "visual" groups (see headVisual / upperVisual), never on the bones, so the proxies keep the HITBOX_PART_DEFS size/offset.
-const CHEST_WIDTH_SCALE = 0.84; // x only: rotating children (arm pitch about X) are then not sheared
-const HEAD_SCALE = 0.74;
 
 export function createRemotePlayerMesh(playerData = {}, options = {}) {
   const isShowcase = Boolean(options.isShowcase);
@@ -37,92 +30,80 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
   // 1. Tactical Patch / Team Identification Trim (responds to suit color swatch)
   const mainMat = new THREE.MeshStandardMaterial({
     color: pColor,
-    roughness: 0.36,
-    metalness: 0.24,
-    emissive: pColor,
-    emissiveIntensity: 0.08
+    roughness: 0.38,
+    metalness: 0.28
   });
   mainMat.userData = { matSlotKey: 'main' };
 
-  // 2. Ripstop BDU Combat Shirt & Cargo Pants (Brighter Tactical Slate-Navy)
-  const bduMat = getCachedMat('bdu_0x445568', () =>
-    createProceduralMaterial('bdu', 0x445568, {
-      roughness: 0.64,
-      metalness: 0.06,
-      emissive: 0x1e293b,
-      emissiveIntensity: 0.03
+  // 2. Ripstop BDU Combat Shirt & Cargo Pants (Dark Charcoal / Olive-Slate)
+  const bduMat = getCachedMat('bdu_0x262e36', () =>
+    createProceduralMaterial('bdu', 0x262e36, {
+      roughness: 0.78,
+      metalness: 0.06
     })
   );
 
-  // 3. Crye JPC 2.0 Plate Carrier, MOLLE Pouches & Battle Belt (Warm Desert Coyote / Khaki Tan)
-  const vestMat = getCachedMat('cordura_0x9a876e', () =>
-    createProceduralMaterial('cordura', 0x9a876e, {
-      roughness: 0.54,
-      metalness: 0.08,
-      emissive: 0x3b3124,
-      emissiveIntensity: 0.03
+  // 3. Crye JPC 2.0 Plate Carrier, MOLLE Pouches & Battle Belt (Coyote / Ranger Tan)
+  const vestMat = getCachedMat('cordura_0x625748', () =>
+    createProceduralMaterial('cordura', 0x625748, {
+      roughness: 0.66,
+      metalness: 0.12
     })
   );
 
-  // 4. Secondary Webbing, Straps & Tactical Fabric
-  const webbingMat = getCachedMat('bdu_0x36404e', () =>
-    createProceduralMaterial('bdu', 0x36404e, {
-      roughness: 0.64,
-      metalness: 0.08,
-      bumpScale: 0.012,
-      emissive: 0x161c24,
-      emissiveIntensity: 0.03
+  // 4. Secondary Webbing, Straps, Ribbed Balaclava & Shemagh Fabric
+  const webbingMat = getCachedMat('bdu_0x1a1f25', () =>
+    createProceduralMaterial('bdu', 0x1a1f25, {
+      roughness: 0.74,
+      metalness: 0.10,
+      bumpScale: 0.012
     })
   );
 
   // 5. Matte Ballistic Kevlar Helmet, NVG Housing & Hard Polymer Armor Shells
-  const armorMat = getCachedMat('kevlar_0x4f5e56', () =>
-    createProceduralMaterial('kevlar', 0x4f5e56, {
-      roughness: 0.38,
-      metalness: 0.22,
-      emissive: 0x1d2621,
-      emissiveIntensity: 0.03
+  const armorMat = getCachedMat('kevlar_0x2c3430', () =>
+    createProceduralMaterial('kevlar', 0x2c3430, {
+      roughness: 0.42,
+      metalness: 0.28
     })
   );
 
-  // 6. Sculpted Human Skin (Face, Jaw, Neck, Rolled-Sleeve Forearms & Fingerless-Glove Fingers)
-  const skinMat = getCachedMat('skin_0xdca482', () =>
+  // 6. Sculpted Human Skin (Brow, Nose Bridge, Cheekbones)
+  const skinMat = getCachedMat('skin_0xf6c8a8', () =>
     new THREE.MeshStandardMaterial({
-      color: 0xdca482,
-      roughness: 0.55,
-      metalness: 0,
+      color: 0xf6c8a8,
+      roughness: 0.42,
+      metalness: 0.02,
       emissive: 0x5c341e,
-      emissiveIntensity: 0.05
+      emissiveIntensity: 0.22
     })
   );
   skinMat.userData = { shared: true, matSlotKey: 'skin' };
 
   // 7. Anodized Gunmetal Hardware, Wilcox NVG Mount, Radio Antenna & Buckle Trim
-  const chromeMat = getCachedMat('chrome_0x8899ae', () =>
+  const chromeMat = getCachedMat('chrome_0x64748b', () =>
     new THREE.MeshStandardMaterial({
-      color: 0x8899ae,
+      color: 0x64748b,
       roughness: 0.24,
-      metalness: 0.80
+      metalness: 0.86
     })
   );
 
-  // 8. Full-Grain Tactical Combat Leather Boots & Half-Finger Mechanix Gloves
-  const bootMat = getCachedMat('leather_0x2d343e', () =>
-    createProceduralMaterial('leather', 0x2d343e, {
-      roughness: 0.44,
-      metalness: 0.16,
-      emissive: 0x12161c,
-      emissiveIntensity: 0.03
+  // 8. Full-Grain Dark Combat Leather Boots & Mechanix Gloves
+  const bootMat = getCachedMat('leather_0x17191d', () =>
+    createProceduralMaterial('leather', 0x17191d, {
+      roughness: 0.48,
+      metalness: 0.18
     })
   );
 
-  // 9. Tinted Ballistic Combat Goggles Lens (Polarized Sheen without red enemy beacon glow)
+  // 9. Tinted Ballistic Combat Goggles Lens (Iridium Polarized Sheen + Enemy Red Highlight)
   const visorMat = new THREE.MeshStandardMaterial({
-    color: 0x1e293b,
-    emissive: isShowcase ? pColor : 0x0ea5e9,
-    emissiveIntensity: isShowcase ? 0.18 : 0.10,
-    roughness: 0.12,
-    metalness: 0.86
+    color: 0x111827,
+    emissive: isShowcase ? pColor : 0xff2222,
+    emissiveIntensity: isShowcase ? 0.18 : 0.45,
+    roughness: 0.10,
+    metalness: 0.88
   });
   visorMat.userData = { matSlotKey: 'visor' };
 
@@ -171,7 +152,7 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     getCachedGeo('pelvisCore', () => new THREE.CylinderGeometry(0.168, 0.154, 0.19, 22)),
     bduMat
   );
-  pelvisCore.scale.set(1.2, 1.08, 0.94);
+  pelvisCore.scale.set(1.36, 1.08, 0.94);
   pelvisCore.castShadow = true;
   tagBodyHitbox(pelvisCore);
   pelvisGroup.add(pelvisCore);
@@ -197,7 +178,7 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     getCachedGeo('beltRing', () => new THREE.CylinderGeometry(0.185, 0.185, 0.068, 22)),
     vestMat
   );
-  beltRing.scale.set(1.22, 1.08, 0.96);
+  beltRing.scale.set(1.38, 1.08, 0.96);
   beltRing.position.set(0, 0.065, 0);
   beltRing.castShadow = false;
 
@@ -205,7 +186,7 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     getCachedGeo('beltInnerStrap', () => new THREE.CylinderGeometry(0.188, 0.188, 0.030, 22)),
     webbingMat
   );
-  beltInnerStrap.scale.set(1.22, 1.08, 0.96);
+  beltInnerStrap.scale.set(1.38, 1.08, 0.96);
   beltInnerStrap.position.set(0, 0.065, 0);
   beltInnerStrap.castShadow = false;
 
@@ -295,7 +276,7 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
   // Primary Anatomical Torso Hitbox & BDU Combat Shirt Core
   const torsoGeo = getCachedGeo('torsoGeo', () => new THREE.CylinderGeometry(0.238, 0.176, 0.58, 22));
   const torsoMesh = new THREE.Mesh(torsoGeo, bduMat);
-  torsoMesh.scale.set(1.38 * CHEST_WIDTH_SCALE, 1.08, 0.92); // child of upperBodyGroup, not chestGroup: scaled by hand
+  torsoMesh.scale.set(1.38, 1.08, 0.92);
   torsoMesh.position.set(0, 0.28, 0);
   torsoMesh.castShadow = true;
   tagBodyHitbox(torsoMesh);
@@ -499,7 +480,7 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
 
   const neckGaiter = new THREE.Mesh(
     getCachedGeo('neckGaiter', () => new THREE.CylinderGeometry(0.088, 0.104, 0.14, 20)),
-    skinMat
+    webbingMat
   );
   neckGaiter.position.set(0, 0.615, -0.008);
 
@@ -527,14 +508,14 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     neckGaiter
   );
 
-  // ==================== 3. SCULPTED HEAD, EXPOSED SKIN FACE, OAKLEY GOGGLES, OPS-CORE HELMET & STOWED NVGS ====================
+  // ==================== 3. SCULPTED HEAD, BALACLAVA, OAKLEY GOGGLES, OPS-CORE HELMET & STOWED NVGS ====================
   const headGroup = new THREE.Group();
   headGroup.position.set(0, 0.64, 0); // World y = 1.54
   chestGroup.add(headGroup);
 
-  // Primary Headshot Collider & Sculpted Human Head Base (exposed warm skin tone)
+  // Primary Headshot Collider & Sculpted Cranium Base
   const headGeo = getCachedGeo('headGeo', () => new THREE.CapsuleGeometry(0.136, 0.11, 16, 22));
-  const headMesh = new THREE.Mesh(headGeo, skinMat);
+  const headMesh = new THREE.Mesh(headGeo, webbingMat);
   headMesh.scale.set(1.16, 1.16, 1.16);
   headMesh.position.set(0, 0.20, -0.01); // World y = 1.74
   headMesh.castShadow = true;
@@ -570,10 +551,10 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
   noseBridge.rotation.x = 0.32;
   noseBridge.position.set(0, 0.202, -0.152);
 
-  // Contoured Lower-Face Sculpted Jaw, Chin & Cheeks in warm human skin tone
+  // Contoured Lower-Face Ribbed Tactical Balaclava Mask (Jaw, Chin & Nose Cover)
   const balaclavaJaw = new THREE.Mesh(
     getCachedGeo('balaclavaJawSmooth', () => new THREE.CapsuleGeometry(0.112, 0.065, 14, 18)),
-    skinMat
+    webbingMat
   );
   balaclavaJaw.scale.set(1.12, 1.14, 1.24);
   balaclavaJaw.position.set(0, 0.145, -0.024);
@@ -689,33 +670,33 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
   );
   counterweightPouch.position.set(0, 0.252, 0.188);
 
-  // Tactical Ballistic Goggles stowed high on helmet brow so the operator's human face skin is clearly visible
+  // Tactical Ballistic Goggles (ESS / Oakley Wraparound Frame + Iridium Curved Lens + Elastic Strap)
   const goggleFrame = new THREE.Mesh(
     getCachedGeo(
       'goggleFrame',
-      () => new THREE.CylinderGeometry(0.147, 0.145, 0.052, 24, 1, false, Math.PI * 0.61, Math.PI * 0.78)
+      () => new THREE.CylinderGeometry(0.147, 0.145, 0.068, 24, 1, false, Math.PI * 0.61, Math.PI * 0.78)
     ),
     bootMat
   );
-  goggleFrame.scale.set(1.14, 1.0, 1.14);
-  goggleFrame.position.set(0, 0.268, -0.022);
+  goggleFrame.scale.set(1.14, 1.14, 1.14);
+  goggleFrame.position.set(0, 0.218, -0.018);
 
   const goggleLens = new THREE.Mesh(
     getCachedGeo(
       'goggleLens',
-      () => new THREE.CylinderGeometry(0.150, 0.148, 0.040, 24, 1, false, Math.PI * 0.63, Math.PI * 0.74)
+      () => new THREE.CylinderGeometry(0.150, 0.148, 0.052, 24, 1, false, Math.PI * 0.63, Math.PI * 0.74)
     ),
     visorMat
   );
-  goggleLens.scale.set(1.14, 1.0, 1.14);
-  goggleLens.position.set(0, 0.268, -0.022);
+  goggleLens.scale.set(1.14, 1.14, 1.14);
+  goggleLens.position.set(0, 0.218, -0.018);
 
   const goggleStrap = new THREE.Mesh(
-    getCachedGeo('goggleStrap', () => new THREE.CylinderGeometry(0.155, 0.155, 0.024, 22)),
+    getCachedGeo('goggleStrap', () => new THREE.CylinderGeometry(0.155, 0.155, 0.028, 22)),
     webbingMat
   );
-  goggleStrap.scale.set(1.11, 1.0, 1.22);
-  goggleStrap.position.set(0, 0.268, 0.005);
+  goggleStrap.scale.set(1.11, 1.12, 1.22);
+  goggleStrap.position.set(0, 0.218, 0.005);
 
   // Peltor ComTac V Tactical Headset (Contoured Oval Shells + Gel Cushions + Wire Rail Mounts + Boom Mic)
   const earCupGeo = getCachedGeo('earCupContoured', () => {
@@ -781,7 +762,7 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     micWindscreen
   );
 
-  // ==================== 4. ANATOMICAL ARMS, ROLLED BDU SLEEVES, SKIN FOREARMS & FINGERLESS GLOVES ====================
+  // ==================== 4. ANATOMICAL ARMS, BDU SLEEVES, ELBOW PADS & MECHANIX GLOVES ====================
   const armPivot = new THREE.Group();
   armPivot.position.set(0, 0.46, 0); // World y = 1.36
   chestGroup.add(armPivot);
@@ -822,7 +803,7 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
   const handThumbGeo = getCachedGeo('handThumb', () => new THREE.CapsuleGeometry(0.010, 0.034, 6, 10));
   const handFingerGeo = getCachedGeo('handFinger', () => new THREE.CapsuleGeometry(0.0085, 0.036, 6, 10));
 
-  // Hierarchical Right Arm: rightArm (shoulder pivot) -> rightForearm (elbow pivot, bare skin) -> rightHand (fingerless glove)
+  // Hierarchical Right Arm: rightArm (shoulder pivot) -> rightForearm (elbow pivot) -> rightHand (5-finger grip)
   const rightArm = new THREE.Group();
   rightArm.position.set(0.335, 0.01, 0);
   const rightShoulder = buildTacticalShoulder(1);
@@ -839,7 +820,7 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
 
   const rightElbow = new THREE.Mesh(
     getCachedGeo('rightElbow', () => new THREE.SphereGeometry(0.056, 14, 12)),
-    skinMat
+    armorMat
   );
   rightElbow.position.set(0.030, -0.20, -0.17);
 
@@ -848,7 +829,7 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
 
   const rightForearmMesh = new THREE.Mesh(
     getCachedGeo('rightForearmMesh', () => new THREE.CylinderGeometry(0.056, 0.042, 0.25, 18)),
-    skinMat
+    bduMat
   );
   rightForearmMesh.position.set(-0.030, 0.04, -0.12);
   rightForearmMesh.rotation.set(1.34, -0.20, 0);
@@ -871,12 +852,12 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
   rPalm.rotation.x = Math.PI / 2.2;
   const rKnuckle = new THREE.Mesh(handKnuckleGeo, armorMat);
   rKnuckle.position.set(0.004, 0.025, 0);
-  const rThumb = new THREE.Mesh(handThumbGeo, skinMat);
+  const rThumb = new THREE.Mesh(handThumbGeo, bootMat);
   rThumb.position.set(-0.026, 0.012, -0.016);
   rThumb.rotation.set(0.42, 0.32, 0.52);
   rightHand.add(rPalm, rKnuckle, rThumb);
   for (let f = 0; f < 4; f++) {
-    const rFinger = new THREE.Mesh(handFingerGeo, skinMat);
+    const rFinger = new THREE.Mesh(handFingerGeo, bootMat);
     rFinger.position.set(-0.014, -0.004 - f * 0.014, -0.030 + (f === 0 ? -0.012 : 0));
     rFinger.rotation.z = Math.PI / 2;
     rFinger.rotation.y = f === 0 ? -0.32 : 0.08;
@@ -886,7 +867,7 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
   rightForearm.add(rightForearmMesh, rightCuff, rightHand);
   rightArm.add(rightShoulder, rightBicep, rightElbow, rightForearm);
 
-  // Hierarchical Left Arm: leftArm (shoulder pivot) -> leftForearm (elbow pivot, bare skin) -> leftHand (fingerless glove)
+  // Hierarchical Left Arm: leftArm (shoulder pivot) -> leftForearm (elbow pivot) -> leftHand (5-finger C-clamp grip)
   const leftArm = new THREE.Group();
   leftArm.position.set(-0.335, 0.01, 0);
   const leftShoulder = buildTacticalShoulder(-1);
@@ -903,7 +884,7 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
 
   const leftElbow = new THREE.Mesh(
     getCachedGeo('leftElbow', () => new THREE.SphereGeometry(0.055, 14, 12)),
-    skinMat
+    armorMat
   );
   leftElbow.position.set(0.125, -0.18, -0.23);
 
@@ -912,7 +893,7 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
 
   const leftForearmMesh = new THREE.Mesh(
     getCachedGeo('leftForearmMesh', () => new THREE.CylinderGeometry(0.055, 0.041, 0.31, 18)),
-    skinMat
+    bduMat
   );
   leftForearmMesh.position.set(0.20, 0.05, -0.16);
   leftForearmMesh.rotation.set(1.38, 0, -0.82);
@@ -941,12 +922,12 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
   lPalm.rotation.x = Math.PI / 2;
   const lKnuckle = new THREE.Mesh(handKnuckleGeo, armorMat);
   lKnuckle.position.set(-0.004, 0.024, 0);
-  const lThumb = new THREE.Mesh(handThumbGeo, skinMat);
+  const lThumb = new THREE.Mesh(handThumbGeo, bootMat);
   lThumb.position.set(-0.016, 0.026, -0.016);
   lThumb.rotation.set(0.2, -0.38, -0.75);
   leftHand.add(lPalm, lKnuckle, lThumb);
   for (let f = 0; f < 4; f++) {
-    const lFinger = new THREE.Mesh(handFingerGeo, skinMat);
+    const lFinger = new THREE.Mesh(handFingerGeo, bootMat);
     lFinger.position.set(0.015, -0.014, -0.032 + f * 0.018);
     lFinger.rotation.z = Math.PI / 2.3;
     leftHand.add(lFinger);
@@ -979,13 +960,13 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
 
   // ==================== 5. ANATOMICAL LEGS, CARGO PANTS, CONTOURED KNEE PADS & COMBAT BOOTS ====================
   const thighGeo = getCachedGeo('thighGeo', () => {
-    const g = new THREE.CylinderGeometry(0.108, 0.086, 0.38, 20);
+    const g = new THREE.CylinderGeometry(0.124, 0.096, 0.38, 20);
     g.translate(0, -0.19, 0); // Pivot at hip socket (y = 0)
     return g;
   });
 
   const shinGeo = getCachedGeo('shinGeo', () => {
-    const g = new THREE.CylinderGeometry(0.082, 0.060, 0.34, 20);
+    const g = new THREE.CylinderGeometry(0.094, 0.066, 0.34, 20);
     g.translate(0, -0.17, 0); // Pivot at knee joint (y = 0)
     return g;
   });
@@ -1144,24 +1125,6 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
 
   group.add(leftLeg, rightLeg);
 
-  // Visual-only proportions: the head / chest BONES stay unscaled (hitbox proxies attach to them at the shared offsets);
-  // their look is scaled inside a child group. headMesh / torsoMesh are the batching primary meshes, scaled by hand.
-  const headVisual = new THREE.Group();
-  headVisual.scale.setScalar(HEAD_SCALE);
-  for (const child of headGroup.children.slice()) {
-    if (child !== headMesh) headVisual.add(child);
-  }
-  headGroup.add(headVisual);
-  headMesh.scale.multiplyScalar(HEAD_SCALE);
-  headMesh.position.multiplyScalar(HEAD_SCALE);
-
-  const upperVisual = new THREE.Group();
-  upperVisual.scale.x = CHEST_WIDTH_SCALE;
-  for (const child of chestGroup.children.slice()) {
-    if (child !== headGroup) upperVisual.add(child);
-  }
-  chestGroup.add(upperVisual);
-
   // ==================== 6. LOW-POLY BOX HITBOX PROXIES (12 TRIANGLES PER VOLUME) ====================
   // Sizes, offsets and zones come from the SHARED definition (shared/hitboxes.js) that the server also uses to
   // verify shots; each proxy stays attached to its animated bone (head / chest / pelvis / hip / knee).
@@ -1224,10 +1187,6 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     batchBoneScope(leftKneePivot, 'shin_l', new Set([leftShinHitboxProxy]), leftLegData.shinMesh, useEnemyOutline, initialOutlineMat),
     batchBoneScope(rightKneePivot, 'shin_r', new Set([rightShinHitboxProxy]), rightLegData.shinMesh, useEnemyOutline, initialOutlineMat)
   ].filter(Boolean);
-
-  if (!isShowcase) {
-    group.add(createBlobShadowMesh());
-  }
 
   if (!isShowcase && options.scene) {
     options.scene.add(group);

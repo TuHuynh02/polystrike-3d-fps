@@ -185,11 +185,11 @@ export function buildFirstPersonViewmodel(groupOrWeaponId = 'rifle', weaponId, m
     metalness: 0.65
   });
   const skinMat = new THREE.MeshStandardMaterial({
-    color: 0xdca482,
+    color: 0xf6c8a8,
     emissive: 0x3d2416,
-    emissiveIntensity: 0.05,
-    roughness: 0.55,
-    metalness: 0
+    emissiveIntensity: 0.14,
+    roughness: 0.44,
+    metalness: 0.02
   });
   const watchDialMat = new THREE.MeshBasicMaterial({
     map: getWatchDialTexture(),
