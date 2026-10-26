@@ -342,6 +342,7 @@ export class MatchLifecycleMethods {
         entry.kills = p.kills || 0;
         entry.deaths = p.deaths || 0;
         entry.streak = p.streak || 0;
+        if (p.rttMs > 0) entry.ping = Math.round(p.rttMs);
       }
       list[idx++] = entry;
     }

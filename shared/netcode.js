@@ -241,7 +241,12 @@ export function overlayAckOnState(state, ack) {
   state.vx = ack.vx;
   state.vy = ack.vy;
   state.vz = ack.vz;
-  state.onGround = (ack.f & ACK_FLAG.ON_GROUND) !== 0;
+  const onGround = (ack.f & ACK_FLAG.ON_GROUND) !== 0;
+  state.onGround = onGround;
+  state.wasOnGround = onGround;
+  if (onGround && Number.isFinite(ack.seq)) {
+    state.lastGroundedAt = commandTimeMs(ack.seq);
+  }
   state.isSliding = (ack.f & ACK_FLAG.SLIDING) !== 0;
   state.crouching = (ack.f & ACK_FLAG.CROUCHING) !== 0;
   state.prone = (ack.f & ACK_FLAG.PRONE) !== 0;

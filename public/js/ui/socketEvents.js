@@ -5,7 +5,7 @@ import {
   getMapConfig
 } from '../shared.js';
 import { installRejoinOnReconnect, SERVER_UNREACHABLE_MESSAGE } from '../networkAdapter.js';
-import { LAN_LOST_MESSAGE, lanErrorText } from '../lanHost/lanMode.js';
+import { LAN_LOST_MESSAGE, lanErrorText, restoreOnlineSession } from '../lanHost/lanMode.js';
 import {
   canvasContainer,
   toastEl,
@@ -143,6 +143,7 @@ import {
   nextMatchCountdown,
   urlParams,
   invitedRoomParam,
+  lanState,
   escapeHtml,
   formatTime,
   getShareableRoomUrl
@@ -172,6 +173,7 @@ import {
   fetchActiveRooms,
   leaveActiveRoom,
   renderTeamWaitingLobby,
+  startLanGuestInPlace,
   syncLobbyWeaponSelectionUi
 } from './lobbyAndModals.js';
 
@@ -235,6 +237,15 @@ export function measurePing() {
       ? Math.round(prevRtt * 0.6 + filteredRtt * 0.4)
       : filteredRtt;
     appState.currentPingMs = rtt;
+    const jitter = samples.length >= 2 ? Math.max(...samples) - Math.min(...samples) : 0;
+    appState.currentJitterMs = jitter;
+    const netQuality = (rtt > 100 || jitter > 40) ? 'bad' : (rtt > 45 || jitter > 18) ? 'warn' : 'good';
+    if (hudPing?.style) {
+      hudPing.style.color = netQuality === 'bad' ? '#f87171' : netQuality === 'warn' ? '#facc15' : '#4ade80';
+    }
+    if (hudPing?.setAttribute) {
+      hudPing.setAttribute('title', `Ping: ${rtt}ms • Jitter: ±${jitter}ms`);
+    }
     if (appState.hudCache.ping !== rtt) {
       appState.hudCache.ping = rtt;
       hudPing.textContent = String(rtt);
@@ -243,19 +254,63 @@ export function measurePing() {
   });
 }
 
-export function initSocketEvents() {
+const boundSockets = new WeakSet();
+let pingIntervalStarted = false;
+
+function syncLanHostMeta(extra = {}) {
+  if (appState.lanInfo?.role !== 'host') return;
+  const sig = appState.netClient?.signalSocket;
+  if (!sig || typeof sig.emit !== 'function') return;
+  const peerGuests = Number(appState.lanInfo?.peerCount?.() ?? appState.lanInfo?.session?.peerCount?.()) || 0;
+  const playerCount = Array.isArray(appState.latestPlayers) && appState.latestPlayers.length > 0 ? appState.latestPlayers.length : 1;
+  sig.emit('lanHostUpdate', {
+    mapId: appState.game?.currentMapConfig?.id || appState.selectedMapId || DEFAULT_MAP_ID,
+    gameMode: appState.currentRoomGameMode || 'ffa',
+    state: appState.currentRoomState || 'PLAYING',
+    humans: Math.max(1, peerGuests + 1, playerCount),
+    ...extra
+  });
+}
+
+export function bindGameSocketListeners(targetSocket = appState.socket) {
+  if (!targetSocket || typeof targetSocket.on !== 'function' || boundSockets.has(targetSocket)) return;
+  boundSockets.add(targetSocket);
+  targetSocket._gameListenersBound = true;
+
+  const onActiveSocket = (event, fn) => {
+    targetSocket.on(event, (...args) => {
+      if (appState.socket !== targetSocket) return;
+      fn(...args);
+    });
+  };
+
   const showServerUnreachable = (err) => {
     appState.serverErrorShown = true;
+    const isLan = Boolean(appState.lanInfo);
     // An in-browser LAN room does not reconnect by itself: say what went wrong instead of "retrying".
-    lobbyError.textContent = appState.lanInfo
+    lobbyError.textContent = isLan
       ? lanErrorText(err?.message)
       : `${ SERVER_UNREACHABLE_MESSAGE }. Đang thử kết nối lại...`;
     lobbyError.classList.remove('hidden');
+    if (isLan) {
+      const oldLan = appState.lanInfo;
+      appState.lanInfo = null;
+      lanState.active = false;
+      const restored = restoreOnlineSession(appState.netClient, oldLan);
+      if (restored) {
+        appState.socket = restored;
+        bindGameSocketListeners(restored);
+      }
+    }
   };
   if (appState.netInitFailed) showServerUnreachable();
-  appState.socket.on('connect_error', showServerUnreachable);
+  onActiveSocket('connect_error', showServerUnreachable);
 
-  installRejoinOnReconnect(appState.socket, {
+  installRejoinOnReconnect({
+    on(event, fn) {
+      onActiveSocket(event, fn);
+    }
+  }, {
     isInMatch: () => Boolean(appState.game.inMatch || appState.activeRoomCode),
     onLost: () => showToast(appState.lanInfo ? '⚠️ Mất kết nối LAN với chủ phòng' : '⚠️ Mất kết nối — đang kết nối lại...'),
     rejoin: () => {
@@ -266,11 +321,22 @@ export function initSocketEvents() {
     onReconnected: () => showToast('🔄 Đã kết nối lại — vào lại phòng')
   });
 
-appState.socket.on('disconnect', () => {
+onActiveSocket('disconnect', () => {
   appState._pingInFlightAt = 0;
   if (appState.lanInfo) {
     // LAN room: the host left or the link dropped; there is no automatic reconnect, so go back to the lobby with the reason.
-    if (appState.game.inMatch || appState.activeRoomCode) leaveActiveRoom({ emitLeave: false });
+    if (appState.game.inMatch || appState.activeRoomCode) {
+      leaveActiveRoom({ emitLeave: false });
+    } else {
+      const oldLan = appState.lanInfo;
+      appState.lanInfo = null;
+      lanState.active = false;
+      const restored = restoreOnlineSession(appState.netClient, oldLan);
+      if (restored) {
+        appState.socket = restored;
+        bindGameSocketListeners(restored);
+      }
+    }
     appState.serverErrorShown = true;
     lobbyError.textContent = LAN_LOST_MESSAGE;
     lobbyError.classList.remove('hidden');
@@ -278,7 +344,7 @@ appState.socket.on('disconnect', () => {
   }
   if (!appState.game.inMatch && !appState.activeRoomCode) showServerUnreachable();
 });
-appState.socket.on('connect', () => {
+onActiveSocket('connect', () => {
   if (appState.serverErrorShown) {
     appState.serverErrorShown = false;
     lobbyError.classList.add('hidden');
@@ -286,7 +352,15 @@ appState.socket.on('connect', () => {
   fetchActiveRooms();
 });
 
-appState.socket.on('joinError', ({ message }) => {
+onActiveSocket('lanRoomRedirect', (data) => {
+  const code = data?.roomCode;
+  if (code) {
+    appState.knownLanCodes?.add(code);
+    startLanGuestInPlace(code);
+  }
+});
+
+onActiveSocket('joinError', ({ message }) => {
   if (appState.activeRoomCode || appState.game.inMatch) {
     leaveActiveRoom({ emitLeave: false });
   }
@@ -294,7 +368,7 @@ appState.socket.on('joinError', ({ message }) => {
   lobbyError.classList.remove('hidden');
 });
 
-appState.socket.on('roomJoined', (data) => {
+onActiveSocket('roomJoined', (data) => {
   appState._pingInFlightAt = 0;
   appState._pingSamples = [];
   appState.activeRoomCode = data.roomCode;
@@ -389,9 +463,10 @@ appState.socket.on('roomJoined', (data) => {
     appState.game.requestPointerLock();
     showToast(`🎯 Phòng #${ appState.activeRoomCode } • ${ getMapConfig(roomMapId).name }`);
   }
+  syncLanHostMeta({ mapId: roomMapId });
 });
 
-appState.socket.on('loadoutUpdated', (data) => {
+onActiveSocket('loadoutUpdated', (data) => {
   if (!appState.game.inMatch && !appState.activeRoomCode) return;
   if (data?.loadout?.pending) {
     // Mid-life loadout swaps are applied on the next respawn (prefs below keep the pending pick)
@@ -404,7 +479,13 @@ appState.socket.on('loadoutUpdated', (data) => {
       melee: data.loadout.melee || appState.selectedLoadout.melee
     };
     appState.selectedStartingWeapon = appState.selectedLoadout.primary;
-    appState.game.setLoadout(appState.selectedLoadout);
+    const activeSlot = WEAPONS[appState.game.currentWeapon]?.slot || 1;
+    const nextActiveWep = (!data.loadout.pending && activeSlot === 1) ? appState.selectedLoadout.primary : null;
+    if (nextActiveWep && WEAPONS[nextActiveWep] && appState.game.ammoByWeapon) {
+      appState.game.ammoByWeapon[nextActiveWep] = WEAPONS[nextActiveWep].magSize;
+      appState.game.reserveAmmoByWeapon[nextActiveWep] = WEAPONS[nextActiveWep].reserveAmmo ?? 90;
+    }
+    appState.game.setLoadout(appState.selectedLoadout, nextActiveWep);
     syncLobbyWeaponSelectionUi(appState.selectedStartingWeapon);
     syncHotbarSlotsHud();
     saveUserPrefs({
@@ -414,12 +495,13 @@ appState.socket.on('loadoutUpdated', (data) => {
   }
 });
 
-appState.socket.on('playerJoined', (data) => {
+onActiveSocket('playerJoined', (data) => {
   if ((!appState.game.inMatch && !appState.activeRoomCode) || !data?.name) return;
   showToast(`👤 ${ data.name } đã vào phòng`);
+  syncLanHostMeta({ humans: Math.max(1, (appState.latestPlayers?.length || 1) + 1) });
 });
 
-appState.socket.on('mapChanged', (data) => {
+onActiveSocket('mapChanged', (data) => {
   if (!appState.game.inMatch && !appState.activeRoomCode) return;
   const newMapId = data.mapId || DEFAULT_MAP_ID;
   appState.game.loadMap(newMapId);
@@ -447,18 +529,19 @@ appState.socket.on('mapChanged', (data) => {
     triggerSpawnProtectionHud(MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500);
   }
   showToast(`🗺️ ${ data.mapName || getMapConfig(newMapId).name }`);
+  syncLanHostMeta({ mapId: newMapId });
 });
 
 // Server RTT probe: echo straight back so the server can measure round-trip time itself
-appState.socket.on('latencyProbe', (t, cb) => cb?.(t));
+onActiveSocket('latencyProbe', (t, cb) => cb?.(t));
 
 // Server ended our spawn protection early (we fired / threw a grenade)
-appState.socket.on('spawnProtectionEnded', (data) => {
+onActiveSocket('spawnProtectionEnded', (data) => {
   if (data?.playerId && data.playerId === appState.game.localId) clearSpawnProtectionHud();
 });
 
 // Server rejected a host-only or team-lobby action: tell the player and restore the controls
-appState.socket.on('actionDenied', (data) => {
+onActiveSocket('actionDenied', (data) => {
   if (!appState.game.inMatch && !appState.activeRoomCode) return;
   showToast(`⛔ ${ data?.message || 'Hành động không được phép.' }`);
   if (data?.action === 'changeMap') {
@@ -466,7 +549,7 @@ appState.socket.on('actionDenied', (data) => {
   }
 });
 
-appState.socket.on('hostChanged', (data) => {
+onActiveSocket('hostChanged', (data) => {
   if ((!appState.game.inMatch && !appState.activeRoomCode) || !data?.name) return;
   if (data.hostId) {
     appState.currentRoomHostId = data.hostId;
@@ -479,17 +562,17 @@ appState.socket.on('hostChanged', (data) => {
 
 // Authoritative movement state for the commands the server has simulated (sent to this player only):
 // reconciles the client-side prediction (epoch change = server teleport/respawn => snap)
-appState.socket.on('moveAck', (ack) => {
+onActiveSocket('moveAck', (ack) => {
   appState.game.applyMoveAck(ack);
 });
 
 // Owner-only secret of the deterministic weapon spread for the new life (the server sends it right before the
 // `playerRespawned` broadcast; the first one arrives inside `roomJoined.player.spreadSeed`)
-appState.socket.on('selfSeed', (data) => {
+onActiveSocket('selfSeed', (data) => {
   appState.game.setSpreadSeed(data?.spreadSeed);
 });
 
-appState.socket.on('shotRejected', (data) => {
+onActiveSocket('shotRejected', (data) => {
   if (!appState.game.inMatch || !data) return;
   appState.game.applyShotRejected(data);
   const now = performance.now();
@@ -501,21 +584,22 @@ appState.socket.on('shotRejected', (data) => {
 });
 
 // Owner-only combat/ammo/reload state reconciliation (~8Hz + on state change)
-appState.socket.on('selfState', (state) => {
+onActiveSocket('selfState', (state) => {
   if (!appState.game.inMatch || !state) return;
   appState.game.applySelfState(state);
 });
 
-appState.socket.on('playerLeft', (data) => {
+onActiveSocket('playerLeft', (data) => {
   if ((!appState.game.inMatch && !appState.activeRoomCode) || !data?.playerId) return;
   appState.latestPlayers = appState.latestPlayers.filter((p) => p.id !== data.playerId);
   appState.game.syncPlayersState(appState.latestPlayers);
   if (appState.currentRoomGameMode === 'tdm' && appState.currentRoomState === 'WAITING') {
     renderTeamWaitingLobby({ players: appState.latestPlayers });
   }
+  syncLanHostMeta({ humans: Math.max(1, appState.latestPlayers.length) });
 });
 
-appState.socket.on('stateUpdate', (snapshot) => {
+onActiveSocket('stateUpdate', (snapshot) => {
   if (!appState.game.inMatch) return;
   const remSec = Math.max(0, Math.floor(snapshot.timeRemaining || 0));
   if (appState.hudCache.timerSec !== remSec) {
@@ -593,7 +677,7 @@ appState.socket.on('stateUpdate', (snapshot) => {
   }
 });
 
-appState.socket.on('shotFired', (data) => {
+onActiveSocket('shotFired', (data) => {
   if (!appState.game.inMatch || data.shooterId === appState.game.localId) return;
 
   const endPt = data.hitPoint || {
@@ -625,7 +709,7 @@ appState.socket.on('shotFired', (data) => {
   }
 });
 
-appState.socket.on('damageDealt', (data) => {
+onActiveSocket('damageDealt', (data) => {
   if (!appState.game.inMatch) return;
 
   if (data.targetId && data.targetId !== appState.game.localId && typeof data.hp === 'number') {
@@ -702,14 +786,14 @@ appState.socket.on('damageDealt', (data) => {
   }
 });
 
-appState.socket.on('spawnProtectedHit', (data) => {
+onActiveSocket('spawnProtectedHit', (data) => {
   if (!appState.game.inMatch) return;
   if (data.attackerId === appState.game.localId) {
     showCenterBanner('🛡️ MỤC TIÊU BẤT TỬ');
   }
 });
 
-appState.socket.on('killEvent', (data) => {
+onActiveSocket('killEvent', (data) => {
   if (!appState.game.inMatch) return;
   addKillFeedItem(data);
   if (data.teamScores) {
@@ -802,7 +886,7 @@ appState.socket.on('killEvent', (data) => {
   }
 });
 
-appState.socket.on('playerRespawned', (data) => {
+onActiveSocket('playerRespawned', (data) => {
   if (!appState.game.inMatch) return;
   if (data.playerId && data.playerId !== appState.game.localId) {
     const rp = appState.game.remotePlayers?.get(data.playerId);
@@ -844,7 +928,7 @@ appState.socket.on('playerRespawned', (data) => {
   }
 });
 
-appState.socket.on('grenadeThrown', (data) => {
+onActiveSocket('grenadeThrown', (data) => {
   if (!appState.game.inMatch || !data) return;
   const payload = data.grenade || data;
   const ownerId = data.ownerId || data.throwerId || data.playerId || payload.ownerId;
@@ -862,7 +946,7 @@ appState.socket.on('grenadeThrown', (data) => {
   appState.game.spawnGrenadeProjectile?.(data);
 });
 
-appState.socket.on('grenadeExploded', (data) => {
+onActiveSocket('grenadeExploded', (data) => {
   if (!appState.game.inMatch || !data) return;
   const gx = data.x ?? data.position?.x ?? 0;
   const gy = data.y ?? data.position?.y ?? 0;
@@ -881,7 +965,7 @@ appState.socket.on('grenadeExploded', (data) => {
   appState.game.spawnGrenadeExplosion?.(data);
 });
 
-appState.socket.on('pickupState', (data) => {
+onActiveSocket('pickupState', (data) => {
   if (!appState.game.inMatch) return;
   appState.game.updatePickupSingle(data.pickupId, data.active);
 
@@ -920,12 +1004,12 @@ appState.socket.on('pickupState', (data) => {
   }
 });
 
-appState.socket.on('barrelState', (data) => {
+onActiveSocket('barrelState', (data) => {
   if (!appState.game.inMatch || !data) return;
   appState.game.updateBarrelSingle?.(data);
 });
 
-appState.socket.on('barrelExploded', (data) => {
+onActiveSocket('barrelExploded', (data) => {
   if (!appState.game.inMatch || !data) return;
   const bx = data.x ?? 0;
   const by = data.y ?? 0;
@@ -940,7 +1024,7 @@ appState.socket.on('barrelExploded', (data) => {
   appState.game.onBarrelExploded?.(data);
 });
 
-appState.socket.on('streakEvent', (data) => {
+onActiveSocket('streakEvent', (data) => {
   if (!appState.game.inMatch || !data) return;
   const isMe = data.playerId === appState.game.localId;
   if (data.type === 'shutdown') {
@@ -962,17 +1046,17 @@ appState.socket.on('streakEvent', (data) => {
   }
 });
 
-appState.socket.on('weaponDropped', (drop) => {
+onActiveSocket('weaponDropped', (drop) => {
   if (!appState.game.inMatch || !drop) return;
   appState.game.addDroppedWeapon(drop);
 });
 
-appState.socket.on('weaponDropExpired', ({ dropId }) => {
+onActiveSocket('weaponDropExpired', ({ dropId }) => {
   if (!appState.game.inMatch || !dropId) return;
   appState.game.removeDroppedWeapon(dropId);
 });
 
-appState.socket.on('weaponSwapped', (data) => {
+onActiveSocket('weaponSwapped', (data) => {
   if (!appState.game.inMatch || !data) return;
   if (data.pickedDropId) {
     appState.game.removeDroppedWeapon(data.pickedDropId);
@@ -986,12 +1070,12 @@ appState.socket.on('weaponSwapped', (data) => {
   }
 });
 
-appState.socket.on('droppedWeaponsUpdate', ({ droppedWeapons }) => {
+onActiveSocket('droppedWeaponsUpdate', ({ droppedWeapons }) => {
   if (!appState.game.inMatch || !Array.isArray(droppedWeapons)) return;
   appState.game.syncDroppedWeapons(droppedWeapons);
 });
 
-appState.socket.on('matchEnded', (data) => {
+onActiveSocket('matchEnded', (data) => {
   if (!appState.game.inMatch) return;
   if (appState.respawnInterval) {
     clearInterval(appState.respawnInterval);
@@ -1060,9 +1144,10 @@ appState.socket.on('matchEnded', (data) => {
     countdown = Math.max(0, countdown - 1);
     nextMatchCountdown.textContent = String(countdown);
   }, 1000);
+  syncLanHostMeta({ state: 'ENDED' });
 });
 
-appState.socket.on('matchStarted', (data) => {
+onActiveSocket('matchStarted', (data) => {
   if (!appState.game.inMatch && !appState.activeRoomCode) return;
   if (appState.respawnInterval) {
     clearInterval(appState.respawnInterval);
@@ -1115,12 +1200,33 @@ appState.socket.on('matchStarted', (data) => {
   }
   showCenterBanner(appState.currentRoomGameMode === 'tdm' ? '⚔️ ĐẤU ĐỘI BẮT ĐẦU' : '🔥 BẮT ĐẦU');
   appState.game.requestPointerLock();
+  syncLanHostMeta({ state: 'PLAYING' });
   for (const delay of [200, 600]) setTimeout(measurePing, delay);
 });
 
-  setInterval(measurePing, 2500);
-  appState.socket.on('roomJoined', () => {
+  onActiveSocket('teamLobbyState', (data) => {
+    handleTeamLobbyState(data);
+  });
+
+  onActiveSocket('roomJoined', () => {
     for (const delay of [150, 450, 900]) setTimeout(measurePing, delay);
   });
 }
+
+export function initSocketEvents() {
+  if (appState.netInitFailed) {
+    appState.serverErrorShown = true;
+    const isLan = Boolean(appState.lanInfo);
+    lobbyError.textContent = isLan
+      ? lanErrorText()
+      : `${ SERVER_UNREACHABLE_MESSAGE }. Đang thử kết nối lại...`;
+    lobbyError.classList.remove('hidden');
+  }
+  bindGameSocketListeners(appState.socket);
+  if (!pingIntervalStarted) {
+    pingIntervalStarted = true;
+    setInterval(measurePing, 1500);
+  }
+}
+
 

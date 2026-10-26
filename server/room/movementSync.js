@@ -623,7 +623,7 @@ export class MovementSyncMethods {
       this.switchPlayerWeapon(player, cmd.w);
     }
     // Movement speed follows the weapon the server knows about, and BTN.SPEED_BOOST is only allowed when speedBoostUntil is active
-    const hasSpeedBuff = Boolean(player.speedBoostUntil && player.speedBoostUntil > nowWall - 250);
+    const hasSpeedBuff = Boolean(player.speedBoostUntil && player.speedBoostUntil > nowWall - 750);
     const wantsBoostBtn = (cmd.btn & BTN.SPEED_BOOST) !== 0;
     const cleanBtn = (wantsBoostBtn && !hasSpeedBuff) ? (cmd.btn & ~BTN.SPEED_BOOST) : cmd.btn;
     const stepCmd = (cmd.w === player.weapon && cleanBtn === cmd.btn)

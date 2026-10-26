@@ -23,8 +23,16 @@ export async function resolve(specifier, context, nextResolve) {
     return nextResolve(new URL('node_modules/three/build/three.module.js', ${JSON.stringify(rootUrl)}).href, context);
   }
   if (context.parentURL && context.parentURL.includes('/public/js/')) {
+    if (specifier.startsWith('../../shared/')) {
+      const rel = specifier.slice('../../'.length);
+      return nextResolve(new URL(rel, ${JSON.stringify(rootUrl)}).href, context);
+    }
     if (specifier.startsWith('../shared/')) {
       const rel = specifier.slice('../'.length);
+      return nextResolve(new URL(rel, ${JSON.stringify(rootUrl)}).href, context);
+    }
+    if (specifier.startsWith('../../server/')) {
+      const rel = specifier.slice('../../'.length);
       return nextResolve(new URL(rel, ${JSON.stringify(rootUrl)}).href, context);
     }
     if (specifier.startsWith('../server/')) {

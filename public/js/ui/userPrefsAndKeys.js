@@ -189,6 +189,7 @@ export const appState = {
   activeRoomCode: '',
   latestPlayers: [],
   lanInfo: null, // { role: 'host'|'guest', code, ... } when this page plays in an in-browser LAN room
+  knownLanCodes: new Set(), // 6-char room codes known to be active LAN rooms from /api/rooms or lanCheck
   playerStateCache: new PlayerStateCache(), // rebuilds complete player objects from hot-only stateUpdate entries
   hitmarkerTimer: null,
   floatingDmgTimer: null,

@@ -810,6 +810,52 @@ describe('client prediction + reconciliation (headless Game3D <-> RoomManager, 5
     }
   });
 
+  it('Wi-Fi LAN burst packet loss (4 consecutive batches dropped) & PointerLock mouse spike filtering prevent rubberbanding and aim flicks', async () => {
+    const sim = await createNetSim({ dropBatch: (n) => (n % 6) >= 1 && (n % 6) <= 4 });
+    try {
+      const { game, player, processed } = sim;
+      game.requestPointerLock();
+      game.yaw = 0;
+      game.pitch = 0;
+
+      // 1. Initial PointerLock recenter jump (>120px) must be ignored completely
+      globalThis.window.dispatchEvent({ type: 'mousemove', movementX: 480, movementY: -320 });
+      assert.equal(game.yaw, 0, 'Initial PointerLock cursor-recenter jump must not flick yaw');
+      assert.equal(game.pitch, 0, 'Initial PointerLock cursor-recenter jump must not flick pitch');
+
+      // 2. Normal mouse movements establish moving average, then a sudden 600px OS spike is clamped smoothly
+      for (let i = 0; i < 5; i++) {
+        globalThis.window.dispatchEvent({ type: 'mousemove', movementX: 10, movementY: 0 });
+      }
+      const yawBeforeSpike = game.yaw;
+      globalThis.window.dispatchEvent({ type: 'mousemove', movementX: 600, movementY: 0 });
+      const spikeDeltaYaw = Math.abs(game.yaw - yawBeforeSpike);
+      assert.ok(spikeDeltaYaw < 0.25, `Extreme 600px mouse spike must be clamped (<0.25 rad, got ${spikeDeltaYaw})`);
+
+      // 3. Run, jump, and sprint across 4-batch burst packet drops: zero sequence gaps and zero backward teleports
+      game.keys.KeyW = true;
+      game.keys.ShiftLeft = true;
+      sim.run(50);
+      game.keys.Space = true;
+      sim.run(6);
+      game.keys.Space = false;
+      sim.run(70);
+      game.keys.KeyW = false;
+      game.keys.ShiftLeft = false;
+      sim.run(60);
+
+      assert.ok(processed.length > 150);
+      for (let i = 1; i < processed.length; i++) {
+        assert.equal(processed[i], processed[i - 1] + 1, `server skipped from ${processed[i - 1]} to ${processed[i]}`);
+      }
+      assert.equal(game.prediction.stats.replays, 0, 'burst packet loss recovered via INPUT_REDUNDANCY with 0 replays');
+      assert.equal(game.prediction.stats.hardSnaps, 0, 'zero backward hard-snaps');
+      assert.ok(Math.hypot(game.position.x - player.x, game.position.z - player.z) < RECONCILE_EPSILON);
+    } finally {
+      sim.dispose();
+    }
+  });
+
   it('packet loss: with every other batch dropped, redundancy still delivers every command in order', async () => {
     const sim = await createNetSim({ dropBatch: (n) => n % 2 === 0 });
     try {

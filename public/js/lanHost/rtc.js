@@ -1,8 +1,17 @@
 // Shared WebRTC settings for the in-browser LAN host and its guests.
 
-// No STUN/TURN on purpose: a LAN room is only meant for machines on the same local network, and with no ICE servers the game
-// traffic can never leave it. (Chrome hides local IPs behind mDNS names; machines on one LAN resolve them.)
-export const RTC_CONFIG = Object.freeze({ iceServers: [] });
+// Lightweight STUN fallback (no TURN relay, so media/game traffic stays P2P) lets peers discover their interface IP when
+// mDNS (.local) is blocked by Windows/AP firewall or when players are on different subnets / VLANs of the same LAN.
+export const STUN_URLS = Object.freeze([
+  'stun:stun.l.google.com:19302',
+  'stun:stun1.l.google.com:19302'
+]);
+
+export const RTC_CONFIG = Object.freeze({
+  iceServers: Object.freeze([
+    Object.freeze({ urls: STUN_URLS })
+  ])
+});
 
 export const REL_CHANNEL = { label: 'rel', options: { ordered: true } };
 export const UNREL_CHANNEL = { label: 'unrel', options: { ordered: false, maxRetransmits: 0 } };

@@ -12,7 +12,12 @@ import {
   parseCreateParams
 } from '../shared.js';
 import { SERVER_UNREACHABLE_MESSAGE } from '../networkAdapter.js';
-import { lanErrorText } from '../lanHost/lanMode.js';
+import {
+  activateLanGuestSession,
+  activateLanHostSession,
+  lanErrorText,
+  restoreOnlineSession
+} from '../lanHost/lanMode.js';
 import {
   canvasContainer,
   toastEl,
@@ -154,8 +159,10 @@ import {
   nextMatchCountdown,
   urlParams,
   invitedRoomParam,
+  getInvitedRoomCode,
   escapeHtml,
   formatTime,
+  lanState,
   getShareableRoomUrl
 } from './domElements.js';
 import { appState, saveUserPrefs, unlockGameplayKeys, userPrefs } from './userPrefsAndKeys.js';
@@ -167,6 +174,7 @@ import {
   syncHotbarSlotsHud,
   updateMapHud
 } from './hudController.js';
+import { bindGameSocketListeners } from './socketEvents.js';
 
 const WEAPON_SILHOUETTE_SVGS = {
   rifle: `<svg class="weapon-silhouette-svg" viewBox="0 0 240 84" xmlns="http://www.w3.org/2000/svg" focusable="false" aria-hidden="true">
@@ -445,10 +453,224 @@ export function requestJoinRoom({ mode = 'public', roomCode = '' }) {
   appState.socket.emit('joinRoom', appState.lastJoinPayload);
 }
 
+export function checkIsLanRoom(signalSocket, code, timeoutMs = 250) {
+  const cleanCode = typeof code === 'string' ? code.trim().toUpperCase() : '';
+  if (!/^[A-Z0-9]{6}$/.test(cleanCode)) return Promise.resolve(false);
+  if (appState.knownLanCodes?.has?.(cleanCode)) return Promise.resolve(true);
+  if (!signalSocket || typeof signalSocket.emit !== 'function' || signalSocket.connected === false) {
+    return Promise.resolve(false);
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(Boolean(appState.knownLanCodes?.has?.(cleanCode)));
+    }, timeoutMs);
+    try {
+      signalSocket.emit('lanCheck', { code: cleanCode }, (res) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const isLan = Boolean(res?.isLan);
+        if (isLan) appState.knownLanCodes?.add?.(cleanCode);
+        resolve(isLan);
+      });
+    } catch {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve(false);
+      }
+    }
+  });
+}
+
+function cancelPendingLanHostSignaling() {
+  const pendingCode = appState._lanPendingHostCode;
+  if (!pendingCode) return;
+  appState._lanPendingHostCode = '';
+  const sig = appState.netClient?.signalSocket || (!appState.lanInfo ? appState.socket : null);
+  sig?.emit?.('lanLeave', { role: 'host', code: pendingCode });
+}
+
+export async function startLanHostInPlace({
+  code = generateLanRoomCode(),
+  name = getLobbyPlayerName(),
+  mapId = appState.selectedMapId,
+  gameMode = appState.selectedGameMode,
+  startHostFn
+} = {}) {
+  const cleanCode = String(code || generateLanRoomCode()).trim().toUpperCase();
+  const mySeq = (appState._lanTransitionSeq = (appState._lanTransitionSeq || 0) + 1);
+  cancelPendingLanHostSignaling();
+  if (appState.activeRoomCode && !appState.lanInfo) {
+    appState.socket?.emit?.('leaveRoom');
+  }
+  if (appState.lanInfo) {
+    const oldLan = appState.lanInfo;
+    appState.lanInfo = null;
+    lanState.active = false;
+    restoreOnlineSession(appState.netClient, oldLan);
+  }
+  appState._lanPendingHostCode = cleanCode;
+  const isCancelled = () => appState._lanTransitionSeq !== mySeq;
+  try {
+    const lan = await activateLanHostSession(
+      appState.netClient,
+      { code: cleanCode, name, mapId, gameMode, startHostFn, isCancelled }
+    );
+    if (appState._lanPendingHostCode === cleanCode) {
+      appState._lanPendingHostCode = '';
+    }
+    if (isCancelled() || !lan) {
+      return null;
+    }
+    appState.lanInfo = lan;
+    lanState.active = Boolean(lan && !lan.error);
+    appState.socket = appState.netClient.socket;
+    bindGameSocketListeners(appState.socket);
+
+    if (lan?.error) {
+      lobbyError.textContent = lanErrorText(lan.error);
+      lobbyError.classList.remove('hidden');
+      return lan;
+    }
+    appState.knownLanCodes?.add?.(cleanCode);
+    requestJoinRoom({ mode: 'private', roomCode: cleanCode });
+    return lan;
+  } catch (err) {
+    if (appState._lanPendingHostCode === cleanCode) {
+      appState._lanPendingHostCode = '';
+    }
+    if (isCancelled()) return null;
+    const errCode = err?.message || 'failed';
+    lobbyError.textContent = lanErrorText(errCode);
+    lobbyError.classList.remove('hidden');
+    return { role: 'host', code: cleanCode, name, mapId, gameMode, error: errCode };
+  }
+}
+
+export async function startLanGuestInPlace(rawCode, { startGuestFn } = {}) {
+  const cleanCode = typeof rawCode === 'string' ? rawCode.trim().toUpperCase() : '';
+  if (!cleanCode) return null;
+  if (
+    appState.lanInfo?.role === 'guest' &&
+    appState.lanInfo?.code === cleanCode &&
+    !appState.lanInfo?.error &&
+    !startGuestFn
+  ) {
+    if (appState.socket.connected) {
+      requestJoinRoom({ mode: 'private', roomCode: cleanCode });
+    } else {
+      appState.serverErrorShown = true;
+      lobbyError.textContent = '🔌 Đang kết nối LAN tới chủ phòng...';
+      lobbyError.classList.remove('hidden');
+    }
+    return appState.lanInfo;
+  }
+  const mySeq = (appState._lanTransitionSeq = (appState._lanTransitionSeq || 0) + 1);
+  cancelPendingLanHostSignaling();
+  if (appState.activeRoomCode && !appState.lanInfo) {
+    appState.socket?.emit?.('leaveRoom');
+  }
+  if (appState.lanInfo) {
+    const oldLan = appState.lanInfo;
+    appState.lanInfo = null;
+    lanState.active = false;
+    restoreOnlineSession(appState.netClient, oldLan);
+  }
+  const isCancelled = () => appState._lanTransitionSeq !== mySeq;
+  try {
+    const lan = await activateLanGuestSession(
+      appState.netClient,
+      { code: cleanCode, startGuestFn, isCancelled }
+    );
+    if (isCancelled() || !lan) {
+      return null;
+    }
+    appState.lanInfo = lan;
+    lanState.active = Boolean(lan && !lan.error);
+    appState.socket = appState.netClient.socket;
+    bindGameSocketListeners(appState.socket);
+
+    if (lan?.error) {
+      lobbyError.textContent = lanErrorText(lan.error);
+      lobbyError.classList.remove('hidden');
+      return lan;
+    }
+
+    const joinWhenConnected = () => {
+      if (isCancelled() || appState.socket !== appState.netClient.socket) return;
+      requestJoinRoom({ mode: 'private', roomCode: cleanCode });
+    };
+
+    if (appState.socket.connected) {
+      joinWhenConnected();
+    } else {
+      appState.serverErrorShown = true;
+      lobbyError.textContent = '🔌 Đang kết nối LAN tới chủ phòng...';
+      lobbyError.classList.remove('hidden');
+      appState.socket.once?.('connect', joinWhenConnected);
+    }
+    return lan;
+  } catch (err) {
+    if (isCancelled()) return null;
+    const errCode = err?.message || 'failed';
+    lobbyError.textContent = lanErrorText(errCode);
+    lobbyError.classList.remove('hidden');
+    return { role: 'guest', code: cleanCode, error: errCode };
+  }
+}
+
+export async function joinRoomByCode(rawCode, { mode = 'private', forceLan = false, startGuestFn } = {}) {
+  const code = typeof rawCode === 'string' ? rawCode.trim().toUpperCase() : '';
+  if (!code) {
+    lobbyError.textContent = 'Nhập mã phòng 6 ký tự.';
+    lobbyError.classList.remove('hidden');
+    return null;
+  }
+  const urlForcesLan = new URLSearchParams(window.location?.search || '').get('lan') === '1';
+  const checkboxLan = Boolean(lanP2pCheckbox?.checked);
+  let useLan = Boolean(
+    forceLan ||
+    checkboxLan ||
+    appState.knownLanCodes?.has?.(code) ||
+    (urlForcesLan && code === getInvitedRoomCode())
+  );
+  if (!useLan && /^[A-Z0-9]{6}$/.test(code)) {
+    const sig = appState.netClient?.signalSocket || (!appState.lanInfo ? appState.socket : null);
+    useLan = await checkIsLanRoom(sig, code);
+  }
+  if (useLan) {
+    return await startLanGuestInPlace(code, { startGuestFn });
+  }
+  requestJoinRoom({ mode, roomCode: code });
+  return null;
+}
+
 export function leaveActiveRoom(opts = {}) {
+  appState._lanTransitionSeq = (appState._lanTransitionSeq || 0) + 1;
+  cancelPendingLanHostSignaling();
   const shouldEmit = opts?.emitLeave !== false;
   if (shouldEmit && appState.activeRoomCode) {
     appState.socket.emit('leaveRoom');
+  }
+  if (appState.lanInfo) {
+    const oldLan = appState.lanInfo;
+    appState.lanInfo = null;
+    lanState.active = false;
+    const restored = restoreOnlineSession(appState.netClient, oldLan);
+    if (restored) {
+      appState.socket = restored;
+      bindGameSocketListeners(restored);
+    }
+  } else if (appState.netClient?.signalSocket && appState.socket !== appState.netClient.signalSocket) {
+    const restored = restoreOnlineSession(appState.netClient, null);
+    if (restored) {
+      appState.socket = restored;
+      bindGameSocketListeners(restored);
+    }
   }
   appState.activeRoomCode = '';
   appState.currentRoomGameMode = 'ffa';
@@ -585,6 +807,17 @@ export function renderTeamWaitingLobby(lobbyData = {}) {
 export async function fetchActiveRooms() {
   try {
     const rooms = await appState.netClient.fetchRooms();
+    if (!appState.lanInfo && appState.knownLanCodes?.clear) {
+      appState.knownLanCodes.clear();
+    }
+    if (appState.lanInfo?.code && !appState.lanInfo?.error) {
+      appState.knownLanCodes?.add?.(String(appState.lanInfo.code).trim().toUpperCase());
+    }
+    for (const r of rooms) {
+      if ((r?.isLan || r?.lan) && r?.code) {
+        appState.knownLanCodes?.add?.(String(r.code).trim().toUpperCase());
+      }
+    }
 
     if (rooms.length === 0) {
       activeRoomsList.innerHTML = `<div class="rooms-empty">Chưa có phòng đang mở.</div>`;
@@ -596,16 +829,18 @@ export async function fetchActiveRooms() {
         (r) => {
           const safeCode = escapeHtml(r.code);
           const safeMap = escapeHtml(r.mapName || 'CYBER CITADEL');
-          const safeTotal = Number(r.total) || 0;
+          const safeTotal = Number(r.total ?? r.humans) || 0;
           const safeMax = Number(r.maxPlayers) || 16;
           const modeLabel = r.gameMode === 'tdm' ? '2 PHE' : 'FFA';
+          const isLanRoom = Boolean(r.isLan || r.lan);
+          const lanTag = isLanRoom ? ' <span class="room-item-lan-tag">[LAN]</span>' : '';
           return `
-        <div class="room-item">
+        <div class="room-item${ isLanRoom ? ' room-item-lan' : '' }">
           <div>
-            <span class="room-item-code">#${ safeCode }</span>
-            <span> • [${ modeLabel }] ${ safeMap } (${ safeTotal }/${ safeMax })</span>
+            <span class="room-item-code">#${ safeCode }</span>${ lanTag }
+            <span> • ${ isLanRoom ? '[LAN] ' : '' }[${ modeLabel }] ${ safeMap } (${ safeTotal }/${ safeMax })</span>
           </div>
-          <button class="room-item-join" data-code="${ safeCode }" data-mode="${ r.gameMode === 'tdm' ? 'tdm' : 'ffa' }">VÀO</button>
+          <button class="room-item-join" data-code="${ safeCode }" data-mode="${ r.gameMode === 'tdm' ? 'tdm' : 'ffa' }"${ isLanRoom ? ' data-lan="1"' : '' }>VÀO</button>
         </div>
       `;
         }
@@ -787,8 +1022,9 @@ if (mapGrid) {
 }
 
 btnJoinInvited.addEventListener('click', () => {
-  if (invitedRoomParam) {
-    requestJoinRoom({ mode: 'private', roomCode: invitedRoomParam });
+  const code = getInvitedRoomCode();
+  if (code) {
+    joinRoomByCode(code, { mode: 'private' });
   }
 });
 
@@ -797,9 +1033,9 @@ btnQuickPlay.addEventListener('click', () => {
 });
 
 btnCreatePrivate.addEventListener('click', () => {
-  // "Chơi qua LAN": this browser becomes the game server of the room (page reload in host mode, see lanHost/lanMode.js)
+  // "Chơi qua LAN": this browser becomes the game server of the room in-place (no full page reload)
   if (lanP2pCheckbox?.checked) {
-    window.location.href = buildLanHostUrl(window.location.origin, {
+    startLanHostInPlace({
       code: generateLanRoomCode(),
       name: getLobbyPlayerName(),
       mapId: appState.selectedMapId,
@@ -826,7 +1062,10 @@ btnJoinCode.addEventListener('click', () => {
     lobbyError.classList.remove('hidden');
     return;
   }
-  requestJoinRoom({ mode: 'private', roomCode: code });
+  joinRoomByCode(code, {
+    mode: 'private',
+    forceLan: Boolean(lanP2pCheckbox?.checked)
+  });
 });
 
 roomCodeInput.addEventListener('keydown', (e) => {
@@ -951,6 +1190,11 @@ activeRoomsList.addEventListener('click', (e) => {
   if (btn.dataset.mode) {
     appState.selectedGameMode = btn.dataset.mode === 'tdm' ? 'tdm' : 'ffa';
   }
+  const isLan = btn.dataset.lan === '1' || Boolean(appState.knownLanCodes?.has?.(String(btn.dataset.code || '').toUpperCase()));
+  if (isLan) {
+    joinRoomByCode(btn.dataset.code, { mode: 'private', forceLan: true });
+    return;
+  }
   requestJoinRoom({ mode: 'public', roomCode: btn.dataset.code });
 });
 
@@ -1044,6 +1288,7 @@ export function initLanServerRoom() {
     });
   }
   const lan = appState.lanInfo;
+  const invitedCode = getInvitedRoomCode();
   if (lan?.error) {
     applyLobbySelections(lan);
     lobbyError.textContent = lanErrorText(lan.error);
@@ -1051,9 +1296,37 @@ export function initLanServerRoom() {
   } else if (lan?.role === 'host') {
     applyLobbySelections(lan);
     requestJoinRoom({ mode: 'private', roomCode: lan.code });
-  } else if (lan?.role === 'guest' && !appState.socket.connected) {
-    appState.serverErrorShown = true; // cleared (and the message hidden) by the socket's `connect`
-    lobbyError.textContent = '🔌 Đang kết nối LAN tới chủ phòng...';
-    lobbyError.classList.remove('hidden');
+  } else if (lan?.role === 'guest') {
+    const guestCode = lan.code || invitedCode;
+    const autoJoinGuest = () => {
+      if (appState.activeRoomCode || appState.game.inMatch) return;
+      requestJoinRoom({ mode: 'private', roomCode: guestCode });
+    };
+    if (appState.socket.connected) {
+      autoJoinGuest();
+    } else {
+      appState.serverErrorShown = true; // cleared (and the message hidden) by the socket's `connect`
+      lobbyError.textContent = '🔌 Đang kết nối LAN tới chủ phòng...';
+      lobbyError.classList.remove('hidden');
+      appState.socket.once?.('connect', autoJoinGuest);
+    }
+  } else if (invitedCode && !lanCreate) {
+    if (inviteRoomCodeEl) inviteRoomCodeEl.textContent = `#${ invitedCode }`;
+    inviteBanner?.classList.remove('hidden');
+    const isLanInviteUrl = new URLSearchParams(window.location?.search || '').get('lan') === '1';
+    const autoJoinInvited = () => {
+      if (appState.activeRoomCode || appState.game.inMatch) return;
+      if (isLanInviteUrl || appState.knownLanCodes?.has?.(invitedCode)) {
+        startLanGuestInPlace(invitedCode);
+        return;
+      }
+      requestJoinRoom({ mode: 'private', roomCode: invitedCode });
+    };
+    if (appState.socket.connected) {
+      autoJoinInvited();
+    } else {
+      appState.socket.once?.('connect', autoJoinInvited);
+    }
   }
 }
+

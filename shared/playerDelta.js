@@ -11,7 +11,7 @@
 /** Cold fields every cold block carries. */
 export const COLD_KEYS = ['name', 'color', 'team', 'ready', 'ammo', 'reserveAmmo', 'grenades', 'invulnerable', 'invulnerableUntil', 'kills', 'deaths', 'streak'];
 /** Cold fields that are only present while they apply; a cold block without them means "none" (the cached value is dropped). */
-export const COLD_OPTIONAL_KEYS = ['armor', 'speedBoostMs', 'damageBoostMs'];
+export const COLD_OPTIONAL_KEYS = ['armor', 'speedBoostMs', 'damageBoostMs', 'ping'];
 
 export const COLD_REPEAT_MS = 400;
 export const COLD_REFRESH_MS = 1000;

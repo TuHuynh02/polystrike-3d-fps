@@ -3,6 +3,8 @@
 // to the public server stays open as `signalSocket` (WebRTC handshake only).
 
 import { parseLanGuestParams, parseLanHostParams } from '../shared.js';
+import { startLanHost } from './hostSession.js';
+import { startLanGuest } from './guestSession.js';
 
 /** User-facing text for the error code carried by a LAN socket's `connect_error`. */
 export function lanErrorText(code) {
@@ -18,6 +20,115 @@ export function lanErrorText(code) {
 
 export const LAN_LOST_MESSAGE = 'Mất kết nối LAN: chủ phòng đã thoát hoặc rớt mạng. Tải lại trang để vào lại.';
 
+function preserveOnlineClient(netClient, signalSocket) {
+  if (!netClient.signalSocket) {
+    netClient.signalSocket = signalSocket;
+  }
+  if (!netClient.onlineFetchRooms && typeof netClient.fetchRooms === 'function') {
+    netClient.onlineFetchRooms = netClient.fetchRooms;
+  }
+}
+
+/**
+ * Starts a LAN host session in-place (hot-swapping `netClient.socket` without reloading the page).
+ */
+export async function activateLanHostSession(
+  netClient,
+  { code, name = '', mapId = '', gameMode = 'ffa', startHostFn = null, isCancelled = null } = {},
+  opts = {}
+) {
+  const signalSocket = netClient?.signalSocket || netClient?.socket;
+  if (!signalSocket || (netClient?.mode && netClient.mode !== 'online-server' && !netClient.signalSocket)) {
+    throw new Error('signaling_timeout');
+  }
+  const hostStarter = startHostFn || opts?.startHost || opts?.startHostFn || startLanHost;
+  const session = await hostStarter({ signalSocket, code, mapId, gameMode });
+  if (typeof isCancelled === 'function' && isCancelled()) {
+    try { session?.stop?.(); } catch { /* ignore */ }
+    return null;
+  }
+  preserveOnlineClient(netClient, signalSocket);
+  netClient.socket = session.socket;
+  netClient.mode = 'lan-host';
+  netClient.fetchRooms = typeof session.fetchRooms === 'function' ? session.fetchRooms : async () => [];
+  return {
+    role: 'host',
+    code,
+    name,
+    mapId,
+    gameMode,
+    session,
+    peerCount: session.peerCount,
+    hasGuests: session.hasGuests,
+    stop: session.stop
+  };
+}
+
+/**
+ * Starts a LAN guest session in-place (hot-swapping `netClient.socket` without reloading the page).
+ */
+export async function activateLanGuestSession(
+  netClient,
+  { code, startGuestFn = null, isCancelled = null } = {},
+  opts = {}
+) {
+  const signalSocket = netClient?.signalSocket || netClient?.socket;
+  if (!signalSocket || (netClient?.mode && netClient.mode !== 'online-server' && !netClient.signalSocket)) {
+    throw new Error('signaling_timeout');
+  }
+  const guestStarter = startGuestFn || opts?.startGuest || opts?.startGuestFn || startLanGuest;
+  const session = await guestStarter({ signalSocket, code });
+  if (typeof isCancelled === 'function' && isCancelled()) {
+    try { session?.stop?.(); } catch { /* ignore */ }
+    return null;
+  }
+  preserveOnlineClient(netClient, signalSocket);
+  netClient.socket = session.socket;
+  netClient.mode = 'lan-guest';
+  netClient.fetchRooms = async () => [];
+  return {
+    role: 'guest',
+    code,
+    session,
+    stop: session.stop
+  };
+}
+
+/**
+ * Stops an active LAN session and restores the online Socket.IO socket + fetchRooms on `netClient`.
+ */
+export function restoreOnlineSession(netClient, lanInfo = null) {
+  try {
+    if (typeof lanInfo?.session?.stop === 'function') {
+      lanInfo.session.stop();
+    } else if (typeof lanInfo?.stop === 'function') {
+      lanInfo.stop();
+    }
+  } catch {
+    // ignore cleanup errors
+  }
+  if (netClient?.signalSocket) {
+    netClient.socket = netClient.signalSocket;
+    netClient.mode = 'online-server';
+    if (typeof netClient.onlineFetchRooms === 'function') {
+      netClient.fetchRooms = netClient.onlineFetchRooms;
+    }
+  }
+  return netClient?.socket || null;
+}
+
+/**
+ * Returns true when this client is hosting a LAN room that currently has other players connected,
+ * so `beforeunload` should warn before accidental F5 / tab close.
+ */
+export function shouldWarnLanHostBeforeUnload(state) {
+  if (!state || state.lanInfo?.role !== 'host') return false;
+  const peerCount = Number(state.lanInfo?.session?.peerCount?.() ?? state.lanInfo?.peerCount?.()) || 0;
+  const hasGuests = Boolean(state.lanInfo?.session?.hasGuests?.() || state.lanInfo?.hasGuests?.());
+  const playerCount = Array.isArray(state.latestPlayers) ? state.latestPlayers.length : 0;
+  return peerCount > 0 || hasGuests || playerCount > 1;
+}
+
 /**
  * @returns {Promise<null | { role: 'host'|'guest', code: string, name?: string, mapId?: string, gameMode?: string, session?: object, error?: string }>}
  * null = an ordinary page. On failure to start hosting, `error` is set and the network client is left untouched (plain online play).
@@ -27,32 +138,26 @@ export async function setupLanMode(netClient, search = window.location.search) {
   const guest = host ? null : parseLanGuestParams(search);
   if (!host && !guest) return null;
 
-  const signalSocket = netClient.socket;
   const role = host ? 'host' : 'guest';
   const code = (host || guest).code;
 
-  if (netClient.mode !== 'online-server') {
+  if (netClient.mode !== 'online-server' && !netClient.signalSocket) {
     return { role, code, error: 'signaling_timeout' };
   }
 
-  let session;
   try {
     if (host) {
       // One-shot parameters: a reload must not start hosting again.
       window.history.replaceState(null, '', window.location.pathname || '/');
-      const { startLanHost } = await import('./hostSession.js');
-      session = await startLanHost({ signalSocket, code });
-    } else {
-      const { startLanGuest } = await import('./guestSession.js');
-      session = startLanGuest({ signalSocket, code });
+      return await activateLanHostSession(netClient, {
+        code,
+        name: host.name,
+        mapId: host.mapId,
+        gameMode: host.gameMode
+      });
     }
+    return await activateLanGuestSession(netClient, { code });
   } catch (err) {
     return { role, code, name: host?.name, mapId: host?.mapId, gameMode: host?.gameMode, error: err?.message || 'failed' };
   }
-
-  netClient.signalSocket = signalSocket;
-  netClient.socket = session.socket;
-  netClient.mode = `lan-${ role }`;
-  netClient.fetchRooms = async () => []; // no public room list inside a LAN room
-  return { role, code, name: host?.name, mapId: host?.mapId, gameMode: host?.gameMode, session };
 }

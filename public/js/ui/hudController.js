@@ -590,7 +590,7 @@ export function renderScoreboard(players) {
   });
 
   const sig = sorted
-    .map((p) => `${p.id}:${p.name}:${p.team || ''}:${p.kills}:${p.deaths}:${p.streak}`)
+    .map((p) => `${p.id}:${p.name}:${p.team || ''}:${p.kills}:${p.deaths}:${p.streak}:${p.ping || (p.id === appState.game.localId ? appState.currentPingMs : 0) || 0}`)
     .join('|');
   if (sig === appState.lastScoreboardSig) return;
   appState.lastScoreboardSig = sig;
@@ -602,6 +602,9 @@ export function renderScoreboard(players) {
       const streak = Number(p.streak) || 0;
       const kd = deaths === 0 ? kills.toFixed(1) : (kills / deaths).toFixed(2);
       const isMe = p.id === appState.game.localId;
+      const rawPing = isMe ? (Number(p.ping) || Number(appState.currentPingMs) || 0) : (Number(p.ping) || 0);
+      const pingText = rawPing > 0 ? `${Math.round(rawPing)} ms` : 'LAN';
+      const pingColor = rawPing > 100 ? '#f87171' : rawPing > 45 ? '#facc15' : '#4ade80';
       const teamTag = appState.currentRoomGameMode === 'tdm' && p.team
         ? `<span class="sb-team-tag ${ p.team === 'alpha' ? 'alpha' : 'bravo' }">${ p.team === 'alpha' ? 'ALPHA' : 'BRAVO' }</span>`
         : '';
@@ -613,6 +616,7 @@ export function renderScoreboard(players) {
           <td>${ deaths }</td>
           <td>${ kd }</td>
           <td>${ streak }🔥</td>
+          <td style="color:${ pingColor };font-weight:600;">${ pingText }</td>
         </tr>
       `;
     })

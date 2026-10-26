@@ -97,10 +97,16 @@ app.get('/api/config', (_req, res) => {
   res.json({ lanUrl: LAN_SERVER_URL || null });
 });
 
-// REST endpoint for active rooms summary
+// Rendezvous for in-browser LAN rooms (a player's browser hosts the game; only the WebRTC handshake passes through here)
+const lanSignaling = new LanSignaling();
+
+// REST endpoint for active rooms summary (public online rooms + active LAN rooms)
 app.get('/api/rooms', (_req, res) => {
   res.json({
-    rooms: roomManager.getPublicRoomsSummary()
+    rooms: [
+      ...roomManager.getPublicRoomsSummary(),
+      ...lanSignaling.getLanRoomsSummary()
+    ]
   });
 });
 
@@ -109,11 +115,8 @@ app.get('*', (_req, res) => {
   res.sendFile(path.join(ROOT_DIR, 'public/index.html'));
 });
 
-// Rendezvous for in-browser LAN rooms (a player's browser hosts the game; only the WebRTC handshake passes through here)
-const lanSignaling = new LanSignaling();
-
 io.on('connection', (socket) => {
-  attachGameSocketHandlers({ socket, roomManager });
+  attachGameSocketHandlers({ socket, roomManager, lanSignaling });
   lanSignaling.attach(socket);
 });
 

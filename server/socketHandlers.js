@@ -2,7 +2,7 @@
 // in-browser LAN host (public/js/lanHost, where the "sockets" are WebRTC peers), so both run exactly the same game protocol.
 // `socket` needs: id, on, emit, join, leave, to(room).emit, disconnect, disconnected.
 import { MATCH_CONFIG, getMapConfig } from '../shared/constants.js';
-import { NET_CONFIG } from './room/sanitizers.js';
+import { NET_CONFIG, sanitizeRoomCode } from './room/sanitizers.js';
 import {
   safeHandler,
   guardedOn,
@@ -12,7 +12,7 @@ import {
 
 const HOST_ONLY_MESSAGE = 'Chỉ chủ phòng mới có thể đổi map.';
 
-export function attachGameSocketHandlers({ socket, roomManager }) {
+export function attachGameSocketHandlers({ socket, roomManager, lanSignaling }) {
   installSmartVolatile(socket);
   let currentRoomCode = null;
 
@@ -23,6 +23,19 @@ export function attachGameSocketHandlers({ socket, roomManager }) {
 
   on('joinRoom', (payload) => {
     try {
+      // If the requested 6-char room code is an active LAN room on LanSignaling, redirect the client to connect via WebRTC
+      // instead of accidentally creating a duplicate Online room with the same code on the server.
+      const requestedLanCode = sanitizeRoomCode(payload?.roomCode);
+      if (requestedLanCode && lanSignaling?.hasHost?.(requestedLanCode)) {
+        if (currentRoomCode) {
+          socket.leave(currentRoomCode);
+          roomManager.removePlayer(socket.id);
+          currentRoomCode = null;
+        }
+        socket.emit('lanRoomRedirect', { roomCode: requestedLanCode });
+        return;
+      }
+
       // Leave previous room if any
       if (currentRoomCode) {
         socket.leave(currentRoomCode);

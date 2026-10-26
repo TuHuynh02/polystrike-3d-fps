@@ -19,37 +19,49 @@ export function startLanGuest({ signalSocket, code }) {
   let finished = false;
   let timer = null;
 
-  function cleanup() {
-    clearTimeout(timer);
-    signalSocket.off('lanSignal', onSignal);
-    signalSocket.off('lanHostGone', onHostGone);
-    try { pc?.close(); } catch { /* already closed */ }
+  let registeredOnSignaling = false;
+  let leaveSent = false;
+
+  function emitLeaveIfRegistered() {
+    if (leaveSent || !registeredOnSignaling) return;
+    leaveSent = true;
+    signalSocket.emit?.('lanLeave', { role: 'guest', code, peerId: client.id || undefined });
   }
 
-  function fail(reason) {
+  function cleanup(notifyServer = true) {
+    clearTimeout(timer);
+    signalSocket.off?.('lanSignal', onSignal);
+    signalSocket.off?.('lanHostGone', onHostGone);
+    signalSocket.off?.('connect', join);
+    try { pc?.close(); } catch { /* already closed */ }
+    if (notifyServer) emitLeaveIfRegistered();
+  }
+
+  function fail(reason, notifyServer = true) {
     if (finished) return;
     finished = true;
-    cleanup();
+    cleanup(notifyServer);
     client.fail(new Error(reason));
   }
 
   function lose() {
     if (client.connected) {
       finished = true;
-      cleanup();
+      cleanup(true);
       client.close('transport close');
     } else {
-      fail('failed');
+      fail('failed', true);
     }
   }
 
   function onHostGone() {
+    registeredOnSignaling = false;
     if (client.connected) {
       finished = true;
-      cleanup();
+      cleanup(false);
       client.close('host gone');
     } else {
-      fail('no_host');
+      fail('no_host', false);
     }
   }
 
@@ -102,15 +114,35 @@ export function startLanGuest({ signalSocket, code }) {
   // Listen before asking to join, so the host's offer cannot be missed.
   signalSocket.on('lanSignal', onSignal);
   signalSocket.on('lanHostGone', onHostGone);
-  const join = () => signalSocket.emit('lanGuestJoin', { code }, (reply) => {
-    if (!reply?.ok) fail(reply?.error === 'room_full' ? 'room_full' : 'no_host');
-    else client.id = reply.peerId;
-  });
+  const join = () => {
+    if (finished) return;
+    signalSocket.emit('lanGuestJoin', { code }, (reply) => {
+      if (finished) {
+        if (reply?.ok) {
+          signalSocket.emit?.('lanLeave', { role: 'guest', code, peerId: reply.peerId });
+        }
+        return;
+      }
+      if (!reply?.ok) {
+        fail(reply?.error === 'room_full' ? 'room_full' : 'no_host', false);
+      } else {
+        registeredOnSignaling = true;
+        client.id = reply.peerId;
+      }
+    });
+  };
   if (signalSocket.connected) join();
   else signalSocket.once('connect', join);
-  timer = setTimeout(() => fail('timeout'), CONNECT_TIMEOUT_MS);
+  timer = setTimeout(() => fail('timeout', true), CONNECT_TIMEOUT_MS);
 
-  const stop = () => { finished = true; cleanup(); };
+  let stopped = false;
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    finished = true;
+    registeredOnSignaling = true;
+    cleanup(true);
+  };
   client.onDisconnectRequest = stop;
   return { socket: client, stop };
 }

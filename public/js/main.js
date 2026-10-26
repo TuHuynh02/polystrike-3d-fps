@@ -2,7 +2,7 @@ import { WEAPONS } from '../shared/constants.js';
 import { SoundEffects } from './audio.js';
 import { Game3D } from './game3d.js';
 import { createNetworkClient, SERVER_UNREACHABLE_MESSAGE } from './networkAdapter.js';
-import { setupLanMode } from './lanHost/lanMode.js';
+import { setupLanMode, shouldWarnLanHostBeforeUnload } from './lanHost/lanMode.js';
 import {
   canvasContainer,
   toastEl,
@@ -502,9 +502,9 @@ appState.game.requestPointerLock = () => {
   lockGameplayKeys();
 };
 
-// Prevent accidental tab closure (Ctrl+W, Ctrl+R, F5, etc.) during an active match or room session
+// Prevent accidental tab closure (Ctrl+W, Ctrl+R, F5, etc.) during an active match, room session, or LAN host session with players
 window.addEventListener('beforeunload', (e) => {
-  if (appState.game.inMatch || appState.activeRoomCode) {
+  if (shouldWarnLanHostBeforeUnload(appState) || appState.game.inMatch || appState.activeRoomCode) {
     e.preventDefault();
     e.returnValue = '';
     return '';
@@ -602,4 +602,7 @@ applyRestoredUserPrefs();
 initLobbyAndModalListeners();
 initSocketEvents();
 initLanServerRoom(); // private rooms on the office LAN server (settings + ?create=private landing)
-socket.on('teamLobbyState', (data) => handleTeamLobbyState(data));
+if (!socket._gameListenersBound) {
+  socket.on('teamLobbyState', (data) => handleTeamLobbyState(data));
+}
+

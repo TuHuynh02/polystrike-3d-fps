@@ -156,9 +156,25 @@ export const nextMatchCountdown = document.getElementById('next-match-countdown'
 export const urlParams = new URLSearchParams(window.location.search);
 export const invitedRoomParam = (urlParams.get('room') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
 if (invitedRoomParam) {
-  inviteBanner.classList.remove('hidden');
+  inviteBanner.classList?.remove('hidden');
   inviteRoomCodeEl.textContent = `#${ invitedRoomParam }`;
   roomCodeInput.value = invitedRoomParam;
+}
+
+export function getInvitedRoomCode(search = window.location?.search) {
+  try {
+    const params = new URLSearchParams(search || '');
+    const code = (params.get('room') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+    if (code) {
+      inviteBanner?.classList?.remove('hidden');
+      if (inviteRoomCodeEl) inviteRoomCodeEl.textContent = `#${ code }`;
+      if (roomCodeInput) roomCodeInput.value = code;
+      return code;
+    }
+  } catch {
+    // ignore URLSearchParams error
+  }
+  return invitedRoomParam || '';
 }
 
 // True on pages that play in an in-browser LAN room (set by main.js): their share links carry `lan=1` so guests join over WebRTC.

@@ -59,10 +59,10 @@ async function startCore(onSend) {
 }
 
 /**
- * @param {{ signalSocket: any, code: string, onStatus?: (e: object) => void }} options
+ * @param {{ signalSocket: any, code: string, mapId?: string, gameMode?: string, onStatus?: (e: object) => void }} options
  * @returns {Promise<{ socket: LanClientSocket, code: string, peerCount: () => number, stop: () => void, kind: string }>}
  */
-export async function startLanHost({ signalSocket, code, onStatus }) {
+export async function startLanHost({ signalSocket, code, mapId, gameMode, onStatus }) {
   const routes = new Map(); // peerId -> (channel, text) => void
   const peers = new Map(); // peerId -> peer record
   const client = new LanClientSocket({ id: HOST_PEER_ID });
@@ -74,9 +74,13 @@ export async function startLanHost({ signalSocket, code, onStatus }) {
   client.attach((_channel, text) => core.peerMessage(HOST_PEER_ID, text));
   core.peerOpen(HOST_PEER_ID);
 
+  const openPayload = { code };
+  if (mapId) openPayload.mapId = mapId;
+  if (gameMode) openPayload.gameMode = gameMode;
+
   const ack = await new Promise((resolve) => {
     const timer = setTimeout(() => resolve({ ok: false, error: 'signaling_timeout' }), SIGNALING_TIMEOUT_MS);
-    signalSocket.emit('lanHostOpen', { code }, (reply) => { clearTimeout(timer); resolve(reply); });
+    signalSocket.emit('lanHostOpen', openPayload, (reply) => { clearTimeout(timer); resolve(reply); });
   });
   if (!ack?.ok) {
     core.stop();
@@ -143,21 +147,47 @@ export async function startLanHost({ signalSocket, code, onStatus }) {
     }
   }
 
-  signalSocket.on('lanPeer', ({ peerId } = {}) => { if (typeof peerId === 'string') connectGuest(peerId); });
-  signalSocket.on('lanPeerGone', ({ peerId } = {}) => drop(peerId));
-  signalSocket.on('lanSignal', ({ from, data } = {}) => {
+  const onLanPeer = ({ peerId } = {}) => { if (typeof peerId === 'string') connectGuest(peerId); };
+  const onLanPeerGone = ({ peerId } = {}) => drop(peerId);
+  const onLanSignal = ({ from, data } = {}) => {
     const peer = peers.get(from);
     if (peer && data) peer.onSignal(data).catch((err) => console.warn('[lan] signal failed:', err));
-  });
+  };
   // The signaling socket dropping does not end the room (data channels are direct), but new guests cannot join any more.
-  signalSocket.on('disconnect', () => onStatus?.({ type: 'signaling-lost' }));
+  const onSignalDisconnect = () => onStatus?.({ type: 'signaling-lost' });
+  const onBeforeUnload = (e) => {
+    if (peers.size > 0) {
+      e.preventDefault?.();
+      e.returnValue = '';
+      return '';
+    }
+  };
 
+  signalSocket.on('lanPeer', onLanPeer);
+  signalSocket.on('lanPeerGone', onLanPeerGone);
+  signalSocket.on('lanSignal', onLanSignal);
+  signalSocket.on('disconnect', onSignalDisconnect);
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('beforeunload', onBeforeUnload);
+  }
+
+  let stopped = false;
   function stop() {
+    if (stopped) return;
+    stopped = true;
+    signalSocket.off?.('lanPeer', onLanPeer);
+    signalSocket.off?.('lanPeerGone', onLanPeerGone);
+    signalSocket.off?.('lanSignal', onLanSignal);
+    signalSocket.off?.('disconnect', onSignalDisconnect);
+    if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+      window.removeEventListener('beforeunload', onBeforeUnload);
+    }
     for (const peerId of Array.from(peers.keys())) drop(peerId);
+    signalSocket.emit?.('lanLeave', { role: 'host', code });
     core.stop();
   }
   client.onDisconnectRequest = stop;
   client.open();
 
-  return { socket: client, code, kind: core.kind, peerCount: () => peers.size, stop };
+  return { socket: client, code, kind: core.kind, peerCount: () => peers.size, hasGuests: () => peers.size > 0, stop };
 }

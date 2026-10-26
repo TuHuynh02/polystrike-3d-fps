@@ -401,7 +401,16 @@ export class LoopAndInputMethods {
   }
 
   requestPointerLock() {
-    this.renderer.domElement.requestPointerLock?.();
+    try {
+      const lockPromise = this.renderer.domElement.requestPointerLock?.({ unadjustedMovement: true });
+      if (lockPromise && typeof lockPromise.catch === 'function') {
+        lockPromise.catch(() => {
+          this.renderer.domElement.requestPointerLock?.();
+        });
+      }
+    } catch {
+      this.renderer.domElement.requestPointerLock?.();
+    }
     if (typeof navigator !== 'undefined' && navigator.keyboard && typeof navigator.keyboard.lock === 'function') {
       try {
         navigator.keyboard.lock([
@@ -443,6 +452,11 @@ export class LoopAndInputMethods {
     document.addEventListener('pointerlockchange', () => {
       this.isPointerLocked = document.pointerLockElement === this.renderer.domElement;
       if (this.isPointerLocked) {
+        this._pointerLockedAt = performance.now();
+        this._skipFirstMouseJump = true;
+        this._avgMouseDelta = 0;
+      }
+      if (this.isPointerLocked) {
         if (typeof navigator !== 'undefined' && navigator.keyboard && typeof navigator.keyboard.lock === 'function') {
           try {
             navigator.keyboard.lock([
@@ -482,27 +496,63 @@ export class LoopAndInputMethods {
 
     window.addEventListener('mousemove', (e) => {
       if (!this.isPointerLocked || !this.inMatch || !this.alive) return;
+      const rawMx = Number(e.movementX);
+      const rawMy = Number(e.movementY);
+      if (!Number.isFinite(rawMx) || !Number.isFinite(rawMy)) return;
+      if (rawMx === 0 && rawMy === 0) return;
+
+      const absMx = Math.abs(rawMx);
+      const absMy = Math.abs(rawMy);
+      const mag = Math.hypot(rawMx, rawMy);
+
+      // Guard against Chromium Pointer Lock initial cursor-recenter jump (> 120px on the first event after lock)
+      if (this._skipFirstMouseJump) {
+        this._skipFirstMouseJump = false;
+        if (absMx > 120 || absMy > 120) {
+          return;
+        }
+      }
+
+      // Guard against OS/browser cursor-recenter spikes during high-polling-rate bursts or frame hitches:
+      // if a single event jumps > 240px AND exceeds 6x the recent moving average delta, clamp it smoothly.
+      let mx = rawMx;
+      let my = rawMy;
+      const avg = this._avgMouseDelta || 12;
+      if ((absMx > 240 || absMy > 240) && mag > Math.max(240, avg * 6)) {
+        const cap = Math.max(80, avg * 2.5);
+        const scale = cap / mag;
+        mx *= scale;
+        my *= scale;
+      }
+      this._avgMouseDelta = avg * 0.8 + Math.min(180, Math.hypot(mx, my)) * 0.2;
       const aimScale = this.isAiming && this.currentWeapon === 'sniper' ? 0.36 : this.isAiming ? 0.78 : 1.0;
       const sens = 0.0021 * this.sensitivity * aimScale;
-      const dx = -e.movementX * sens;
-      const dy = -e.movementY * sens;
+      const dx = -mx * sens;
+      const dy = -my * sens;
       this.yaw += dx;
       this.pitch = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, this.pitch + dy));
       if (dy < 0 && this.accumulatedRecoilPitch > 0) {
         this.accumulatedRecoilPitch = Math.max(0, this.accumulatedRecoilPitch + dy);
+      } else if (dy > 0 && this.accumulatedRecoilPitch > 0) {
+        this.accumulatedRecoilPitch = Math.max(0, this.accumulatedRecoilPitch - dy * 0.65);
       }
 
-      this.swayX = Math.max(-0.045, Math.min(0.045, -e.movementX * 0.00055));
-      this.swayY = Math.max(-0.045, Math.min(0.045, e.movementY * 0.00055));
-      if (dx * this.accumulatedRecoilYaw < 0) {
+      this.swayX = Math.max(-0.045, Math.min(0.045, -mx * 0.00055));
+      this.swayY = Math.max(-0.045, Math.min(0.045, my * 0.00055));
+      if (dx * this.accumulatedRecoilYaw > 0 && Math.abs(dx) > 1e-5) {
+        this.accumulatedRecoilYaw *= Math.max(0, 1 - Math.abs(dx) * 16);
+        if (Math.abs(this.accumulatedRecoilYaw) < 1e-4) {
+          this.accumulatedRecoilYaw = 0;
+        }
+      } else if (dx * this.accumulatedRecoilYaw < 0) {
         const prevSign = Math.sign(this.accumulatedRecoilYaw);
         this.accumulatedRecoilYaw += dx;
         if (Math.sign(this.accumulatedRecoilYaw) !== prevSign) {
           this.accumulatedRecoilYaw = 0;
         }
       }
-      this.swayRotY = Math.max(-0.085, Math.min(0.085, (this.swayRotY || 0) - e.movementX * 0.00075));
-      this.swayRotX = Math.max(-0.065, Math.min(0.065, (this.swayRotX || 0) - e.movementY * 0.00065));
+      this.swayRotY = Math.max(-0.085, Math.min(0.085, (this.swayRotY || 0) - mx * 0.00075));
+      this.swayRotX = Math.max(-0.065, Math.min(0.065, (this.swayRotX || 0) - my * 0.00065));
     }, { passive: true });
 
     window.addEventListener('mousedown', (e) => {
