@@ -82,6 +82,7 @@ export class RemotePlayersMethods {
       ...options
     });
     if (rp?.group) {
+      applyMetalnessCap(rp.group, this.quality?.envMapSize === 0 ? 0.35 : null);
       rp.group.traverse((obj) => {
         if (obj.isMesh) {
           if (obj.geometry && !obj.geometry.boundingSphere) {
@@ -300,11 +301,13 @@ export class RemotePlayersMethods {
         let gunPartIdx = 0;
         rp.gunMesh.traverse((o) => {
           if (o.isMesh && o.geometry) {
-            const cacheKey = `wep_${p.weapon}_${gunPartIdx++}`;
-            const cachedGeo = getCachedGeo(cacheKey, () => o.geometry);
-            if (cachedGeo !== o.geometry) {
-              o.geometry.dispose();
-              o.geometry = cachedGeo;
+            if (!o.geometry.userData?.shared) {
+              const cacheKey = `wep_${p.weapon}_${gunPartIdx++}`;
+              const cachedGeo = getCachedGeo(cacheKey, () => o.geometry);
+              if (cachedGeo !== o.geometry) {
+                o.geometry.dispose();
+                o.geometry = cachedGeo;
+              }
             }
             if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
             o.frustumCulled = true;

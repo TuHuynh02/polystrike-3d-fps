@@ -510,9 +510,10 @@ export class SpatialAndCombatSfxMethods {
     whizzGain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
     whizzOsc.connect(whizzGain);
     whizzGain.connect(chain.input);
+    const dur = 0.095;
     this._bindSourceCleanup(whizzOsc, [whizzGain], chain, 0.11);
     whizzOsc.start(now);
-    whizzOsc.stop(now + 0.095);
+    whizzOsc.stop(now + dur);
 
     // Supersonic N-wave crack if passing very close (<= 1.45m)
     if (closestDist <= 1.45) {
@@ -525,10 +526,12 @@ export class SpatialAndCombatSfxMethods {
       snapGain.gain.exponentialRampToValueAtTime(0.001, now + 0.028);
       snapOsc.connect(snapGain);
       snapGain.connect(chain.input);
-      this._bindSourceCleanup(snapOsc, [snapGain], null, 0.04);
+      this._bindSourceCleanup(snapOsc, [snapGain], chain, 0.04);
       snapOsc.start(now);
       snapOsc.stop(now + 0.03);
     }
+
+    this.scheduleChainCleanup(chain, dur + 0.08);
 
     return { pan: spatial.pan, proximity };
   }

@@ -28,12 +28,18 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
 
   // Authentic Special Forces PBR Material Palette (CS2 / MW / Ready or Not)
   // 1. Tactical Patch / Team Identification Trim (responds to suit color swatch)
-  const mainMat = new THREE.MeshStandardMaterial({
-    color: pColor,
-    roughness: 0.38,
-    metalness: 0.28
+  let mainMat = getCachedMat(isShowcase ? 'main_showcase' : `main_${pColor}`, () => {
+    const m = new THREE.MeshStandardMaterial({
+      color: pColor,
+      roughness: 0.38,
+      metalness: 0.28
+    });
+    m.userData = { matSlotKey: 'main' };
+    return m;
   });
-  mainMat.userData = { matSlotKey: 'main' };
+  if (isShowcase) {
+    mainMat.color.setHex(pColor);
+  }
 
   // 2. Ripstop BDU Combat Shirt & Cargo Pants (Dark Charcoal / Olive-Slate)
   const bduMat = getCachedMat('bdu_0x262e36', () =>
@@ -98,14 +104,33 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
   );
 
   // 9. Tinted Ballistic Combat Goggles Lens (Iridium Polarized Sheen + Enemy Red Highlight)
-  const visorMat = new THREE.MeshStandardMaterial({
-    color: 0x111827,
-    emissive: isShowcase ? pColor : 0xff2222,
-    emissiveIntensity: isShowcase ? 0.18 : 0.45,
-    roughness: 0.10,
-    metalness: 0.88
+  const enemyVisorMat = getCachedMat('visor_enemy', () => {
+    const m = new THREE.MeshStandardMaterial({
+      color: 0x111827,
+      emissive: 0xff2222,
+      emissiveIntensity: 0.45,
+      roughness: 0.10,
+      metalness: 0.88
+    });
+    m.userData = { matSlotKey: 'visor' };
+    return m;
   });
-  visorMat.userData = { matSlotKey: 'visor' };
+  const visorMat = isShowcase
+    ? getCachedMat('visor_showcase', () => {
+        const m = new THREE.MeshStandardMaterial({
+          color: 0x111827,
+          emissive: pColor,
+          emissiveIntensity: 0.18,
+          roughness: 0.10,
+          metalness: 0.88
+        });
+        m.userData = { matSlotKey: 'visor' };
+        return m;
+      })
+    : enemyVisorMat;
+  if (isShowcase) {
+    visorMat.emissive.setHex(pColor);
+  }
 
   // 10. Coated NVG Objective Glass Lens (Subtle Phosphor Teal Reflection)
   const nvgLensMat = getCachedMat('nvgLens_0x064e3b', () =>
@@ -1250,6 +1275,7 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     const proxyMesh = new THREE.Mesh(proxyGeo, HITBOX_PROXY_MAT);
     proxyMesh.name = `hitbox_${def.id}_proxy`;
     proxyMesh.position.set(def.offset[0], def.offset[1], def.offset[2]);
+    proxyMesh.visible = false;
     proxyMesh.castShadow = false;
     proxyMesh.receiveShadow = false;
     proxyMesh.userData = {
@@ -1299,9 +1325,27 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
   }
 
   const setOperatorColor = (newHex) => {
-    mainMat.color.setHex(newHex);
     if (isShowcase) {
+      mainMat.color.setHex(newHex);
       visorMat.emissive.setHex(newHex);
+      return;
+    }
+    const nextMainMat = getCachedMat(`main_${newHex}`, () => {
+      const m = new THREE.MeshStandardMaterial({
+        color: newHex,
+        roughness: 0.38,
+        metalness: 0.28
+      });
+      m.userData = { matSlotKey: 'main' };
+      return m;
+    });
+    if (nextMainMat !== mainMat) {
+      group.traverse((child) => {
+        if (child.isMesh && child.material === mainMat) {
+          child.material = nextMainMat;
+        }
+      });
+      mainMat = nextMainMat;
     }
   };
 

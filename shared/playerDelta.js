@@ -51,9 +51,24 @@ export class PlayerStateCache {
         this.byId.set(e.id, cached);
       }
       if (isColdEntry(e)) {
+        let needsRebuild = false;
         for (let k = 0; k < COLD_OPTIONAL_KEYS.length; k++) {
           const key = COLD_OPTIONAL_KEYS[k];
-          if (!(key in e)) delete cached[key];
+          if (!(key in e) && key in cached) {
+            needsRebuild = true;
+            break;
+          }
+        }
+        if (needsRebuild) {
+          const next = {};
+          const keys = Object.keys(cached);
+          for (let j = 0; j < keys.length; j++) {
+            const kName = keys[j];
+            if (COLD_OPTIONAL_KEYS.includes(kName) && !(kName in e)) continue;
+            next[kName] = cached[kName];
+          }
+          cached = next;
+          this.byId.set(e.id, cached);
         }
       }
       Object.assign(cached, e);

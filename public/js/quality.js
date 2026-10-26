@@ -274,16 +274,21 @@ ${extra.net}` : '');
  * restores (cap = null) `metalness` under `root`; the original value is remembered on material.userData.
  */
 export function applyMetalnessCap(root, cap = null) {
+  const capMat = (m) => {
+    if (!m || typeof m.metalness !== 'number') return;
+    if (m.userData.__metal0 === undefined) m.userData.__metal0 = m.metalness;
+    const next = cap === null ? m.userData.__metal0 : Math.min(m.userData.__metal0, cap);
+    if (m.metalness !== next) {
+      m.metalness = next;
+      m.needsUpdate = true;
+    }
+  };
+  if (root instanceof Map) {
+    for (const m of root.values()) capMat(m);
+    return;
+  }
   root?.traverse?.((o) => {
     const mats = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
-    for (const m of mats) {
-      if (typeof m.metalness !== 'number') continue;
-      if (m.userData.__metal0 === undefined) m.userData.__metal0 = m.metalness;
-      const next = cap === null ? m.userData.__metal0 : Math.min(m.userData.__metal0, cap);
-      if (m.metalness !== next) {
-        m.metalness = next;
-        m.needsUpdate = true;
-      }
-    }
+    for (const m of mats) capMat(m);
   });
 }

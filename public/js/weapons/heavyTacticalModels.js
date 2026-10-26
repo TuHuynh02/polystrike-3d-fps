@@ -1,6 +1,7 @@
 import * as THREE from '../three.js';
 import { roundedBox } from './roundedBox.js';
 import {
+  WEAPON_MAT_CACHE,
   buildCurvedMagazine,
   buildDetailedOptic,
   buildErgonomicGripAndTrigger,
@@ -324,7 +325,12 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
     const saddlePlate = new THREE.Mesh(roundedBox(0.016, 0.074, 0.24), darkMetal);
     saddlePlate.position.set(0.046, 0.012, -0.02);
     magMesh.add(saddlePlate);
-    const shellHullMat = new THREE.MeshStandardMaterial({ color: 0xb91c1c, roughness: 0.38, metalness: 0.15 });
+    let shellHullMat = WEAPON_MAT_CACHE.get('shared_shellHull');
+    if (!shellHullMat) {
+      shellHullMat = new THREE.MeshStandardMaterial({ color: 0xb91c1c, roughness: 0.38, metalness: 0.15 });
+      shellHullMat.userData = { shared: true };
+      WEAPON_MAT_CACHE.set('shared_shellHull', shellHullMat);
+    }
     for (let s = 0; s < 5; s++) {
       const sz = -0.10 + s * 0.042;
       const shellHull = new THREE.Mesh(new THREE.CylinderGeometry(0.0105, 0.0105, 0.058, 16), shellHullMat);
@@ -467,14 +473,19 @@ export function buildHeavyTacticalGeometry(weaponId, group, mats) {
     ocularBell.rotation.x = Math.PI / 2;
     ocularBell.position.set(0, 0.135, 0.14);
 
-    const coatedScopeLensMat = new THREE.MeshStandardMaterial({
-      color: 0x0ea5e9,
-      emissive: 0x0284c7,
-      emissiveIntensity: 0.22,
-      roughness: 0.08,
-      metalness: 0.92,
-      side: THREE.DoubleSide
-    });
+    let coatedScopeLensMat = WEAPON_MAT_CACHE.get('shared_coatedScopeLens');
+    if (!coatedScopeLensMat) {
+      coatedScopeLensMat = new THREE.MeshStandardMaterial({
+        color: 0x0ea5e9,
+        emissive: 0x0284c7,
+        emissiveIntensity: 0.22,
+        roughness: 0.08,
+        metalness: 0.92,
+        side: THREE.DoubleSide
+      });
+      coatedScopeLensMat.userData = { shared: true };
+      WEAPON_MAT_CACHE.set('shared_coatedScopeLens', coatedScopeLensMat);
+    }
     const lensFront = new THREE.Mesh(new THREE.CircleGeometry(0.041, 18), coatedScopeLensMat);
     lensFront.position.set(0, 0.135, -0.36);
     const lensRear = new THREE.Mesh(new THREE.CircleGeometry(0.033, 18), coatedScopeLensMat);

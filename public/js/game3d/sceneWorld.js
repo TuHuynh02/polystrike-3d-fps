@@ -25,8 +25,9 @@ import {
 import { ClientPrediction, INPUT_BATCH_INTERVAL_MS } from '../prediction.js';
 import { SnapshotInterpolator } from '../snapshotBuffer.js';
 import { buildSkyAndAtmosphere, buildArena } from '../arenaBuilder.js';
-import { createWeaponMesh, setWeaponAdsCulling } from '../weaponModels.js';
+import { WEAPON_MAT_CACHE, createWeaponMesh, setWeaponAdsCulling } from '../weaponModels.js';
 import {
+  RIG_MAT_CACHE,
   createRemotePlayerMesh,
   animateHumanoidRig,
   disposeObject3D,
@@ -330,6 +331,7 @@ export class SceneWorldMethods {
     this.currentPixelRatio = this.maxPixelRatio;
     this.renderer.setPixelRatio(this.currentPixelRatio);
     this.lowFpsStreak = 0;
+    this.lastPixelRatioChangeAt = -10000;
 
     const shadowsOn = q.shadowMapSize > 0;
     const typeChanged = this.renderer.shadowMap.type !== shadowTypeFor(q.shadowType);
@@ -357,6 +359,8 @@ export class SceneWorldMethods {
     if (this.ambientParticles) this.ambientParticles.visible = q.ambientParticles > 0;
 
     const cap = q.envMapSize === 0 ? 0.35 : null;
+    applyMetalnessCap(RIG_MAT_CACHE, cap);
+    applyMetalnessCap(WEAPON_MAT_CACHE, cap);
     applyMetalnessCap(this.camera, cap);
     applyMetalnessCap(this.lobbyShowcaseGroup, cap);
     for (const rp of this.remotePlayers.values()) applyMetalnessCap(rp.group, cap);

@@ -25,8 +25,9 @@ import {
 import { ClientPrediction, INPUT_BATCH_INTERVAL_MS } from '../prediction.js';
 import { SnapshotInterpolator } from '../snapshotBuffer.js';
 import { buildSkyAndAtmosphere, buildArena } from '../arenaBuilder.js';
-import { createWeaponMesh, setWeaponAdsCulling } from '../weaponModels.js';
+import { createWeaponMesh, getThirdPersonWeaponTemplate, setWeaponAdsCulling } from '../weaponModels.js';
 import {
+  RIG_MAT_CACHE,
   createRemotePlayerMesh,
   animateHumanoidRig,
   disposeObject3D,
@@ -60,7 +61,7 @@ export const DEATH_BODY_MAX_MS = 1500;
 export class WeaponsAndShowcaseMethods {
   createWeaponMesh(weaponId, isFirstPerson = false) {
     const mesh = createWeaponMesh(weaponId, isFirstPerson);
-    if (this.quality?.envMapSize === 0) applyMetalnessCap(mesh, 0.35); // Low: no env map, keep metals from going black
+    applyMetalnessCap(mesh, this.quality?.envMapSize === 0 ? 0.35 : null); // Low: no env map, keep metals from going black
     return mesh;
   }
 
@@ -157,6 +158,11 @@ export class WeaponsAndShowcaseMethods {
     pedGroup.add(outerDeck, innerPad, this.lobbyHoloRingOuter, this.lobbyHoloRingInner, holoField);
     this.lobbyShowcaseGroup.add(pedGroup);
 
+    // Pre-warm all 11 third-person weapon templates in TP_WEAPON_TEMPLATE_CACHE during lobby setup
+    for (const wId of WEAPON_ORDER) {
+      getThirdPersonWeaponTemplate(wId);
+    }
+
     this.lobbyOperatorColor = 0xe5a024;
     this.lobbyOperator = this.createRemotePlayerMesh(
       {
@@ -171,6 +177,7 @@ export class WeaponsAndShowcaseMethods {
       { isShowcase: true }
     );
     this.lobbyShowcaseGroup.add(this.lobbyOperator.group);
+    applyMetalnessCap(RIG_MAT_CACHE, this.quality?.envMapSize === 0 ? 0.35 : null);
 
     this.lobbyOperatorYaw = -0.32;
     this.lobbyAutoRotate = true;

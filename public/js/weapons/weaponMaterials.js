@@ -2,6 +2,7 @@ import * as THREE from '../three.js';
 import { roundedBox } from './roundedBox.js';
 
 const WEAPON_TEX_CACHE = new Map();
+export const WEAPON_MAT_CACHE = new Map();
 let WATCH_DIAL_TEX = null;
 
 /**
@@ -10,6 +11,12 @@ let WATCH_DIAL_TEX = null;
  */
 export function createProceduralMaterial(type = 'gunmetal', baseHex = 0x1e293b, extraParams = {}) {
   const key = `${type}_${baseHex}`;
+  const matCacheKey = `${key}_${extraParams.roughness ?? ''}_${extraParams.metalness ?? ''}_${extraParams.bumpScale ?? ''}_${extraParams.flatShading ?? ''}_${extraParams.side ?? ''}`;
+  const cachedMat = WEAPON_MAT_CACHE.get(matCacheKey);
+  if (cachedMat) {
+    return cachedMat;
+  }
+
   let texPair = WEAPON_TEX_CACHE.get(key);
 
   if (!texPair && typeof document !== 'undefined') {
@@ -140,7 +147,7 @@ export function createProceduralMaterial(type = 'gunmetal', baseHex = 0x1e293b, 
     carbon: { roughness: 0.26, metalness: 0.62, bumpScale: 0.014 }
   }[type] || { roughness: 0.4, metalness: 0.5, bumpScale: 0.010 };
 
-  return new THREE.MeshStandardMaterial({
+  const mat = new THREE.MeshStandardMaterial({
     color: baseHex,
     map: texPair ? texPair.map : null,
     bumpMap: texPair ? texPair.bumpMap : null,
@@ -150,6 +157,9 @@ export function createProceduralMaterial(type = 'gunmetal', baseHex = 0x1e293b, 
     flatShading: false,
     ...extraParams
   });
+  mat.userData = { ...(mat.userData || {}), shared: true };
+  WEAPON_MAT_CACHE.set(matCacheKey, mat);
+  return mat;
 }
 
 function getWatchDialTexture() {
@@ -297,31 +307,51 @@ export function buildDetailedOptic(type, yPos, zPos, darkMetal, gunMetal, accent
   const opticGroup = new THREE.Group();
   opticGroup.position.set(0, yPos, zPos);
 
-  const hoodMetal = darkMetal.clone();
-  hoodMetal.side = THREE.DoubleSide;
+  let hoodMetal = WEAPON_MAT_CACHE.get('optic_hoodMetal');
+  if (!hoodMetal) {
+    hoodMetal = darkMetal.clone();
+    hoodMetal.side = THREE.DoubleSide;
+    hoodMetal.userData = { ...(hoodMetal.userData || {}), shared: true };
+    WEAPON_MAT_CACHE.set('optic_hoodMetal', hoodMetal);
+  }
 
   const baseColorHex = reticleMat?.color ? reticleMat.color.getHex() : 0xef4444;
-  const reticleMainMat = new THREE.MeshBasicMaterial({
-    color: baseColorHex,
-    transparent: true,
-    opacity: 0.96,
-    depthWrite: false,
-    side: THREE.DoubleSide
-  });
-  const reticleHaloMat = new THREE.MeshBasicMaterial({
-    color: baseColorHex,
-    transparent: true,
-    opacity: 0.32,
-    depthWrite: false,
-    side: THREE.DoubleSide
-  });
-  const reticleCoreMat = new THREE.MeshBasicMaterial({
-    color: 0xffffff,
-    transparent: true,
-    opacity: 0.95,
-    depthWrite: false,
-    side: THREE.DoubleSide
-  });
+  let reticleMainMat = WEAPON_MAT_CACHE.get(`optic_reticleMain_${baseColorHex}`);
+  if (!reticleMainMat) {
+    reticleMainMat = new THREE.MeshBasicMaterial({
+      color: baseColorHex,
+      transparent: true,
+      opacity: 0.96,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
+    reticleMainMat.userData = { shared: true };
+    WEAPON_MAT_CACHE.set(`optic_reticleMain_${baseColorHex}`, reticleMainMat);
+  }
+  let reticleHaloMat = WEAPON_MAT_CACHE.get(`optic_reticleHalo_${baseColorHex}`);
+  if (!reticleHaloMat) {
+    reticleHaloMat = new THREE.MeshBasicMaterial({
+      color: baseColorHex,
+      transparent: true,
+      opacity: 0.32,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
+    reticleHaloMat.userData = { shared: true };
+    WEAPON_MAT_CACHE.set(`optic_reticleHalo_${baseColorHex}`, reticleHaloMat);
+  }
+  let reticleCoreMat = WEAPON_MAT_CACHE.get('optic_reticleCore');
+  if (!reticleCoreMat) {
+    reticleCoreMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
+    reticleCoreMat.userData = { shared: true };
+    WEAPON_MAT_CACHE.set('optic_reticleCore', reticleCoreMat);
+  }
 
   // Compact under-optic Picatinny rail saddle & upper receiver crown visible at bottom of ADS sight picture
   const railSaddle = new THREE.Mesh(roundedBox(0.038, 0.010, 0.096), darkMetal);

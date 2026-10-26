@@ -1,9 +1,19 @@
 import * as THREE from '../three.js';
 import { WEAPONS } from '../shared.js';
-import { createProceduralMaterial, getWatchDialTexture } from './weaponMaterials.js';
+import { WEAPON_MAT_CACHE, createProceduralMaterial, getWatchDialTexture } from './weaponMaterials.js';
 import { buildAssaultRifleGeometry } from './assaultRifleModels.js';
 import { buildHeavyTacticalGeometry } from './heavyTacticalModels.js';
 import { buildSidearmMeleeGeometry } from './sidearmMeleeModels.js';
+
+function getSharedWeaponMat(key, factoryFn) {
+  let mat = WEAPON_MAT_CACHE.get(key);
+  if (!mat) {
+    mat = factoryFn();
+    mat.userData = { ...(mat.userData || {}), shared: true };
+    WEAPON_MAT_CACHE.set(key, mat);
+  }
+  return mat;
+}
 
 export function buildDetailedWeaponModel(weaponId = 'rifle') {
   const group = new THREE.Group();
@@ -40,33 +50,33 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
     roughness: 0.16,
     metalness: 0.94
   });
-  const brassMat = new THREE.MeshStandardMaterial({
+  const brassMat = getSharedWeaponMat('shared_brass', () => new THREE.MeshStandardMaterial({
     color: 0xeab308,
     roughness: 0.22,
     metalness: 0.90
-  });
-  const copperMat = new THREE.MeshStandardMaterial({
+  }));
+  const copperMat = getSharedWeaponMat('shared_copper', () => new THREE.MeshStandardMaterial({
     color: 0xd97706,
     roughness: 0.26,
     metalness: 0.88
-  });
-  const boreHoleMat = new THREE.MeshBasicMaterial({ color: 0x030508 });
+  }));
+  const boreHoleMat = getSharedWeaponMat('shared_boreHole', () => new THREE.MeshBasicMaterial({ color: 0x030508 }));
 
   const accentColor = WEAPONS[weaponId]?.color || 0xe5a024;
-  const accentMat = new THREE.MeshStandardMaterial({
+  const accentMat = getSharedWeaponMat(`shared_accent_${accentColor}`, () => new THREE.MeshStandardMaterial({
     color: accentColor,
     roughness: 0.32,
     metalness: 0.72
-  });
-  const reticleMat = new THREE.MeshBasicMaterial({ color: 0x22c55e, side: THREE.DoubleSide });
-  const redReticleMat = new THREE.MeshBasicMaterial({ color: 0xef4444, side: THREE.DoubleSide });
-  const glassMat = new THREE.MeshBasicMaterial({
+  }));
+  const reticleMat = getSharedWeaponMat('shared_reticle_green', () => new THREE.MeshBasicMaterial({ color: 0x22c55e, side: THREE.DoubleSide }));
+  const redReticleMat = getSharedWeaponMat('shared_reticle_red', () => new THREE.MeshBasicMaterial({ color: 0xef4444, side: THREE.DoubleSide }));
+  const glassMat = getSharedWeaponMat('shared_optic_glass', () => new THREE.MeshBasicMaterial({
     color: 0x38bdf8,
     transparent: true,
     opacity: 0.075,
     depthWrite: false,
     side: THREE.DoubleSide
-  });
+  }));
 
 
   const mats = {
@@ -509,11 +519,11 @@ export function mergeTransformedGeometries(entries) {
   return merged;
 }
 
-const TP_WEAPON_TEMPLATE_CACHE = new Map();
+export const TP_WEAPON_TEMPLATE_CACHE = new Map();
 let TP_FLASH_GEO = null;
 let TP_FLASH_MAT = null;
 
-function getThirdPersonWeaponTemplate(weaponId = 'rifle') {
+export function getThirdPersonWeaponTemplate(weaponId = 'rifle') {
   let tpl = TP_WEAPON_TEMPLATE_CACHE.get(weaponId);
   if (tpl) return tpl;
 

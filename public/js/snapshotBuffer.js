@@ -80,6 +80,44 @@ export function lerpAngle(a, b, k) {
   return wrapAngle(a + d * k);
 }
 
+/**
+ * In-place 3-way Dutch National Flag quickselect returning the k-th smallest element (0 <= k < n)
+ * of arr[0..n-1] in O(n) average time (and single-pass O(n) on all-equal arrays) with zero closure allocations.
+ */
+export function quickselectAsc(arr, n, k) {
+  let left = 0;
+  let right = n - 1;
+  while (left < right) {
+    const pivot = arr[(left + right) >> 1];
+    let lt = left;
+    let i = left;
+    let gt = right;
+    while (i <= gt) {
+      const v = arr[i];
+      if (v < pivot) {
+        arr[i] = arr[lt];
+        arr[lt] = v;
+        lt++;
+        i++;
+      } else if (v > pivot) {
+        arr[i] = arr[gt];
+        arr[gt] = v;
+        gt--;
+      } else {
+        i++;
+      }
+    }
+    if (k < lt) {
+      right = lt - 1;
+    } else if (k > gt) {
+      left = gt + 1;
+    } else {
+      return pivot;
+    }
+  }
+  return arr[k];
+}
+
 export class ServerClock {
   constructor(opts = {}) {
     this.windowSize = opts.windowSize || CLOCK_WINDOW;
@@ -161,9 +199,9 @@ export class ServerClock {
     const s = this._scratch;
     s.length = n;
     for (let i = 0; i < n; i++) s[i] = this.samples[i];
-    s.sort((a, b) => b - a); // largest o first = smallest delay first
+    // largest o first = smallest delay first -> index idx descending equals index (n - 1 - idx) ascending
     const idx = Math.min(n - 1, Math.max(0, Math.floor(this.percentile * (n - 1))));
-    this.bestOffsetMs = s[idx];
+    this.bestOffsetMs = quickselectAsc(s, n, n - 1 - idx);
     this.targetMs = this.bestOffsetMs + this.owdMs;
   }
 
@@ -195,30 +233,33 @@ export class ServerClock {
   }
 }
 
+function writeEntity(out, raw, t) {
+  out.t = t;
+  out.x = num(raw.x);
+  out.y = num(raw.y);
+  out.z = num(raw.z);
+  out.yaw = num(raw.yaw);
+  out.pitch = num(raw.pitch);
+  out.lean = num(raw.lean);
+  out.crouching = Boolean(raw.crouching ?? raw.crouch);
+  out.prone = Boolean(raw.prone);
+  out.sliding = Boolean(raw.sliding ?? raw.isSliding);
+  out.vx = num(raw.vx);
+  out.vy = num(raw.vy);
+  out.vz = num(raw.vz);
+  out.alive = raw.alive === undefined ? true : Boolean(raw.alive);
+  out.weapon = raw.weapon === undefined ? null : raw.weapon;
+  out.armor = num(raw.armor);
+  out.speedBoostMs = num(raw.speedBoostMs);
+  out.damageBoostMs = num(raw.damageBoostMs);
+  // true => do not interpolate between the previous snapshot and this one (first / teleport / alive flip)
+  out.discontinuity = false;
+  out.smoothed = false;
+  return out;
+}
+
 function copyEntity(raw, t) {
-  return {
-    t,
-    x: num(raw.x),
-    y: num(raw.y),
-    z: num(raw.z),
-    yaw: num(raw.yaw),
-    pitch: num(raw.pitch),
-    lean: num(raw.lean),
-    crouching: Boolean(raw.crouching ?? raw.crouch),
-    prone: Boolean(raw.prone),
-    sliding: Boolean(raw.sliding ?? raw.isSliding),
-    vx: num(raw.vx),
-    vy: num(raw.vy),
-    vz: num(raw.vz),
-    alive: raw.alive === undefined ? true : Boolean(raw.alive),
-    weapon: raw.weapon === undefined ? null : raw.weapon,
-    armor: num(raw.armor),
-    speedBoostMs: num(raw.speedBoostMs),
-    damageBoostMs: num(raw.damageBoostMs),
-    // true => do not interpolate between the previous snapshot and this one (first / teleport / alive flip)
-    discontinuity: false,
-    smoothed: false
-  };
+  return writeEntity({}, raw, t);
 }
 
 function fillOut(out, s, vx, vy, vz) {
@@ -250,6 +291,7 @@ export class SnapshotBuffer {
     this.extrapolationTauMs = isNum(opts.extrapolationTauMs) ? opts.extrapolationTauMs : EXTRAPOLATION_TAU_MS;
     this.epochResetMs = isNum(opts.epochResetMs) ? opts.epochResetMs : SNAPSHOT_EPOCH_RESET_MS;
     this.snaps = [];
+    this._pool = [];
   }
 
   get length() {
@@ -261,6 +303,9 @@ export class SnapshotBuffer {
   }
 
   clear() {
+    for (let i = 0; i < this.snaps.length; i++) {
+      this._pool.push(this.snaps[i]);
+    }
     this.snaps.length = 0;
   }
 
@@ -276,10 +321,10 @@ export class SnapshotBuffer {
     let last = snaps.length ? snaps[snaps.length - 1] : null;
     if (last && t <= last.t) {
       if (last.t - t <= this.epochResetMs) return false;
-      snaps.length = 0; // different server epoch
+      this.clear(); // different server epoch
       last = null;
     }
-    const s = copyEntity(raw, t);
+    const s = this._pool.length > 0 ? writeEntity(this._pool.pop(), raw, t) : copyEntity(raw, t);
     if (last) {
       const dist = Math.hypot(s.x - last.x, s.y - last.y, s.z - last.z);
       s.discontinuity = dist > this.teleportDistance || s.alive !== last.alive || raw.snap === true;
@@ -321,7 +366,15 @@ export class SnapshotBuffer {
 
     // Keep ~historyMs; the newest snapshot at/below the cutoff stays as the anchor of the oldest interval
     const cutoff = s.t - this.historyMs;
-    while (snaps.length > 2 && snaps[1].t <= cutoff) snaps.shift();
+    let dropCount = 0;
+    while (snaps.length - dropCount > 2 && snaps[dropCount + 1].t <= cutoff) {
+      this._pool.push(snaps[dropCount]);
+      dropCount++;
+    }
+    if (dropCount > 0) {
+      snaps.copyWithin(0, dropCount);
+      snaps.length -= dropCount;
+    }
     return true;
   }
 
@@ -481,10 +534,10 @@ export class JitterBuffer {
         this._intHead = (this._intHead + 1) % 16;
       }
       const s = this._scratch;
-      s.length = this.intervals.length;
-      for (let i = 0; i < s.length; i++) s[i] = this.intervals[i];
-      s.sort((a, b) => a - b);
-      this.intervalMs = Math.max(10, Math.min(200, s[s.length >> 1]));
+      const n = this.intervals.length;
+      s.length = n;
+      for (let i = 0; i < n; i++) s[i] = this.intervals[i];
+      this.intervalMs = Math.max(10, Math.min(200, quickselectAsc(s, n, n >> 1)));
     }
     this._lastT = serverT;
     const l = Math.max(0, lateness);
@@ -502,8 +555,8 @@ export class JitterBuffer {
     const s = this._scratch;
     s.length = n;
     for (let i = 0; i < n; i++) s[i] = this.late[i];
-    s.sort((a, b) => a - b);
-    return s[Math.min(n - 1, Math.floor(this.quantile * (n - 1)))];
+    const idx = Math.min(n - 1, Math.floor(this.quantile * (n - 1)));
+    return quickselectAsc(s, n, idx);
   }
 
   /** Upper bound of the delay: what the server can still rewind (rewind = rtt / 2 + delay) and the report limit. */
@@ -566,6 +619,7 @@ export class SnapshotInterpolator {
     this.clock = new ServerClock(opts);
     this.jitter = new JitterBuffer(opts);
     this.buffers = new Map(); // entity id -> SnapshotBuffer
+    this._bufferPool = [];    // recycled SnapshotBuffer instances
     this.visual = new Map();  // entity id -> catch-up state (see sample)
     this._lastRenderT = -Infinity;
     this.catchupOmega = isNum(opts.catchupOmega) ? opts.catchupOmega : CATCHUP_OMEGA;
@@ -617,6 +671,10 @@ export class SnapshotInterpolator {
     const epochs = this.clock.epochResets;
     if (!this.clock.observe(serverT, localMs)) return false;
     if (this.clock.epochResets !== epochs) {
+      for (const buf of this.buffers.values()) {
+        buf.clear();
+        this._bufferPool.push(buf);
+      }
       this.buffers.clear(); // server restart: old snapshots are meaningless
       this.visual.clear();
       this.jitter.reset();
@@ -632,7 +690,7 @@ export class SnapshotInterpolator {
       if (!e || e.id === undefined || e.id === skipId) continue;
       let buf = this.buffers.get(e.id);
       if (!buf) {
-        buf = new SnapshotBuffer(this.opts);
+        buf = this._bufferPool.pop() || new SnapshotBuffer(this.opts);
         this.buffers.set(e.id, buf);
       }
       buf.push(e, serverT);
@@ -734,11 +792,20 @@ export class SnapshotInterpolator {
 
   /** Drops the entity's buffer (entity left the match). */
   remove(id) {
-    this.buffers.delete(id);
+    const buf = this.buffers.get(id);
+    if (buf) {
+      buf.clear();
+      this._bufferPool.push(buf);
+      this.buffers.delete(id);
+    }
     this.visual.delete(id);
   }
 
   clear() {
+    for (const buf of this.buffers.values()) {
+      buf.clear();
+      this._bufferPool.push(buf);
+    }
     this.buffers.clear();
     this.visual.clear();
     this.jitter.reset();

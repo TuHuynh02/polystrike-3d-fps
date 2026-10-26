@@ -1,6 +1,7 @@
 // Barrel re-export for 3D Articulated Tactical Operator Rig Builder & Kinematic Gait Animator
 export {
   RIG_GEO_CACHE,
+  RIG_MAT_CACHE,
   getCachedGeo,
   ENEMY_OUTLINE_MAT,
   TEAMMATE_OUTLINE_MAT,

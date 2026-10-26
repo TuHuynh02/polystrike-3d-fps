@@ -503,20 +503,74 @@ describe('arena builds on every tier and map within budget', () => {
     assert.equal(game.applyQuality('auto', { persist: false }).tier, game.detectedTier);
   });
 
-  it('the adaptive pixel-ratio floor follows the tier', async () => {
+  it('the adaptive pixel-ratio floor follows the tier with sustained-low-FPS hysteresis and cooldown (no mid-match oscillation)', async () => {
     const low = await createTestGame3D({ qualityChoice: 'low' });
     const high = await createTestGame3D({ qualityChoice: 'high' });
     assert.equal(low.quality.minPixelRatio, 0.6);
     assert.equal(high.quality.minPixelRatio, 0.85);
     low.inMatch = true;
-    low.currentFps = 10;
-    for (let i = 0; i < 40; i++) {
-      low.lastFpsUpdate = -1000;
-      low.frameCount = 1;
+
+    // 1-3 brief low-FPS samples (< 2s) must NOT step down pixel ratio
+    const initialPr = low.currentPixelRatio;
+    for (let i = 1; i <= 3; i++) {
+      low.lastFpsUpdate = (i - 1) * 600;
+      low.frameCount = 10; // ~16.7 FPS
+      low.animate(i * 600);
+    }
+    assert.equal(low.currentPixelRatio, initialPr, 'brief 3-sample dip does not reallocate framebuffer');
+
+    // 4th consecutive low-FPS sample steps down once, and cooldown prevents immediate consecutive drops
+    for (let i = 4; i <= 40; i++) {
+      low.lastFpsUpdate = (i - 1) * 600;
+      low.frameCount = 5;
       low.animate(i * 600);
     }
     assert.ok(low.currentPixelRatio >= low.quality.minPixelRatio - 1e-9);
-    assert.ok(low.currentPixelRatio <= low.maxPixelRatio);
+    assert.ok(low.currentPixelRatio < initialPr, 'sustained low FPS steps down pixel ratio');
+    const steppedDownPr = low.currentPixelRatio;
+
+    // High FPS during match must NEVER step pixel ratio back up mid-match
+    for (let i = 41; i <= 50; i++) {
+      low.lastFpsUpdate = (i - 1) * 600;
+      low.frameCount = 60; // 100 FPS
+      low.animate(i * 600);
+    }
+    assert.equal(low.currentPixelRatio, steppedDownPr, 'pixel ratio never oscillates back up mid-match');
+  });
+
+  it('sfx.playBulletWhizz seals and disconnects its spatial WebAudio chain after playback', async () => {
+    const { installAudioMock, removeAudioMock } = await import('./helpers/perf-probe.mjs');
+    const { sfx } = await import('../public/js/audio.js');
+    installAudioMock();
+    try {
+      sfx.ensureContext();
+      sfx.flushPendingCleanups(true);
+      const listener = { x: 0, y: 1.6, z: 0, yaw: 0 };
+      const resClose = sfx.playBulletWhizz(listener, { x: 0.8, y: 1.6, z: -1.0 }, 0.8);
+      const resFar = sfx.playBulletWhizz(listener, { x: 1.6, y: 1.6, z: -1.0 }, 1.8);
+      assert.ok(resClose && resFar);
+      const chainEntries = sfx._pendingCleanups.filter((e) => e && e.chain);
+      assert.equal(chainEntries.length, 2, 'both spatial chains scheduled for cleanup');
+      for (const entry of chainEntries) {
+        assert.equal(entry.chain._sealed, true, 'spatial chain is sealed immediately');
+        assert.equal(entry.chain.disposed, false);
+      }
+      await new Promise((r) => setTimeout(r, 240));
+      sfx.flushPendingCleanups();
+      for (const entry of chainEntries) {
+        assert.equal(entry.chain.disposed, true, 'spatial chain is disposed after playback');
+      }
+      assert.equal(
+        sfx._pendingCleanups.filter((e) => e && !e.done).length,
+        0,
+        'all bullet whizz nodes and chains are cleaned up'
+      );
+    } finally {
+      sfx.flushPendingCleanups(true);
+      sfx.ctx = null;
+      sfx.noiseBuffer = null;
+      removeAudioMock();
+    }
   });
 
   it('spawns a short travelling bullet tracer bolt that advances from gun muzzle to impact endpoint without overshooting', async () => {

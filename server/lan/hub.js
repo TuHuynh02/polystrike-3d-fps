@@ -162,7 +162,7 @@ export class LanHub {
       if (!members || members.size === 0) return;
       const { args } = splitAck(rest); // broadcasts carry no acknowledgement
       const text = encodeEmit(event, args);
-      for (const peerId of Array.from(members)) {
+      for (const peerId of members) {
         if (peerId === exceptPeerId) continue;
         const socket = this.sockets.get(peerId);
         if (socket && !socket.disconnected) this.send(peerId, channel, text);

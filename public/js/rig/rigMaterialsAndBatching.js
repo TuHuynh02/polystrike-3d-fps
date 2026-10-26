@@ -103,7 +103,9 @@ function createInflatedOutlineGeo(entries, inflate = 0.011) {
 export function batchBoneScope(scopeRoot, boneScopeId, stopNodes, primaryMesh = null, withOutline = false, outlineMat = ENEMY_OUTLINE_MAT) {
   const byMat = new Map();
   const meshesToRemove = [];
-  const allOutlineEntries = withOutline ? [] : null;
+  const outlineKey = `outline_rig_v2_${boneScopeId}`;
+  const needOutlineGeo = withOutline || !RIG_GEO_CACHE.has(outlineKey);
+  const allOutlineEntries = needOutlineGeo ? [] : null;
 
   const isOutlineEligible = (mesh) => {
     if (!mesh || !mesh.geometry || mesh.userData?.noOutline) return false;
@@ -185,19 +187,21 @@ export function batchBoneScope(scopeRoot, boneScopeId, stopNodes, primaryMesh = 
     }
   }
 
-  if (withOutline && allOutlineEntries && allOutlineEntries.length > 0) {
-    const outlineGeo = getCachedGeo(`outline_rig_v2_${boneScopeId}`, () =>
+  if (needOutlineGeo && allOutlineEntries && allOutlineEntries.length > 0) {
+    const outlineGeo = getCachedGeo(outlineKey, () =>
       createInflatedOutlineGeo(allOutlineEntries, 0.011)
     );
-    const outlineMesh = new THREE.Mesh(outlineGeo, outlineMat);
-    outlineMesh.name = `outline_${boneScopeId}`;
-    outlineMesh.userData = { isOutlineHull: true, boneScopeId };
-    outlineMesh.renderOrder = 1;
-    outlineMesh.castShadow = false;
-    outlineMesh.receiveShadow = false;
-    outlineMesh.frustumCulled = true;
-    scopeRoot.add(outlineMesh);
-    return outlineMesh;
+    if (withOutline) {
+      const outlineMesh = new THREE.Mesh(outlineGeo, outlineMat);
+      outlineMesh.name = `outline_${boneScopeId}`;
+      outlineMesh.userData = { isOutlineHull: true, boneScopeId };
+      outlineMesh.renderOrder = 1;
+      outlineMesh.castShadow = false;
+      outlineMesh.receiveShadow = false;
+      outlineMesh.frustumCulled = true;
+      scopeRoot.add(outlineMesh);
+      return outlineMesh;
+    }
   }
   return null;
 }
@@ -398,12 +402,12 @@ export const HITBOX_PROXY_MAT = new THREE.MeshBasicMaterial({
 });
 HITBOX_PROXY_MAT.userData = { shared: true };
 
-const RIG_MAT_CACHE = new Map();
+export const RIG_MAT_CACHE = new Map();
 export function getCachedMat(key, factoryFn) {
   let mat = RIG_MAT_CACHE.get(key);
   if (!mat) {
     mat = factoryFn();
-    mat.userData = { ...(mat.userData || {}), shared: true, matSlotKey: key };
+    mat.userData = { ...(mat.userData || {}), shared: true, matSlotKey: mat.userData?.matSlotKey || key };
     RIG_MAT_CACHE.set(key, mat);
   }
   return mat;

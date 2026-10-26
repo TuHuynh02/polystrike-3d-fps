@@ -384,6 +384,7 @@ export class CombatEffectsMethods {
         rp.gunMesh.userData.flashMesh.visible = true;
       }
       rp.armPivot.rotation.x += 0.14;
+      rp.armPivot.updateMatrix();
     }
 
     const resolvedWeapon = weaponId || rp?.currentWeapon || 'rifle';

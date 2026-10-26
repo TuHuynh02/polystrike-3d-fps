@@ -237,6 +237,33 @@ describe('PlayerStateCache (client)', () => {
     assert.equal(cache.byId.has('p1'), false);
     assert.deepEqual(cache.merge(undefined), []);
   });
+
+  it('LanHub._target broadcasts directly over room Set without calling Array.from', async () => {
+    const { LanHub } = await import('../server/lan/hub.js');
+    const sent = [];
+    const hub = new LanHub({
+      send: (peerId, channel, text) => sent.push({ peerId, channel, text })
+    });
+    const s1 = hub.connect('peer1');
+    const s2 = hub.connect('peer2');
+    s1.join('ROOM1');
+    s2.join('ROOM1');
+
+    const origArrayFrom = Array.from;
+    let arrayFromCalls = 0;
+    Array.from = function (...args) {
+      arrayFromCalls++;
+      return origArrayFrom.apply(this, args);
+    };
+    try {
+      hub.io.to('ROOM1').volatile.emit('stateUpdate', { t: 100 });
+      s1.to('ROOM1').emit('remoteShot', { id: 'peer1' });
+    } finally {
+      Array.from = origArrayFrom;
+    }
+    assert.equal(arrayFromCalls, 0, 'LanHub broadcast should iterate Set directly without Array.from');
+    assert.equal(sent.length, 3);
+  });
 });
 
 describe('private rooms on the LAN server', () => {

@@ -763,5 +763,182 @@ describe('(i) headless Game3D draws remote players by snapshot interpolation', (
     game._recycleTracerEffect(game.activeEffects.pop());
     assert.equal(game.tracerLinePool?.length, 1, 'recycled tracer lines are pooled for reuse');
   });
+
+  it('quickselectAsc matches sort order statistics and SnapshotBuffer reuses pooled snapshot objects without per-tick allocations', async () => {
+    const { quickselectAsc } = await import('../public/js/snapshotBuffer.js');
+    const rng = makeRng(0x12345678);
+
+    // Exhaustive check across random, duplicate-heavy, all-equal, sorted, and reverse-sorted arrays
+    for (const n of [1, 2, 5, 16, 64, 128]) {
+      const randomArr = Array.from({ length: n }, () => (rng() - 0.5) * 1000);
+      const dupArr = Array.from({ length: n }, () => Math.floor(rng() * 4) * 20);
+      const equalArr = Array.from({ length: n }, () => 40);
+      const sortedArr = Array.from({ length: n }, (_, i) => i * 2.5);
+      const revArr = Array.from({ length: n }, (_, i) => (n - i) * 2.5);
+
+      for (const base of [randomArr, dupArr, equalArr, sortedArr, revArr]) {
+        const sorted = [...base].sort((a, b) => a - b);
+        for (const k of [0, Math.floor((n - 1) * 0.1), n >> 1, Math.floor((n - 1) * 0.95), n - 1]) {
+          const work = [...base];
+          const got = quickselectAsc(work, n, k);
+          assert.equal(got, sorted[k], `quickselectAsc failed for n=${n}, k=${k}`);
+        }
+      }
+    }
+
+    // SnapshotBuffer object pooling when pruning history and clearing
+    const buf = new SnapshotBuffer({ historyMs: 100 });
+    for (let i = 0; i < 6; i++) {
+      buf.push(snap(1000 + i * 40, i));
+    }
+    assert.ok(buf._pool.length > 0, 'expired snapshots are returned to _pool');
+    const pooledRef = buf._pool[buf._pool.length - 1];
+    buf.push(snap(1000 + 6 * 40, 6));
+    assert.equal(buf.snaps[buf.snaps.length - 1], pooledRef, 'push reuses pooled snapshot object');
+
+    const activeRefs = [...buf.snaps];
+    buf.clear();
+    assert.equal(buf.snaps.length, 0);
+    for (const ref of activeRefs) {
+      assert.ok(buf._pool.includes(ref), 'clear returns all active snapshots to _pool');
+    }
+
+    // SnapshotInterpolator.remove and clear recycle SnapshotBuffer instances and return active snapshots to _pool
+    const interp = new SnapshotInterpolator({ historyMs: 100 });
+    interp.pushState(1000, 1000, [{ id: 'p_leave', x: 1, y: 0, z: 2, alive: true }], 'me');
+    interp.pushState(1020, 1020, [{ id: 'p_leave', x: 2, y: 0, z: 3, alive: true }], 'me');
+    const leaveBuf = interp.buffers.get('p_leave');
+    const leaveSnapRefs = [...leaveBuf.snaps];
+    interp.remove('p_leave');
+    assert.equal(leaveBuf.snaps.length, 0, 'remove() clears active snapshots in buffer');
+    for (const ref of leaveSnapRefs) {
+      assert.ok(leaveBuf._pool.includes(ref), 'remove() returns active snapshots to _pool');
+    }
+    interp.pushState(1040, 1040, [{ id: 'p_rejoin', x: 5, y: 0, z: 6, alive: true }], 'me');
+    assert.equal(interp.buffers.get('p_rejoin'), leaveBuf, 'new player reuses recycled SnapshotBuffer from _bufferPool');
+  });
+
+  it('pre-warms all 13 outline geometries and 11 weapon templates in lobby, caches materials, hides hitbox proxies from renderer, and never disposes shared weapon geometries on switch', async () => {
+    const { THREE } = await loadGame3D();
+    const { RIG_GEO_CACHE, RIG_MAT_CACHE } = await import('../public/js/humanoidRig.js');
+    const { TP_WEAPON_TEMPLATE_CACHE, WEAPON_MAT_CACHE, createProceduralMaterial } = await import('../public/js/weaponModels.js');
+    const { WEAPON_ORDER } = await import('../shared/constants.js');
+
+    const game = await createTestGame3D();
+    game.localId = 'me';
+
+    // 1. All 13 outline_rig_v2_* geometries are pre-warmed during lobby setup before any remote player joins
+    const expectedScopes = [
+      'pelvis', 'chest', 'head',
+      'arm_upper_r', 'arm_lower_r', 'hand_r',
+      'arm_upper_l', 'arm_lower_l', 'hand_l',
+      'leg_l', 'leg_r', 'shin_l', 'shin_r'
+    ];
+    for (const scope of expectedScopes) {
+      assert.equal(RIG_GEO_CACHE.has(`outline_rig_v2_${scope}`), true, `outline_rig_v2_${scope} should be pre-warmed`);
+    }
+
+    // 2. All 11 third-person weapon templates are pre-warmed in TP_WEAPON_TEMPLATE_CACHE
+    for (const wId of WEAPON_ORDER) {
+      assert.equal(TP_WEAPON_TEMPLATE_CACHE.has(wId), true, `TP_WEAPON_TEMPLATE_CACHE should pre-warm ${wId}`);
+    }
+
+    // 3. Weapon procedural materials are cached and reused
+    const matA = createProceduralMaterial('gunmetal', 0x11161d, { roughness: 0.28, metalness: 0.85 });
+    const matB = createProceduralMaterial('gunmetal', 0x11161d, { roughness: 0.28, metalness: 0.85 });
+    assert.equal(matA, matB, 'createProceduralMaterial returns cached material instance');
+    assert.equal(matA.userData?.shared, true);
+    assert.ok(WEAPON_MAT_CACHE.size > 0);
+
+    // 4. Remote player join reuses cached materials and sets proxyMesh.visible = false while keeping raycasting intact
+    game.syncPlayersState(
+      [
+        { id: 'me', name: 'Me', x: 0, y: 0, z: 0, alive: true, hp: 100 },
+        { id: 'p_a', name: 'Alpha', color: 0x38bdf8, x: 0, y: 0, z: -6, weapon: 'rifle', alive: true, hp: 100 },
+        { id: 'p_b', name: 'Bravo', color: 0x38bdf8, x: 3, y: 0, z: -6, weapon: 'rifle', alive: true, hp: 100 }
+      ],
+      3000,
+      3000
+    );
+    const rpA = game.remotePlayers.get('p_a');
+    const rpB = game.remotePlayers.get('p_b');
+    assert.ok(rpA && rpB);
+    assert.equal(RIG_MAT_CACHE.get('main_3718648')?.userData?.matSlotKey, 'main');
+    assert.equal(RIG_MAT_CACHE.get('visor_enemy')?.userData?.matSlotKey, 'visor');
+
+    // Calling setOperatorColor on a non-showcase remote player swaps to the new cached material without mutating rpA's shared material
+    rpB.setOperatorColor(0xf97316);
+    assert.equal(RIG_MAT_CACHE.get('main_3718648')?.color.getHex(), 0x38bdf8, 'shared material for 0x38bdf8 must not be mutated in-place');
+
+    for (const proxy of rpA.hitboxParts) {
+      assert.equal(proxy.visible, false, `hitbox proxy ${proxy.name} must have visible=false so WebGLRenderer skips it`);
+    }
+    rpA.group.updateMatrixWorld(true);
+    const raycaster = new THREE.Raycaster(new THREE.Vector3(0, 1.2, 0), new THREE.Vector3(0, 0, -1), 0, 20);
+    const hits = raycaster.intersectObjects(rpA.hitboxParts, false);
+    assert.ok(hits.length > 0, 'Raycaster still intersects hitbox proxies when visible=false');
+
+    // 5. Switching remote player weapon never disposes shared geometries
+    let sharedDisposeCount = 0;
+    const origDispose = THREE.BufferGeometry.prototype.dispose;
+    THREE.BufferGeometry.prototype.dispose = function (...args) {
+      if (this.userData?.shared) sharedDisposeCount++;
+      return origDispose.apply(this, args);
+    };
+    try {
+      game.syncPlayersState(
+        [
+          { id: 'me', name: 'Me', x: 0, y: 0, z: 0, alive: true, hp: 100 },
+          { id: 'p_a', name: 'Alpha', color: 0x38bdf8, x: 0, y: 0, z: -6, weapon: 'sniper', alive: true, hp: 100 }
+        ],
+        3040,
+        3040
+      );
+      game.syncPlayersState(
+        [
+          { id: 'me', name: 'Me', x: 0, y: 0, z: 0, alive: true, hp: 100 },
+          { id: 'p_a', name: 'Alpha', color: 0x38bdf8, x: 0, y: 0, z: -6, weapon: 'rifle', alive: true, hp: 100 }
+        ],
+        3080,
+        3080
+      );
+    } finally {
+      THREE.BufferGeometry.prototype.dispose = origDispose;
+    }
+    assert.equal(sharedDisposeCount, 0, 'shared weapon geometries must never be disposed on remote weapon switch');
+
+    // 6. On low quality (envMapSize === 0), all 11 weapons stay capped at <= 0.35 after setupLobbyShowcase,
+    // and remote player join does not reset/thrash metalness or increment material.version
+    const lowGame = await createTestGame3D({ qualityChoice: 'low' });
+    lowGame.localId = 'me';
+    for (const wId of WEAPON_ORDER) {
+      lowGame.viewmodelMeshes[wId].traverse((obj) => {
+        if (obj.isMesh && obj.material && typeof obj.material.metalness === 'number') {
+          assert.ok(
+            obj.material.metalness <= 0.35 + 1e-6,
+            `low quality viewmodel ${wId} material metalness (${obj.material.metalness}) must stay capped <= 0.35`
+          );
+        }
+      });
+    }
+    const versionsBeforeJoin = new Map();
+    for (const [k, m] of RIG_MAT_CACHE.entries()) versionsBeforeJoin.set(k, m.version);
+    lowGame.syncPlayersState(
+      [
+        { id: 'me', name: 'Me', x: 0, y: 0, z: 0, alive: true, hp: 100 },
+        { id: 'p_low', name: 'LowJoin', color: 0x38bdf8, x: 2, y: 0, z: -5, weapon: 'sniper', alive: true, hp: 100 }
+      ],
+      4000,
+      4000
+    );
+    for (const [k, ver] of versionsBeforeJoin.entries()) {
+      assert.equal(
+        RIG_MAT_CACHE.get(k).version,
+        ver,
+        `shared rig material ${k} must not have needsUpdate/version bumped on low-tier remote player join`
+      );
+    }
+  });
 });
+
 

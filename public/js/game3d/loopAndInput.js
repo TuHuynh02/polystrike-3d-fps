@@ -71,11 +71,14 @@ export class LoopAndInputMethods {
       this.lastFpsUpdate = now;
       this.callbacks.onFpsUpdate?.(this.currentFps);
 
-      // Avoid up/down WebGL backbuffer reallocation oscillation during gameplay (which stalls the GPU for 100-300ms)
+      // Avoid up/down WebGL backbuffer reallocation oscillation during gameplay (which stalls the GPU for 100-300ms):
+      // only step down after sustained low FPS (>= 2s streak) with a cooldown, and never step back up mid-match.
       if (this.inMatch && this.currentFps < 38 && this.currentPixelRatio > this.quality.minPixelRatio) {
         this.lowFpsStreak = (this.lowFpsStreak || 0) + 1;
-        if (this.lowFpsStreak >= 3) {
+        const lastChangeAt = this.lastPixelRatioChangeAt ?? -10000;
+        if (this.lowFpsStreak >= 4 && now - lastChangeAt >= 2000) {
           this.lowFpsStreak = 0;
+          this.lastPixelRatioChangeAt = now;
           this.currentPixelRatio = Math.max(this.quality.minPixelRatio, Number((this.currentPixelRatio - 0.15).toFixed(2)));
           this.renderer.setPixelRatio(this.currentPixelRatio);
         }
