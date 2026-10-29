@@ -30,7 +30,8 @@ import {
   createRemotePlayerMesh,
   animateHumanoidRig,
   disposeObject3D,
-  getCachedGeo
+  getCachedGeo,
+  poseOperatorCryzenPoster
 } from '../humanoidRig.js';
 import { TacticalMinimap } from '../minimap.js';
 import { sfx } from '../audio.js';
@@ -101,13 +102,25 @@ export class LoopAndInputMethods {
         }
         this.lobbyOperator.group.rotation.y = Math.PI + this.lobbyOperatorYaw;
         this.lobbyOperator.crouching = Boolean(this.lobbyCrouching);
-        this.animateHumanoidRig(
-          this.lobbyOperator,
-          dt,
-          now,
-          Boolean(this.lobbyWalkDemo),
-          this.lobbyWalkDemo ? 0.18 : 0
-        );
+        const isTestFiring = (now - (this.lobbyTestShotAt || 0)) <= 450;
+        if (this.lobbyPosterPose && !this.lobbyWalkDemo && !this.lobbyCrouching && !isTestFiring) {
+          poseOperatorCryzenPoster(this.lobbyOperator, this.lobbyOperator.currentWeapon || 'rifle', now);
+        } else {
+          if (this.lobbyOperator._wasPosterPosed) {
+            this.lobbyOperator._posedWeapon = null;
+            this.lobbyOperator._wasPosterPosed = false;
+          }
+          this.animateHumanoidRig(
+            this.lobbyOperator,
+            dt,
+            now,
+            Boolean(this.lobbyWalkDemo),
+            this.lobbyWalkDemo ? 0.18 : 0
+          );
+        }
+        if (this.lobbyPosterPose && !this.lobbyWalkDemo && !this.lobbyCrouching && !isTestFiring) {
+          this.lobbyOperator._wasPosterPosed = true;
+        }
         if (this.lobbyWalkDemo && now >= (this.nextLobbyFootstepAt || 0)) {
           this.nextLobbyFootstepAt = now + (this.lobbyCrouching ? 560 : 460);
           this.callbacks?.onFootstep?.(false, Boolean(this.lobbyCrouching));
@@ -136,37 +149,9 @@ export class LoopAndInputMethods {
 
     this.updateRemotePlayers(dt, now);
 
-    // Update top-left Tactical Mini Map / Radar when in match
-    if (this.inMatch && this.minimap) {
-      const prevRenderAt = this.minimap.lastRenderAt;
-      this.minimap.update({
-        localPos: this.position,
-        localYaw: this.yaw,
-        localAlive: this.alive,
-        gameMode: this.gameMode,
-        localTeam: this.localTeam,
-        remotePlayers: this.remotePlayers,
-        pickups: this.pickupMeshes,
-        droppedWeapons: this.droppedWeaponMeshes,
-        now
-      });
-      if (this.minimap.ctx && this.minimap.lastRenderAt !== prevRenderAt) {
-        const mCtx = this.minimap.ctx;
-        for (const rp of this.remotePlayers.values()) {
-          if (!rp || !rp.alive || !rp.group) continue;
-          const isTeammate = Boolean(rp.isTeammate ?? (this.gameMode === 'tdm' && this.localTeam && rp.team && rp.team === this.localTeam));
-          if (!isTeammate) continue;
-          const rx = this.minimap.clampBlipCoord(this.minimap.worldToCanvasX(rp.group.position.x), 4);
-          const ry = this.minimap.clampBlipCoord(this.minimap.worldToCanvasY(rp.group.position.z), 4);
-          mCtx.fillStyle = '#38bdf8';
-          mCtx.strokeStyle = '#090d16';
-          mCtx.lineWidth = 1.1;
-          mCtx.beginPath();
-          mCtx.arc(rx, ry, 3.4, 0, Math.PI * 2);
-          mCtx.fill();
-          mCtx.stroke();
-        }
-      }
+    // Update top-left Tactical Mini Map / Radar when in match (~30Hz throttle, zero wrapper allocation)
+    if (this.inMatch && this.minimap && (now - this.minimap.lastRenderAt >= 33 || now < this.minimap.lastRenderAt)) {
+      this.minimap.update(this, now);
     }
 
     for (const item of this.pickupMeshes.values()) {

@@ -398,24 +398,34 @@ export class SceneWorldMethods {
   }
 
   syncPickups(pickupsData = []) {
-    if (pickupsData.length > 0 && this.pickupMeshes.size > 0) {
+    if (!pickupsData || pickupsData.length === 0) {
+      if (this.pickupMeshes.size > 0) this.clearPickups();
+      return;
+    }
+    if (this.pickupMeshes.size > 0) {
       const firstId = pickupsData[0].id;
       const existing = this.pickupMeshes.get(firstId);
-      if (!existing || Math.hypot(existing.group.position.x - pickupsData[0].x, existing.group.position.z - pickupsData[0].z) > 0.5) {
+      if (
+        this.pickupMeshes.size !== pickupsData.length ||
+        !existing ||
+        Math.abs(existing.x - pickupsData[0].x) > 0.5 ||
+        Math.abs(existing.z - pickupsData[0].z) > 0.5
+      ) {
         this.clearPickups();
       }
     }
-    for (const p of pickupsData) {
+    for (let i = 0; i < pickupsData.length; i++) {
+      const p = pickupsData[i];
       let item = this.pickupMeshes.get(p.id);
-      const pType = p.type || 'health';
-      const pColors = pType === 'armor'
-        ? { main: 0x38bdf8, emissive: 0x0284c7 }
-        : pType === 'speed'
-          ? { main: 0xf59e0b, emissive: 0xd97706 }
-          : pType === 'damage'
-            ? { main: 0xec4899, emissive: 0xdb2777 }
-            : { main: 0x22c55e, emissive: 0x16a34a };
       if (!item) {
+        const pType = p.type || 'health';
+        const pColors = pType === 'armor'
+          ? { main: 0x38bdf8, emissive: 0x0284c7 }
+          : pType === 'speed'
+            ? { main: 0xf59e0b, emissive: 0xd97706 }
+            : pType === 'damage'
+              ? { main: 0xec4899, emissive: 0xdb2777 }
+              : { main: 0x22c55e, emissive: 0x16a34a };
         const group = new THREE.Group();
         group.position.set(p.x, p.y, p.z);
 
@@ -600,8 +610,23 @@ export class SceneWorldMethods {
   }
 
   syncBarrels(barrelsData = []) {
+    if (!barrelsData || barrelsData.length === 0) {
+      if (this.barrelMeshes.size > 0) {
+        this.clearBarrels();
+        this.rebuildHitboxList();
+      }
+      return;
+    }
     let changed = false;
-    for (const b of barrelsData) {
+    if (
+      this.barrelMeshes.size > 0 &&
+      (this.barrelMeshes.size !== barrelsData.length || !this.barrelMeshes.has(barrelsData[0]?.id))
+    ) {
+      this.clearBarrels();
+      changed = true;
+    }
+    for (let i = 0; i < barrelsData.length; i++) {
+      const b = barrelsData[i];
       let item = this.barrelMeshes.get(b.id);
       const bx = b.x || 0;
       const by = b.y || 0;
@@ -739,20 +764,35 @@ export class SceneWorldMethods {
   }
 
   syncDroppedWeapons(drops = []) {
-    if ((!drops || drops.length === 0) && this.droppedWeaponMeshes.size === 0) return;
+    const existingCount = this.droppedWeaponMeshes.size;
+    if ((!drops || drops.length === 0) && existingCount === 0) return;
+    if (drops && drops.length === existingCount) {
+      let allMatch = true;
+      for (let i = 0; i < drops.length; i++) {
+        const id = drops[i]?.id;
+        if (!id || !this.droppedWeaponMeshes.has(id)) {
+          allMatch = false;
+          break;
+        }
+      }
+      if (allMatch) return;
+    }
     if (!this._seenDropIds) {
       this._seenDropIds = new Set();
     }
     const seen = this._seenDropIds;
     seen.clear();
+    let addedAny = false;
     for (let i = 0; i < drops.length; i++) {
       const d = drops[i];
       if (!d || !d.id) continue;
       seen.add(d.id);
       if (!this.droppedWeaponMeshes.has(d.id)) {
         this.addDroppedWeapon(d);
+        addedAny = true;
       }
     }
+    if (!addedAny && seen.size === existingCount) return;
     for (const id of this.droppedWeaponMeshes.keys()) {
       if (!seen.has(id)) {
         this.removeDroppedWeapon(id);

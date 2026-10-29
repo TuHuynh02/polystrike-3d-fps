@@ -31,7 +31,9 @@ import {
   createRemotePlayerMesh,
   animateHumanoidRig,
   disposeObject3D,
-  getCachedGeo
+  getCachedGeo,
+  poseOperatorCryzenPoster,
+  resolveCryzenVariantFromColor
 } from '../humanoidRig.js';
 import { TacticalMinimap } from '../minimap.js';
 import { sfx } from '../audio.js';
@@ -181,6 +183,7 @@ export class WeaponsAndShowcaseMethods {
 
     this.lobbyOperatorYaw = -0.32;
     this.lobbyAutoRotate = true;
+    this.lobbyPosterPose = true;
     this.lobbyCrouching = false;
     this.lobbyWalkDemo = false;
     this.lobbyTestShotAt = 0;
@@ -203,12 +206,41 @@ export class WeaponsAndShowcaseMethods {
 
   setLobbyOperatorColor(colorHex) {
     this.lobbyOperatorColor = colorHex;
-    if (this.lobbyOperator?.setOperatorColor) {
+    const nextVariant = resolveCryzenVariantFromColor(colorHex);
+    if (this.lobbyOperator && this.lobbyShowcaseGroup && this.lobbyOperator.demoVariant !== nextVariant) {
+      const activeWeapon = this.lobbyOperator.currentWeapon || this.currentWeapon || 'rifle';
+      this.lobbyShowcaseGroup.remove(this.lobbyOperator.group);
+      disposeObject3D(this.lobbyOperator.group);
+      this.lobbyOperator = this.createRemotePlayerMesh(
+        {
+          id: 'lobby_showcase',
+          name: 'STRIKER',
+          color: colorHex,
+          weapon: activeWeapon,
+          x: 0,
+          y: 0,
+          z: 0
+        },
+        { isShowcase: true, demoVariant: nextVariant }
+      );
+      this.lobbyOperator.crouching = Boolean(this.lobbyCrouching);
+      this.lobbyOperator.group.rotation.y = Math.PI + (this.lobbyOperatorYaw || 0);
+      this.lobbyShowcaseGroup.add(this.lobbyOperator.group);
+      applyMetalnessCap(RIG_MAT_CACHE, this.quality?.envMapSize === 0 ? 0.35 : null);
+    } else if (this.lobbyOperator?.setOperatorColor) {
       this.lobbyOperator.setOperatorColor(colorHex);
     }
     if (this.lobbyRimLight) this.lobbyRimLight.color.setHex(colorHex);
     if (this.lobbyPedestalGlowMat) this.lobbyPedestalGlowMat.color.setHex(colorHex);
     if (this.lobbyHoloConeMat) this.lobbyHoloConeMat.color.setHex(colorHex);
+  }
+
+  toggleLobbyPosterPose(forceState = null) {
+    this.lobbyPosterPose = forceState !== null ? Boolean(forceState) : !this.lobbyPosterPose;
+    if (!this.lobbyPosterPose && this.lobbyOperator) {
+      this.lobbyOperator.poseForWeapon?.(this.lobbyOperator.currentWeapon || 'rifle');
+    }
+    return this.lobbyPosterPose;
   }
 
   toggleLobbyCrouch(forceState = null) {
@@ -333,6 +365,15 @@ export class WeaponsAndShowcaseMethods {
     const currentAmmo = this.ammoByWeapon[this.currentWeapon];
     const reserveAmmo = this.reserveAmmoByWeapon[this.currentWeapon] ?? 0;
     if (currentAmmo >= cfg.magSize || reserveAmmo <= 0) return;
+
+    if (this.pendingFire && !this.pendingFire.autoReloaded && !cfg.shellByShell) {
+      if (this.pendingFire.ammoConsumed) {
+        const pWep = this.pendingFire.weapon || this.currentWeapon;
+        const pCfg = WEAPONS[pWep] || cfg;
+        this.ammoByWeapon[pWep] = Math.min(pCfg.magSize, (this.ammoByWeapon[pWep] ?? 0) + 1);
+      }
+      this.pendingFire = null;
+    }
 
     this.cancelGrenadeCooking();
     this.isAiming = false;

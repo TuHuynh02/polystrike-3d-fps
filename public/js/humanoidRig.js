@@ -14,7 +14,9 @@ export {
 export {
   createRemotePlayerMesh,
   createHumanoidPlayerRig,
-  poseOperatorForWeapon
+  poseOperatorForWeapon,
+  poseOperatorCryzenPoster,
+  resolveCryzenVariantFromColor
 } from './rig/operatorMeshBuilder.js';
 export {
   animateHumanoidRig,

@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cryzen.io 3D Soldier Model — 4 Bảng Demo Trực Tiếp</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+    body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background: #0d131c;
+      font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      color: #f8fafc;
+    }
+    #webgl-canvas {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      display: block;
+      z-index: 1;
+    }
+
+    /* Top Control Bar */
+    .top-bar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 62px;
+      background: rgba(11, 16, 25, 0.92);
+      border-bottom: 1px solid rgba(245, 158, 11, 0.35);
+      backdrop-filter: blur(10px);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      z-index: 20;
+      gap: 12px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-badge {
+      background: linear-gradient(135deg, #f59e0b, #d97706);
+      color: #0f172a;
+      font-weight: 900;
+      font-size: 13px;
+      padding: 5px 10px;
+      border-radius: 6px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .brand-title {
+      font-size: 15px;
+      font-weight: 800;
+      color: #f8fafc;
+      letter-spacing: 0.03em;
+    }
+    .brand-sub {
+      font-size: 11.5px;
+      color: #94a3b8;
+    }
+
+    .bar-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .ctrl-group {
+      display: flex;
+      align-items: center;
+      background: rgba(30, 41, 59, 0.75);
+      padding: 4px;
+      border-radius: 8px;
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      gap: 4px;
+    }
+    .ctrl-label {
+      font-size: 10.5px;
+      font-weight: 700;
+      color: #94a3b8;
+      text-transform: uppercase;
+      padding: 0 8px;
+      letter-spacing: 0.05em;
+    }
+    button {
+      background: transparent;
+      color: #cbd5e1;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      padding: 6px 11px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+    button:hover {
+      background: rgba(51, 65, 85, 0.85);
+      color: #ffffff;
+    }
+    button.active {
+      background: #f59e0b;
+      color: #0f172a;
+      border-color: #fbbf24;
+      box-shadow: 0 2px 10px rgba(245, 158, 11, 0.35);
+    }
+
+    /* 2x2 Grid Overlay Labels */
+    #grid-overlay {
+      position: fixed;
+      top: 62px;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      pointer-events: none;
+      z-index: 10;
+    }
+    #grid-overlay.hidden {
+      display: none;
+    }
+    .grid-cell {
+      position: relative;
+      border: 1px solid rgba(148, 163, 184, 0.16);
+      padding: 14px 18px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .cell-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .cell-card {
+      background: rgba(12, 18, 28, 0.82);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      border-left: 4px solid #f59e0b;
+      border-radius: 8px;
+      padding: 8px 12px;
+      backdrop-filter: blur(6px);
+      max-width: 340px;
+    }
+    .cell-tag {
+      font-size: 10.5px;
+      font-weight: 800;
+      color: #f59e0b;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 2px;
+    }
+    .cell-title {
+      font-size: 14px;
+      font-weight: 800;
+      color: #f8fafc;
+      margin-bottom: 3px;
+    }
+    .cell-desc {
+      font-size: 11.5px;
+      color: #cbd5e1;
+      line-height: 1.35;
+    }
+    .cell-expand-btn {
+      pointer-events: auto;
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid rgba(245, 158, 11, 0.5);
+      color: #fbbf24;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 11.5px;
+      font-weight: 700;
+    }
+    .cell-expand-btn:hover {
+      background: #f59e0b;
+      color: #0f172a;
+    }
+    .cell-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .cell-specs {
+      background: rgba(12, 18, 28, 0.75);
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      padding: 5px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      color: #94a3b8;
+    }
+    .cell-specs strong {
+      color: #e2e8f0;
+    }
+
+    /* Single View Info Card */
+    #single-overlay {
+      position: fixed;
+      top: 82px;
+      left: 24px;
+      width: 340px;
+      background: rgba(12, 18, 28, 0.88);
+      border: 1px solid rgba(245, 158, 11, 0.4);
+      border-left: 4px solid #f59e0b;
+      border-radius: 12px;
+      padding: 16px 18px;
+      backdrop-filter: blur(10px);
+      z-index: 15;
+      display: none;
+    }
+    #single-overlay.visible {
+      display: block;
+    }
+
+    .hint-pill {
+      position: fixed;
+      bottom: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(12, 18, 28, 0.88);
+      border: 1px solid rgba(148, 163, 184, 0.28);
+      padding: 7px 16px;
+      border-radius: 999px;
+      font-size: 12px;
+      color: #cbd5e1;
+      z-index: 20;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="webgl-canvas"></canvas>
+
+  <!-- Top Navigation & Mode Controls -->
+  <div class="top-bar">
+    <div class="brand">
+      <span class="brand-badge">CRYZEN.IO</span>
+      <div>
+        <div class="brand-title">4 BẢNG DEMO NHÂN VẬT LÍNH ĐẶC NHIỆM (OPTIMIZED v6)</div>
+        <div class="brand-sub">So sánh trực tiếp 4 phiên bản tối ưu hình khối, mũ FAST, mặt nạ Balaclava, giáp & vũ khí</div>
+      </div>
+    </div>
+
+    <div class="bar-controls">
+      <div class="ctrl-group">
+        <span class="ctrl-label">Chế độ xem:</span>
+        <button class="mode-btn active" data-mode="grid">⊞ Xem Cả 4 Bảng Demo</button>
+        <button class="mode-btn" data-mode="0">Bảng 1: Hero AKM</button>
+        <button class="mode-btn" data-mode="1">Bảng 2: Breacher M4A1</button>
+        <button class="mode-btn" data-mode="2">Bảng 3: Night Ops NVG</button>
+        <button class="mode-btn" data-mode="3">Bảng 4: Recon Sniper</button>
+      </div>
+
+      <div class="ctrl-group">
+        <span class="ctrl-label">Góc nhìn:</span>
+        <button class="cam-btn active" data-cam="poster">Cận Cảnh Poster</button>
+        <button class="cam-btn" data-cam="full">Toàn Thân</button>
+        <button class="cam-btn" data-cam="head">Cận Cảnh Đầu & Mắt</button>
+      </div>
+
+      <div class="ctrl-group">
+        <span class="ctrl-label">Tư thế:</span>
+        <button class="pose-btn active" data-pose="poster">Dáng Poster</button>
+        <button class="pose-btn" data-pose="combat">Chiến Đấu (IK)</button>
+        <button class="pose-btn" data-pose="run">Chạy (Run)</button>
+        <button class="pose-btn" data-pose="crouch">Ngồi (Crouch)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2x2 Split-Screen Labels Overlay -->
+  <div id="grid-overlay">
+    <div class="grid-cell">
+      <div class="cell-header">
+        <div class="cell-card">
+          <div class="cell-tag">BẢNG DEMO 1 • CHUẨN POSTER CRYZEN.IO</div>
+          <div class="cell-title">Cryzen Classic Hero (AKM Assault)</div>
+          <div class="cell-desc">Mũ FAST đen mờ vát trán • Mặt nạ Balaclava cằm thon & sống mũi chữ V • Quân phục Vàng Cát (#b07239) xắn tay • Giáp đen hình thang & 3 túi đạn nâu chữ [X].</div>
+        </div>
+        <button class="cell-expand-btn" data-expand="0">Phóng to 360° ↗</button>
+      </div>
+      <div class="cell-footer">
+        <div class="cell-specs">Vũ khí: <strong>AKM (Thép Xanh #526187 + Gỗ Đỏ #9c4c27)</strong></div>
+      </div>
+    </div>
+
+    <div class="grid-cell">
+      <div class="cell-header">
+        <div class="cell-card">
+          <div class="cell-tag">BẢNG DEMO 2 • ĐẶC NHIỆM ĐỘT KÍCH</div>
+          <div class="cell-title">Cryzen Tactical Breacher (Goggles & Radio)</div>
+          <div class="cell-desc">Mũ FAST gắn Kính Chống Đạn Tráng Gương trên trán • Bộ đàm PTT & Anten gắn quai giáp trái • Quân phục Nâu Cát Đậm (#a66830) • Tay áo xắn gấu lộ cổ tay.</div>
+        </div>
+        <button class="cell-expand-btn" data-expand="1">Phóng to 360° ↗</button>
+      </div>
+      <div class="cell-footer">
+        <div class="cell-specs">Vũ khí: <strong>M4A1 Tactical Carbine</strong></div>
+      </div>
+    </div>
+
+    <div class="grid-cell">
+      <div class="cell-header">
+        <div class="cell-card">
+          <div class="cell-tag">BẢNG DEMO 3 • ĐẶC NHIỆM BÓNG ĐÊM</div>
+          <div class="cell-title">Cryzen Shadow Spec-Ops (Dual-NVG)</div>
+          <div class="cell-desc">Mũ FAST Đen Carbon gắn Kính Nhìn Đêm 2 Ống (NVG xanh phosphor) & Kính che mắt • Quân phục Xám Đen (#28303d) tay dài • Giáp Đen & 3 túi đạn Xám Quân Đội.</div>
+        </div>
+        <button class="cell-expand-btn" data-expand="2">Phóng to 360° ↗</button>
+      </div>
+      <div class="cell-footer">
+        <div class="cell-specs">Vũ khí: <strong>Tactical SMG (Submachine Gun)</strong></div>
+      </div>
+    </div>
+
+    <div class="grid-cell">
+      <div class="cell-header">
+        <div class="cell-card">
+          <div class="cell-tag">BẢNG DEMO 4 • TRINH SÁT RỪNG RẬM</div>
+          <div class="cell-title">Cryzen Woodland Recon (Sniper)</div>
+          <div class="cell-desc">Mũ FAST Xanh Rêu quấn dải băng ngụy trang nâu • Mặt nạ Balaclava đen lộ mắt sắc nét • Quân phục Xanh Rêu (#4e5e42) • Giáp Nâu Đất (#5c3d22) & 3 túi đạn Vàng Cát.</div>
+        </div>
+        <button class="cell-expand-btn" data-expand="3">Phóng to 360° ↗</button>
+      </div>
+      <div class="cell-footer">
+        <div class="cell-specs">Vũ khí: <strong>Barrett / AWP Heavy Sniper</strong></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Single Fullscreen Overlay Card -->
+  <div id="single-overlay">
+    <div class="cell-tag" id="single-tag">BẢNG DEMO 1</div>
+    <div class="cell-title" id="single-title" style="font-size:17px;margin-bottom:6px;">Cryzen Classic Hero</div>
+    <div class="cell-desc" id="single-desc" style="margin-bottom:12px;"></div>
+    <button id="back-to-grid-btn" style="background:#f59e0b;color:#0f172a;width:100%;padding:8px;">⊞ Quay lại Xem Cả 4 Bảng Demo</button>
+  </div>
+
+  <div class="hint-pill">
+    🖱️ Kéo chuột trái trên bất kỳ ô nào để xoay 360° • Cuộn chuột để Phóng to / Thu nhỏ • Chuột phải để Di chuyển tâm
+  </div>
+
+  <script type="module">
+    import * as THREE from './js/three.js';
+    import { createRemotePlayerMesh, poseOperatorCryzenPoster, poseOperatorForWeapon } from './js/rig/operatorMeshBuilder.js';
+    import { animateHumanoidRig } from './js/rig/rigAnimator.js';
+
+    const canvas = document.getElementById('webgl-canvas');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.12;
+    renderer.setScissorTest(true);
+
+    const DEMO_CONFIGS = [
+      {
+        id: 'demo_1',
+        tag: 'BẢNG DEMO 1 • CHUẨN POSTER CRYZEN.IO',
+        title: 'Cryzen Classic Hero (AKM Assault)',
+        desc: 'Mũ FAST đen mờ vát trán • Mặt nạ Balaclava cằm thon & sống mũi chữ V • Quân phục Vàng Cát (#b07239) xắn tay • Giáp đen hình thang & 3 túi đạn nâu chữ [X].',
+        demoVariant: 'v1_hero',
+        weapon: 'rifle',
+        accentColor: 0xd97706,
+        bgColor: 0x101826,
+        rimColor: 0xff6a1a
+      },
+      {
+        id: 'demo_2',
+        tag: 'BẢNG DEMO 2 • ĐẶC NHIỆM ĐỘT KÍCH',
+        title: 'Cryzen Tactical Breacher (Goggles & Radio)',
+        desc: 'Mũ FAST gắn Kính Chống Đạn Tráng Gương trên trán • Bộ đàm PTT & Anten gắn quai giáp trái • Quân phục Nâu Cát Đậm (#a66830) • Tay áo xắn gấu lộ cổ tay.',
+        demoVariant: 'v2_goggles',
+        weapon: 'm4a1',
+        accentColor: 0xf59e0b,
+        bgColor: 0x131b28,
+        rimColor: 0x38bdf8
+      },
+      {
+        id: 'demo_3',
+        tag: 'BẢNG DEMO 3 • ĐẶC NHIỆM BÓNG ĐÊM',
+        title: 'Cryzen Shadow Spec-Ops (Dual-NVG)',
+        desc: 'Mũ FAST Đen Carbon gắn Kính Nhìn Đêm 2 Ống (NVG xanh phosphor) & Kính che mắt • Quân phục Xám Đen (#28303d) tay dài • Giáp Đen & 3 túi đạn Xám Quân Đội.',
+        demoVariant: 'v3_ghost',
+        weapon: 'smg',
+        accentColor: 0x10b981,
+        bgColor: 0x0c131d,
+        rimColor: 0x10b981
+      },
+      {
+        id: 'demo_4',
+        tag: 'BẢNG DEMO 4 • TRINH SÁT RỪNG RẬM',
+        title: 'Cryzen Woodland Recon (Sniper)',
+        desc: 'Mũ FAST Xanh Rêu quấn dải băng ngụy trang nâu • Mặt nạ Balaclava đen lộ mắt sắc nét • Quân phục Xanh Rêu (#4e5e42) • Giáp Nâu Đất (#5c3d22) & 3 túi đạn Vàng Cát.',
+        demoVariant: 'v4_recon',
+        weapon: 'sniper',
+        accentColor: 0x84cc16,
+        bgColor: 0x111a19,
+        rimColor: 0xeab308
+      }
+    ];
+
+    // Shared Camera Orbit State (synchronizes rotation/zoom across panels or active panel)
+    const camState = {
+      theta: 0.02,
+      phi: 0.04,
+      radius: 1.56,
+      target: new THREE.Vector3(0.22, 1.36, 0)
+    };
+
+    function applyCameraPreset(preset) {
+      if (preset === 'poster') {
+        camState.theta = 0.02;
+        camState.phi = 0.04;
+        camState.radius = 1.56;
+        camState.target.set(0.22, 1.36, 0);
+      } else if (preset === 'full') {
+        camState.theta = 0.05;
+        camState.phi = 0.09;
+        camState.radius = 2.52;
+        camState.target.set(0.18, 0.98, 0);
+      } else if (preset === 'head') {
+        camState.theta = 0.03;
+        camState.phi = 0.04;
+        camState.radius = 0.72;
+        camState.target.set(0.14, 1.58, -0.02);
+      }
+    }
+
+    // Build 4獨立 scenes so each panel has clean studio lighting and its own Cryzen Soldier Variant
+    const panels = DEMO_CONFIGS.map((cfg) => {
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(cfg.bgColor);
+
+      const camera = new THREE.PerspectiveCamera(34, 1, 0.05, 50);
+
+      // Balanced Cryzen Studio Lighting (clean front-key + front-fill so tan uniform & blue steel stay true to color without dark armpit shadows)
+      const hemi = new THREE.HemisphereLight(0xfff8f0, 0x263449, 1.50);
+      scene.add(hemi);
+
+      const keyLight = new THREE.DirectionalLight(0xffffff, 2.05);
+      keyLight.position.set(1.2, 2.8, -3.5);
+      keyLight.castShadow = true;
+      keyLight.shadow.mapSize.set(1024, 1024);
+      scene.add(keyLight);
+
+      const fillLight = new THREE.DirectionalLight(0xfff3e6, 1.25);
+      fillLight.position.set(-1.6, 2.0, -3.0);
+      scene.add(fillLight);
+
+      const warmRim = new THREE.PointLight(cfg.rimColor, 2.8, 8);
+      warmRim.position.set(1.65, 1.35, 0.25);
+      scene.add(warmRim);
+
+      const coolRim = new THREE.PointLight(0x06b6d4, 2.6, 8);
+      coolRim.position.set(-1.65, 1.55, 0.55);
+      scene.add(coolRim);
+
+      // Pedestal floor
+      const floor = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.15, 1.25, 0.06, 40),
+        new THREE.MeshStandardMaterial({ color: 0x1a222d, roughness: 0.65, metalness: 0.22 })
+      );
+      floor.position.y = -0.03;
+      floor.receiveShadow = true;
+      scene.add(floor);
+
+      const ringGeo = new THREE.RingGeometry(1.06, 1.11, 40);
+      ringGeo.rotateX(-Math.PI / 2);
+      const ring = new THREE.Mesh(
+        ringGeo,
+        new THREE.MeshBasicMaterial({ color: cfg.accentColor, side: THREE.DoubleSide })
+      );
+      ring.position.y = 0.002;
+      scene.add(ring);
+
+      const rig = createRemotePlayerMesh(
+        {
+          id: cfg.id,
+          name: cfg.title,
+          color: cfg.accentColor,
+          weapon: cfg.weapon,
+          x: 0.08,
+          y: 0,
+          z: 0
+        },
+        {
+          isShowcase: true,
+          demoVariant: cfg.demoVariant
+        }
+      );
+      rig.group.position.set(0.08, 0, 0);
+      scene.add(rig.group);
+
+      // Hide Kobra red-dot attachment on AKM in Demo 1 so the classic Cryzen AKM silhouette is 100% clean
+      if (cfg.weapon === 'rifle' && rig.gunMesh?.userData?.opticGroup) {
+        rig.gunMesh.userData.opticGroup.visible = false;
+      }
+
+      return { cfg, scene, camera, rig };
+    });
+
+    function applyCryzenPosterPose(rig, weaponId, now = 0) {
+      poseOperatorCryzenPoster(rig, weaponId, now);
+    }
+
+    let viewMode = 'grid'; // 'grid' or 0, 1, 2, 3
+    let activePose = 'poster';
+
+    const gridOverlay = document.getElementById('grid-overlay');
+    const singleOverlay = document.getElementById('single-overlay');
+    const singleTag = document.getElementById('single-tag');
+    const singleTitle = document.getElementById('single-title');
+    const singleDesc = document.getElementById('single-desc');
+
+    function setViewMode(mode) {
+      viewMode = mode === 'grid' ? 'grid' : Number(mode);
+      document.querySelectorAll('.mode-btn').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.mode === String(mode));
+      });
+      if (viewMode === 'grid') {
+        gridOverlay.classList.remove('hidden');
+        singleOverlay.classList.remove('visible');
+      } else {
+        gridOverlay.classList.add('hidden');
+        singleOverlay.classList.add('visible');
+        const cfg = DEMO_CONFIGS[viewMode];
+        singleTag.textContent = cfg.tag;
+        singleTitle.textContent = cfg.title;
+        singleDesc.textContent = cfg.desc;
+      }
+    }
+
+    document.querySelectorAll('.mode-btn').forEach((btn) => {
+      btn.addEventListener('click', () => setViewMode(btn.dataset.mode));
+    });
+    document.querySelectorAll('.cell-expand-btn').forEach((btn) => {
+      btn.addEventListener('click', () => setViewMode(btn.dataset.expand));
+    });
+    document.getElementById('back-to-grid-btn').addEventListener('click', () => setViewMode('grid'));
+
+    document.querySelectorAll('.cam-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.cam-btn').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        applyCameraPreset(btn.dataset.cam);
+      });
+    });
+
+    document.querySelectorAll('.pose-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.pose-btn').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        activePose = btn.dataset.pose;
+        panels.forEach(({ rig, cfg }) => {
+          if (activePose !== 'poster') {
+            rig.pelvisGroup.rotation.set(0, 0, 0);
+            poseOperatorForWeapon(rig, cfg.weapon);
+          }
+        });
+      });
+    });
+
+    // Mouse Orbit / Zoom / Pan
+    let dragMode = null;
+    let lastX = 0;
+    let lastY = 0;
+    window.addEventListener('mousedown', (e) => {
+      if (e.target.tagName === 'BUTTON') return;
+      dragMode = e.button === 2 ? 'pan' : 'orbit';
+      lastX = e.clientX;
+      lastY = e.clientY;
+    });
+    window.addEventListener('mouseup', () => { dragMode = null; });
+    window.addEventListener('contextmenu', (e) => e.preventDefault());
+    window.addEventListener('mousemove', (e) => {
+      if (!dragMode) return;
+      const dx = e.clientX - lastX;
+      const dy = e.clientY - lastY;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      if (dragMode === 'orbit') {
+        camState.theta += dx * 0.008;
+        camState.phi = Math.max(-0.45, Math.min(0.85, camState.phi + dy * 0.006));
+      } else {
+        camState.target.y = Math.max(0.3, Math.min(1.85, camState.target.y + dy * 0.003));
+        camState.target.x = Math.max(-0.6, Math.min(0.6, camState.target.x + dx * 0.003));
+      }
+    });
+    window.addEventListener('wheel', (e) => {
+      camState.radius = Math.max(0.50, Math.min(3.6, camState.radius + e.deltaY * 0.0012));
+    }, { passive: true });
+
+    window.addEventListener('resize', () => {
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    let lastTime = performance.now();
+    function animate(now) {
+      requestAnimationFrame(animate);
+      const dt = Math.min(0.05, (now - lastTime) / 1000);
+      lastTime = now;
+
+      const cosPhi = Math.cos(camState.phi);
+      const sinPhi = Math.sin(camState.phi);
+      const sinTheta = Math.sin(camState.theta);
+      const cosTheta = Math.cos(camState.theta);
+
+      panels.forEach(({ rig, cfg, camera }) => {
+        if (activePose === 'poster') {
+          applyCryzenPosterPose(rig, cfg.weapon, now);
+        } else {
+          rig.crouching = activePose === 'crouch';
+          rig.sliding = false;
+          rig.prone = false;
+          const isMoving = activePose === 'run';
+          animateHumanoidRig(rig, dt, now, isMoving, isMoving ? 6.2 : 0);
+        }
+
+        camera.position.set(
+          camState.target.x + camState.radius * cosPhi * sinTheta,
+          camState.target.y + camState.radius * sinPhi,
+          camState.target.z - camState.radius * cosPhi * cosTheta
+        );
+        camera.lookAt(camState.target);
+      });
+
+      const W = window.innerWidth;
+      const H = window.innerHeight;
+      const topBarH = 62;
+      const availH = Math.max(1, H - topBarH);
+
+      if (viewMode === 'grid') {
+        const cellW = Math.floor(W / 2);
+        const cellH = Math.floor(availH / 2);
+        // 4 quadrants: [0]=Top-Left, [1]=Top-Right, [2]=Bottom-Left, [3]=Bottom-Right
+        const rects = [
+          { x: 0,     y: cellH, w: cellW,     h: availH - cellH },
+          { x: cellW, y: cellH, w: W - cellW, h: availH - cellH },
+          { x: 0,     y: 0,     w: cellW,     h: cellH },
+          { x: cellW, y: 0,     w: W - cellW, h: cellH }
+        ];
+        for (let i = 0; i < 4; i++) {
+          const r = rects[i];
+          const p = panels[i];
+          p.camera.aspect = r.w / Math.max(1, r.h);
+          p.camera.updateProjectionMatrix();
+          renderer.setViewport(r.x, r.y, r.w, r.h);
+          renderer.setScissor(r.x, r.y, r.w, r.h);
+          renderer.render(p.scene, p.camera);
+        }
+      } else {
+        const p = panels[viewMode] || panels[0];
+        p.camera.aspect = W / availH;
+        p.camera.updateProjectionMatrix();
+        renderer.setViewport(0, 0, W, availH);
+        renderer.setScissor(0, 0, W, availH);
+        renderer.render(p.scene, p.camera);
+      }
+    }
+    requestAnimationFrame(animate);
+  </script>
+</body>
+</html>

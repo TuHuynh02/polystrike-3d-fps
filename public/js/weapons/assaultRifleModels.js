@@ -35,7 +35,7 @@ export function buildAssaultRifleGeometry(weaponId, group, mats) {
   if (weaponId === 'rifle') {
     // ==================== VANDAL-AK (AKM / AK-103 CUSTOM TACTICAL) ====================
     // Stamped Steel Lower Receiver + Magwell Dimples + Ribbed Rounded Dust Cover
-    const lowerReceiver = new THREE.Mesh(roundedBox(0.074, 0.068, 0.38), darkMetal);
+    const lowerReceiver = new THREE.Mesh(roundedBox(0.074, 0.068, 0.38), gunMetal);
     lowerReceiver.position.set(0, -0.015, 0.02);
 
     // Stamped receiver side bevels & AK safety selector lever

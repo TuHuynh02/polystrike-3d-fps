@@ -100,12 +100,35 @@ function createInflatedOutlineGeo(entries, inflate = 0.011) {
 }
 
 
+export function getStaticRigVColorMaterial() {
+  return getCachedMat('rig_static_vcolor', () => {
+    const bdu = RIG_MAT_CACHE.get('bdu_0x262e36') || RIG_MAT_CACHE.get('rig_bdu');
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      roughness: 0.58,
+      metalness: 0.16,
+      bumpMap: bdu?.bumpMap || null,
+      bumpScale: 0.015
+    });
+    mat.userData = { shared: true, matSlotKey: 'rig_static_vcolor' };
+    return mat;
+  });
+}
+
 export function batchBoneScope(scopeRoot, boneScopeId, stopNodes, primaryMesh = null, withOutline = false, outlineMat = ENEMY_OUTLINE_MAT) {
   const byMat = new Map();
   const meshesToRemove = [];
+  const groupsToCheck = [];
   const outlineKey = `outline_rig_v2_${boneScopeId}`;
   const needOutlineGeo = withOutline || !RIG_GEO_CACHE.has(outlineKey);
   const allOutlineEntries = needOutlineGeo ? [] : null;
+  const staticBatchMat = getStaticRigVColorMaterial();
+
+  const isDynamicSlot = (mat) => {
+    const slot = mat?.userData?.matSlotKey;
+    return slot === 'main' || slot === 'visor';
+  };
 
   const isOutlineEligible = (mesh) => {
     if (!mesh || !mesh.geometry || mesh.userData?.noOutline) return false;
@@ -119,20 +142,26 @@ export function batchBoneScope(scopeRoot, boneScopeId, stopNodes, primaryMesh = 
   };
 
   const addEntry = (mesh, relMatrix) => {
-    const mat = mesh.material;
-    if (!mat || !mesh.geometry) return;
-    let bucket = byMat.get(mat);
+    const rawMat = mesh.material;
+    if (!rawMat || !mesh.geometry) return;
+    const dynamic = isDynamicSlot(rawMat);
+    const targetMat = dynamic ? rawMat : staticBatchMat;
+    let bucket = byMat.get(targetMat);
     if (!bucket) {
       bucket = {
-        matSlotKey: mat.userData?.matSlotKey || mat.uuid,
+        matSlotKey: targetMat.userData?.matSlotKey || targetMat.uuid,
         entries: [],
         castShadow: false
       };
-      byMat.set(mat, bucket);
+      byMat.set(targetMat, bucket);
     }
     if (mesh.castShadow) bucket.castShadow = true;
     const clonedMat = relMatrix.clone();
-    bucket.entries.push({ geometry: mesh.geometry, matrix: clonedMat });
+    bucket.entries.push({
+      geometry: mesh.geometry,
+      matrix: clonedMat,
+      color: dynamic ? null : (rawMat.color || null)
+    });
     if (allOutlineEntries && isOutlineEligible(mesh)) {
       allOutlineEntries.push({ geometry: mesh.geometry, matrix: clonedMat });
     }
@@ -156,6 +185,9 @@ export function batchBoneScope(scopeRoot, boneScopeId, stopNodes, primaryMesh = 
       }
       if (child.children && child.children.length > 0) {
         walkChildren(child, childRelMatrix);
+        if (!child.isMesh && child !== primaryMesh) {
+          groupsToCheck.push(child);
+        }
       }
     }
   };
@@ -166,12 +198,23 @@ export function batchBoneScope(scopeRoot, boneScopeId, stopNodes, primaryMesh = 
     const m = meshesToRemove[i];
     if (m.parent) m.parent.remove(m);
   }
+  for (let i = groupsToCheck.length - 1; i >= 0; i--) {
+    const g = groupsToCheck[i];
+    if (g.children.length === 0 && g.parent) {
+      g.parent.remove(g);
+    }
+  }
+
+  const primaryTargetMat = primaryMesh?.material
+    ? (isDynamicSlot(primaryMesh.material) ? primaryMesh.material : staticBatchMat)
+    : null;
 
   for (const [mat, bucket] of byMat.entries()) {
     const cacheKey = `merged_rig_${boneScopeId}_${bucket.matSlotKey}`;
     const mergedGeo = getCachedGeo(cacheKey, () => mergeTransformedGeometries(bucket.entries));
-    if (primaryMesh && primaryMesh.material === mat) {
+    if (primaryMesh && primaryTargetMat === mat) {
       primaryMesh.geometry = mergedGeo;
+      primaryMesh.material = mat;
       if (primaryMesh !== scopeRoot) {
         primaryMesh.position.set(0, 0, 0);
         primaryMesh.rotation.set(0, 0, 0);

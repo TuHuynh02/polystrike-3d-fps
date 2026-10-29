@@ -1,6 +1,7 @@
 import * as THREE from '../three.js';
 import { WEAPONS } from '../shared.js';
 import { WEAPON_MAT_CACHE, createProceduralMaterial, getWatchDialTexture } from './weaponMaterials.js';
+import { roundedBox } from './roundedBox.js';
 import { buildAssaultRifleGeometry } from './assaultRifleModels.js';
 import { buildHeavyTacticalGeometry } from './heavyTacticalModels.js';
 import { buildSidearmMeleeGeometry } from './sidearmMeleeModels.js';
@@ -22,7 +23,7 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
     roughness: 0.28,
     metalness: 0.85
   });
-  const gunMetal = createProceduralMaterial('steel', 0x2c3540, {
+  const gunMetal = createProceduralMaterial('steel', 0x526187, {
     roughness: 0.24,
     metalness: 0.88
   });
@@ -30,7 +31,7 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
     roughness: 0.60,
     metalness: 0.16
   });
-  const fdePolymerMat = createProceduralMaterial('polymer', 0x8b7355, {
+  const fdePolymerMat = createProceduralMaterial('polymer', 0xb07239, {
     roughness: 0.54,
     metalness: 0.20
   });
@@ -38,7 +39,7 @@ export function buildDetailedWeaponModel(weaponId = 'rifle') {
     roughness: 0.30,
     metalness: 0.76
   });
-  const akWoodMat = createProceduralMaterial('wood', 0x6e3219, {
+  const akWoodMat = createProceduralMaterial('wood', 0x9c4c27, {
     roughness: 0.38,
     metalness: 0.10
   });
@@ -178,27 +179,27 @@ export function buildFirstPersonViewmodel(groupOrWeaponId = 'rifle', weaponId, m
     z: -Number((eyeReliefZ + opticCenter.z * vmScale).toFixed(4))
   };
 
-  const bduSleeveMat = createProceduralMaterial('bdu', 0x262e36, {
-    roughness: 0.78,
-    metalness: 0.06
+  const bduSleeveMat = createProceduralMaterial('bdu', 0xb07239, {
+    roughness: 0.88,
+    metalness: 0.02
   });
-  const corduraCuffMat = createProceduralMaterial('cordura', 0x5c5346, {
-    roughness: 0.68,
-    metalness: 0.10
+  const corduraCuffMat = createProceduralMaterial('cordura', 0x945b27, {
+    roughness: 0.86,
+    metalness: 0.03
   });
-  const gloveLeatherMat = createProceduralMaterial('leather', 0x171a1f, {
-    roughness: 0.46,
-    metalness: 0.18
+  const gloveLeatherMat = createProceduralMaterial('leather', 0x17191d, {
+    roughness: 0.64,
+    metalness: 0.08
   });
-  const carbonKnuckleMat = createProceduralMaterial('carbon', 0x242c36, {
-    roughness: 0.24,
-    metalness: 0.65
+  const carbonKnuckleMat = createProceduralMaterial('carbon', 0x22262c, {
+    roughness: 0.42,
+    metalness: 0.24
   });
   const skinMat = new THREE.MeshStandardMaterial({
-    color: 0xf6c8a8,
+    color: 0xf4c29b,
     emissive: 0x3d2416,
-    emissiveIntensity: 0.14,
-    roughness: 0.44,
+    emissiveIntensity: 0.12,
+    roughness: 0.56,
     metalness: 0.02
   });
   const watchDialMat = new THREE.MeshBasicMaterial({
@@ -248,35 +249,34 @@ export function buildFirstPersonViewmodel(groupOrWeaponId = 'rifle', weaponId, m
   const rDeltaZ = rHandZ - 0.115;
   const rDeltaY = rHandY - (-0.105);
 
-  // ==================== RIGHT TRIGGER HAND & TAPERED FOREARM ====================
+  // ==================== RIGHT TRIGGER HAND & CRYZEN TAILORED FOREARM ====================
   const rightHandGroup = new THREE.Group();
   rightHandGroup.position.set(0.012, rHandY, rHandZ);
 
-  const rightPalm = new THREE.Mesh(new THREE.CapsuleGeometry(0.033, 0.048, 10, 16), gloveLeatherMat);
+  const rightPalm = new THREE.Mesh(roundedBox(0.068, 0.092, 0.044, 0.014, 2), gloveLeatherMat);
   rightPalm.rotation.x = Math.PI / 2.2;
-  const rightKnuckleBridge = new THREE.Mesh(new THREE.CapsuleGeometry(0.015, 0.056, 10, 16), carbonKnuckleMat);
-  rightKnuckleBridge.rotation.z = Math.PI / 2;
+  const rightKnuckleBridge = new THREE.Mesh(roundedBox(0.070, 0.024, 0.024, 0.006, 1), carbonKnuckleMat);
   rightKnuckleBridge.position.set(0.004, 0.025, -0.012);
 
-  // Articulated 2-Segment Thumb wrapping around left side of pistol/knife grip (fingerless tactical glove exposing warm human skin)
-  const rightThumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, 0.032, 8, 12), gloveLeatherMat);
+  // Articulated 2-Segment Thumb in full-finger matte-black Cryzen tactical glove
+  const rightThumb = new THREE.Mesh(roundedBox(0.022, 0.046, 0.022, 0.006, 1), gloveLeatherMat);
   rightThumb.position.set(-0.032, 0.01, -0.018);
   rightThumb.rotation.set(0.45, 0.35, 0.55);
-  const rightThumbTip = new THREE.Mesh(new THREE.CapsuleGeometry(0.010, 0.022, 8, 12), skinMat);
+  const rightThumbTip = new THREE.Mesh(roundedBox(0.019, 0.034, 0.019, 0.005, 1), gloveLeatherMat);
   rightThumbTip.position.set(-0.024, 0.018, -0.036);
   rightThumbTip.rotation.set(0.15, 0.65, 0.35);
 
-  // 4 Articulated 2-Phalanx Fingers (Index finger extended onto trigger, 3 fingers curled around grip with exposed fingertips)
+  // 4 Articulated 2-Phalanx Fingers (full-finger matte-black Cryzen tactical glove)
   for (let f = 0; f < 4; f++) {
     const isTriggerFinger = f === 0 && !isKnife;
     const fy = -0.008 - f * 0.018;
     const fz = -0.034 + (isTriggerFinger ? -0.018 : 0);
-    const proximal = new THREE.Mesh(new THREE.CapsuleGeometry(0.0095, 0.028, 8, 12), gloveLeatherMat);
+    const proximal = new THREE.Mesh(roundedBox(0.018, 0.044, 0.018, 0.005, 1), gloveLeatherMat);
     proximal.position.set(-0.010, fy, fz);
     proximal.rotation.z = Math.PI / 2;
     proximal.rotation.y = isTriggerFinger ? -0.35 : 0.08;
 
-    const distal = new THREE.Mesh(new THREE.CapsuleGeometry(0.0082, 0.022, 8, 12), skinMat);
+    const distal = new THREE.Mesh(roundedBox(0.016, 0.034, 0.016, 0.004, 1), gloveLeatherMat);
     distal.position.set(-0.026, fy, fz + (isTriggerFinger ? -0.006 : 0.012));
     distal.rotation.z = Math.PI / 2;
     distal.rotation.y = isTriggerFinger ? -0.65 : 0.72;
@@ -284,24 +284,25 @@ export function buildFirstPersonViewmodel(groupOrWeaponId = 'rifle', weaponId, m
   }
   rightHandGroup.add(rightPalm, rightKnuckleBridge, rightThumb, rightThumbTip);
 
-  // Under Euler 'XYZ' with rx = Math.PI/2 + 0.22, negative rz angles the front wrist (-local Y) inward toward x = 0.012
-  const rightWristSkin = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.039, 0.05, 18), skinMat);
+  // Flat anatomical wrist gap + beveled rolled cuff + Cryzen Coyote Tan BDU sleeve
+  const rightWristSkin = new THREE.Mesh(roundedBox(0.072, 0.048, 0.056, 0.012, 2), skinMat);
   rightWristSkin.rotation.x = Math.PI / 2 + 0.22;
   rightWristSkin.rotation.z = -0.22;
   rightWristSkin.position.set(0.018, -0.118 + rDeltaY, 0.142 + rDeltaZ);
 
-  const rightCuffRoll = new THREE.Mesh(new THREE.TorusGeometry(0.044, 0.011, 10, 22), corduraCuffMat);
-  rightCuffRoll.position.set(0.023, -0.126 + rDeltaY, 0.162 + rDeltaZ);
-  rightCuffRoll.rotation.y = 0.22;
+  const rightCuffRoll = new THREE.Mesh(roundedBox(0.096, 0.046, 0.086, 0.014, 2), corduraCuffMat);
+  rightCuffRoll.rotation.x = Math.PI / 2 + 0.22;
+  rightCuffRoll.rotation.z = -0.22;
+  rightCuffRoll.position.set(0.023, -0.126 + rDeltaY, 0.165 + rDeltaZ);
 
-  const rightForearm = new THREE.Mesh(new THREE.CapsuleGeometry(0.046, 0.28, 12, 20), bduSleeveMat);
+  const rightForearm = new THREE.Mesh(roundedBox(0.092, 0.34, 0.088, 0.018, 2), bduSleeveMat);
   rightForearm.rotation.x = Math.PI / 2 + 0.22;
   rightForearm.rotation.z = -0.22;
   rightForearm.position.set(0.052, -0.158 + rDeltaY, 0.285 + rDeltaZ);
 
   group.add(rightHandGroup, rightWristSkin, rightCuffRoll, rightForearm);
 
-  // ==================== LEFT SUPPORT HAND (C-CLAMP / TWO-HAND PISTOL / CQB GUARD), GARMIN GPS WATCH & FOREARM ====================
+  // ==================== LEFT SUPPORT HAND, GARMIN GPS WATCH & CRYZEN TAILORED FOREARM ====================
   let lHandX = -0.022;
   let lHandY = -0.055;
   let lHandZ = -0.33;
@@ -342,28 +343,27 @@ export function buildFirstPersonViewmodel(groupOrWeaponId = 'rifle', weaponId, m
   const leftHandGroup = new THREE.Group();
   leftHandGroup.position.set(lHandX, lHandY, lHandZ);
 
-  const leftPalm = new THREE.Mesh(new THREE.CapsuleGeometry(0.033, 0.052, 10, 16), gloveLeatherMat);
+  const leftPalm = new THREE.Mesh(roundedBox(0.068, 0.096, 0.044, 0.014, 2), gloveLeatherMat);
   leftPalm.rotation.x = Math.PI / 2;
-  const leftKnuckleBridge = new THREE.Mesh(new THREE.CapsuleGeometry(0.015, 0.058, 10, 16), carbonKnuckleMat);
-  leftKnuckleBridge.rotation.z = Math.PI / 2;
+  const leftKnuckleBridge = new THREE.Mesh(roundedBox(0.072, 0.024, 0.024, 0.006, 1), carbonKnuckleMat);
   leftKnuckleBridge.position.set(-0.005, 0.022, 0);
 
-  const leftThumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, 0.046, 8, 12), skinMat);
+  const leftThumb = new THREE.Mesh(roundedBox(0.022, 0.062, 0.022, 0.006, 1), gloveLeatherMat);
   leftThumb.position.set(-0.018, 0.032, -0.02);
   leftThumb.rotation.set(0.2, -0.4, -0.8);
 
   for (let f = 0; f < 4; f++) {
     const fz = -0.042 + f * 0.022;
-    const fingerProx = new THREE.Mesh(new THREE.CapsuleGeometry(0.0095, 0.030, 8, 12), gloveLeatherMat);
+    const fingerProx = new THREE.Mesh(roundedBox(0.018, 0.046, 0.018, 0.005, 1), gloveLeatherMat);
     fingerProx.position.set(0.012, -0.018, fz);
     fingerProx.rotation.z = Math.PI / 2.3;
 
-    const fingerDist = new THREE.Mesh(new THREE.CapsuleGeometry(0.0082, 0.022, 8, 12), skinMat);
+    const fingerDist = new THREE.Mesh(roundedBox(0.016, 0.034, 0.016, 0.004, 1), gloveLeatherMat);
     fingerDist.position.set(0.026, -0.006, fz);
     fingerDist.rotation.z = Math.PI / 4.2;
     leftHandGroup.add(fingerProx, fingerDist);
   }
-  const leftWristSkin = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.038, 0.046, 16), skinMat);
+  const leftWristSkin = new THREE.Mesh(roundedBox(0.070, 0.046, 0.056, 0.012, 2), skinMat);
   leftWristSkin.position.set(-0.010, -0.016, 0.042);
   leftWristSkin.rotation.x = Math.PI / 2 + 0.22;
   leftWristSkin.rotation.z = 0.34;
@@ -376,20 +376,21 @@ export function buildFirstPersonViewmodel(groupOrWeaponId = 'rifle', weaponId, m
   const watchFace = new THREE.Mesh(new THREE.CylinderGeometry(0.020, 0.020, 0.016, 22), watchDialMat);
   watchFace.position.copy(watchCase.position);
   watchFace.rotation.copy(watchCase.rotation);
-  const leftWristStrap = new THREE.Mesh(new THREE.TorusGeometry(0.044, 0.0085, 10, 22), corduraCuffMat);
+  const leftWristStrap = new THREE.Mesh(roundedBox(0.078, 0.024, 0.064, 0.008, 2), gloveLeatherMat);
+  leftWristStrap.rotation.x = Math.PI / 2 + 0.25;
+  leftWristStrap.rotation.z = 0.36;
   leftWristStrap.position.set(-0.038 + lDeltaX, -0.082 + lDeltaY, -0.288 + lDeltaZ);
-  leftWristStrap.rotation.y = -0.36;
 
-  // Under Euler 'XYZ' with rx = Math.PI/2 + 0.25, positive rz (+0.36) angles the front wrist (-local Y) inward to leftHandGroup
-  const leftForearm = new THREE.Mesh(new THREE.CapsuleGeometry(0.046, 0.32, 12, 20), bduSleeveMat);
+  // Tailored Cryzen Coyote Tan BDU forearm sleeve & beveled rolled cuff
+  const leftForearm = new THREE.Mesh(roundedBox(0.094, 0.38, 0.090, 0.018, 2), bduSleeveMat);
   leftForearm.rotation.x = Math.PI / 2 + 0.25;
   leftForearm.rotation.z = 0.36;
   leftForearm.position.set(-0.086 + lDeltaX, -0.118 + lDeltaY, -0.165 + lDeltaZ);
 
-  const leftCuffWrap = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.049, 0.14, 18), corduraCuffMat);
+  const leftCuffWrap = new THREE.Mesh(roundedBox(0.098, 0.054, 0.088, 0.014, 2), corduraCuffMat);
   leftCuffWrap.rotation.x = Math.PI / 2 + 0.25;
   leftCuffWrap.rotation.z = 0.36;
-  leftCuffWrap.position.set(-0.054 + lDeltaX, -0.097 + lDeltaY, -0.247 + lDeltaZ);
+  leftCuffWrap.position.set(-0.050 + lDeltaX, -0.092 + lDeltaY, -0.262 + lDeltaZ);
 
   group.add(leftHandGroup, watchCase, watchFace, leftWristStrap, leftForearm, leftCuffWrap);
 
@@ -442,10 +443,12 @@ const _mergeNormMat = new THREE.Matrix3();
 export function mergeTransformedGeometries(entries) {
   let totalVerts = 0;
   let totalIndices = 0;
+  let hasColors = false;
   for (let i = 0; i < entries.length; i++) {
     const geo = entries[i].geometry;
     const pos = geo?.attributes?.position;
     if (!pos) continue;
+    if (entries[i].color || geo.attributes.color) hasColors = true;
     totalVerts += pos.count;
     totalIndices += geo.index ? geo.index.count : pos.count;
   }
@@ -453,18 +456,23 @@ export function mergeTransformedGeometries(entries) {
   const positions = new Float32Array(totalVerts * 3);
   const normals = new Float32Array(totalVerts * 3);
   const uvs = new Float32Array(totalVerts * 2);
+  const colors = hasColors ? new Float32Array(totalVerts * 3) : null;
   const indices = totalVerts > 65535 ? new Uint32Array(totalIndices) : new Uint16Array(totalIndices);
 
   let vertOffset = 0;
   let idxOffset = 0;
 
   for (let i = 0; i < entries.length; i++) {
-    const { geometry: geo, matrix } = entries[i];
+    const { geometry: geo, matrix, color } = entries[i];
     const posAttr = geo?.attributes?.position;
     if (!posAttr) continue;
     const normAttr = geo.attributes.normal;
     const uvAttr = geo.attributes.uv;
+    const colorAttr = geo.attributes.color;
     const vCount = posAttr.count;
+    const cr = color ? color.r : 1;
+    const cg = color ? color.g : 1;
+    const cb = color ? color.b : 1;
 
     _mergeNormMat.getNormalMatrix(matrix);
 
@@ -489,6 +497,18 @@ export function mergeTransformedGeometries(entries) {
         uvs[uBase] = uvAttr.getX(v);
         uvs[uBase + 1] = uvAttr.getY(v);
       }
+
+      if (colors) {
+        if (colorAttr) {
+          colors[pBase] = colorAttr.getX(v) * cr;
+          colors[pBase + 1] = colorAttr.getY(v) * cg;
+          colors[pBase + 2] = colorAttr.getZ(v) * cb;
+        } else {
+          colors[pBase] = cr;
+          colors[pBase + 1] = cg;
+          colors[pBase + 2] = cb;
+        }
+      }
     }
 
     if (geo.index) {
@@ -512,6 +532,9 @@ export function mergeTransformedGeometries(entries) {
   merged.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   merged.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
   merged.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  if (colors) {
+    merged.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  }
   merged.setIndex(new THREE.BufferAttribute(indices, 1));
   merged.computeBoundingBox();
   merged.computeBoundingSphere();
