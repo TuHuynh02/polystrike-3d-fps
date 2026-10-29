@@ -179,6 +179,17 @@ export class WeaponsAndShowcaseMethods {
       { isShowcase: true }
     );
     this.lobbyShowcaseGroup.add(this.lobbyOperator.group);
+
+    // Pre-warm all remaining operator variants (v2_goggles, v3_ghost, v4_recon) and swatches into RIG_GEO_CACHE / RIG_MAT_CACHE
+    // at lobby setup so remote players joining mid-match never trigger geometry merging, outline inflation, or material version bumps.
+    for (const warmColor of [0xef4444, 0x94a3b8, 0x4b5320, 0x38bdf8]) {
+      const warmRig = createRemotePlayerMesh(
+        { id: 'warmup_rig', color: warmColor, weapon: 'rifle' },
+        { isShowcase: true }
+      );
+      warmRig.setOperatorColor?.(warmColor);
+      disposeObject3D(warmRig.group);
+    }
     applyMetalnessCap(RIG_MAT_CACHE, this.quality?.envMapSize === 0 ? 0.35 : null);
 
     this.lobbyOperatorYaw = -0.32;

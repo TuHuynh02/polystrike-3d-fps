@@ -131,7 +131,7 @@ export function buildMapLandmarks(
   } else {
     addDecorCyl(0, 18, 0, 0.32, 26, gunmetalFrameMat, 'y');
 
-    const archDist = 24;
+    const archDist = Math.min(24, Math.max(15, Math.round(halfSize * 0.45)));
     for (const dirSign of [-1, 1]) {
       addDecorBox(0, 6.8, dirSign * archDist, 14.5, 1.1, 1.6, darkSteelMat, true);
       addDecorBox(0, 7.45, dirSign * archDist, 14.8, 0.24, 1.8, trimAccentMat);
@@ -729,7 +729,7 @@ export function buildArena(game, mapCfg = game?.currentMapConfig || {}) {
         addDecorBox(obs.x, obs.y, obs.z + halfD + 0.04, Math.max(0.2, obs.w - 0.04), Math.max(0.1, obs.h - 0.03), 0.07, darkSteelMat);
       }
     } else if (obs.type === 'wall') {
-      const isPerimeter = Math.max(obs.w, obs.d) > 80;
+      const isPerimeter = Math.max(obs.w, obs.d) > 80 || Math.max(obs.w, obs.d) >= halfSize * 1.8;
       if (isPerimeter) {
         const alongX = obs.w > obs.d;
         const upperWallH = 6.5;

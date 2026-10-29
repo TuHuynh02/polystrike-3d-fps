@@ -501,6 +501,7 @@ export class JitterBuffer {
     this.marginMs = isNum(opts.marginMs) ? opts.marginMs : DELAY_MARGIN_MS;
     this.quantile = isNum(opts.jitterQuantile) ? opts.jitterQuantile : JITTER_QUANTILE;
     this.initialMs = isNum(opts.initialDelayMs) ? opts.initialDelayMs : INTERP_DELAY_MS;
+    this.defaultIntervalMs = isNum(opts.intervalMs) && opts.intervalMs > 0 ? opts.intervalMs : 40;
     this.reset();
   }
 
@@ -511,7 +512,7 @@ export class JitterBuffer {
     this._intHead = 0;
     this._lastT = null;
     this._scratch = [];
-    this.intervalMs = 40;
+    this.intervalMs = this.defaultIntervalMs;
     this.jitterMs = 0;         // lateness quantile
     this.rawMs = this.initialMs;
     this.targetMs = this.initialMs;
@@ -643,12 +644,19 @@ export class SnapshotInterpolator {
   }
 
   /**
-   * Applies the server's `roomJoined.net` ({ interpMinMs, interpInitialMs }): the delay floor / start value follow the server
-   * tick rate (LAN mode runs 50 Hz). Before the first adaptive estimate the live delay is moved to the new start value.
+   * Applies the server's `roomJoined.net` ({ tickRate, tickMs, interpMinMs, interpInitialMs }): the delay floor / start value
+   * and nominal snapshot interval follow the server tick rate (LAN mode runs 50 Hz / 20 ms; Render runs 25 Hz / 40 ms).
    */
   configure(net) {
     if (!net || this.fixedDelay) return;
     const jb = this.jitter;
+    const tickMs = isNum(net.tickMs) && net.tickMs > 0
+      ? net.tickMs
+      : (isNum(net.tickRate) && net.tickRate > 0 ? Math.round(1000 / net.tickRate) : null);
+    if (tickMs !== null) {
+      jb.defaultIntervalMs = Math.max(10, Math.min(200, tickMs));
+      if (jb.intervals.length === 0) jb.intervalMs = jb.defaultIntervalMs;
+    }
     if (isNum(net.interpMinMs) && net.interpMinMs > 0) jb.minMs = Math.min(net.interpMinMs, jb.maxMs);
     if (isNum(net.interpInitialMs) && net.interpInitialMs > 0) jb.initialMs = Math.max(jb.minMs, Math.min(net.interpInitialMs, jb.maxMs));
     if (!jb.initialised) jb.rawMs = jb.targetMs = jb.currentMs = jb.initialMs;

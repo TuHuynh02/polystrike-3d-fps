@@ -553,6 +553,8 @@ export function updateTeamScoreHud(teamScores = appState.currentTeamScores) {
   }
 
   const cache = appState.hudCache;
+  const isTdmMode = appState.currentRoomGameMode === 'tdm';
+  if (cache.scoreAlpha === alphaKills && cache.scoreBravo === bravoKills && cache.teamScoreVisible === isTdmMode && (!isTdmMode || cache.leaderText)) return;
   if (hudScoreAlpha && cache.scoreAlpha !== alphaKills) {
     cache.scoreAlpha = alphaKills;
     hudScoreAlpha.textContent = String(alphaKills);
@@ -576,6 +578,7 @@ export function updateTeamScoreHud(teamScores = appState.currentTeamScores) {
     } else if (bravoKills > alphaKills) {
       nextLeaderText = `🔴 PHE ĐỎ DẪN ĐẦU (${ bravoKills }/${ killLimitText })`;
     }
+    cache.leaderId = null;
     if (cache.leaderText !== nextLeaderText) {
       cache.leaderText = nextLeaderText;
       hudLeader.textContent = nextLeaderText;

@@ -210,6 +210,11 @@ const game = appState.game = new Game3D(canvasContainer, {
     // half the RTT it measures itself) when it resolves a shot in this batch (lag compensation parity)
     batch.d = appState.game.getInterpDelayMs();
     appState.socket.emit('inputBatch', batch);
+    if (appState.pendingReloadEmit && !appState.game.pendingFire) {
+      const pendingReload = appState.pendingReloadEmit;
+      appState.pendingReloadEmit = null;
+      appState.socket.emit('reload', pendingReload);
+    }
   },
   // The shot itself travels inside the input commands (FIRE bit + shot sequence, see Game3D.advanceFixedPhysics): there is no
   // `shoot` appState.socket event. This callback only plays the local gunshot sound.
@@ -241,7 +246,12 @@ const game = appState.game = new Game3D(canvasContainer, {
       reloadBarFill.style.width = '100%';
     }
     appState.sfx.playReload(reloadMs, mode);
-    appState.socket.emit('reload', { weapon: weaponId, mode });
+    if (appState.game?.pendingFire) {
+      appState.pendingReloadEmit = { weapon: weaponId, mode };
+    } else {
+      appState.pendingReloadEmit = null;
+      appState.socket.emit('reload', { weapon: weaponId, mode });
+    }
   },
   onShellInserted: (weaponId, currentAmmo, reserveAmmo, isFull) => {
     const cfg = WEAPONS[weaponId] || WEAPONS.shotgun;
@@ -252,6 +262,7 @@ const game = appState.game = new Game3D(canvasContainer, {
     }
   },
   onReloadCancel: (weaponId, currentAmmo, reserveAmmo) => {
+    appState.pendingReloadEmit = null;
     reloadIndicator.classList.add('hidden');
     updateWeaponHud(weaponId, currentAmmo, reserveAmmo);
   },

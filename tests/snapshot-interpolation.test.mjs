@@ -939,6 +939,184 @@ describe('(i) headless Game3D draws remote players by snapshot interpolation', (
       );
     }
   });
+
+  it('batches static character rig materials per bone scope into vertex-colored meshes while keeping main and visor dynamic', async () => {
+    const { RIG_MAT_CACHE } = await import('../public/js/humanoidRig.js');
+    const game = await createTestGame3D();
+    game.localId = 'me';
+    game.syncPlayersState(
+      [
+        { id: 'me', name: 'Me', x: 0, y: 0, z: 0, alive: true, hp: 100 },
+        { id: 'p_batch', name: 'BatchOp', color: 0x38bdf8, x: 0, y: 0, z: -8, weapon: 'rifle', alive: true, hp: 100 }
+      ],
+      5000,
+      5000
+    );
+
+    const rp = game.remotePlayers.get('p_batch');
+    assert.ok(rp);
+    const staticVColorMat = RIG_MAT_CACHE.get('rig_static_vcolor');
+    assert.ok(staticVColorMat, 'RIG_MAT_CACHE must hold shared rig_static_vcolor material');
+    assert.equal(staticVColorMat.vertexColors, true);
+    assert.ok(staticVColorMat.bumpMap, 'shared rig_static_vcolor material must attach the shared BDU bumpMap');
+
+    let bodyMeshes = 0;
+    let staticVColorMeshes = 0;
+    let mainMeshes = 0;
+    let mainMeshRef = null;
+    let visorMeshes = 0;
+    let emptySubGroups = 0;
+    const gunMeshes = new Set();
+    rp.gunHolder.traverse((o) => {
+      if (o.isMesh) gunMeshes.add(o);
+    });
+    const hitboxSet = new Set(rp.hitboxParts || []);
+
+    rp.group.traverse((o) => {
+      if (o !== rp.group && !o.isMesh && o.children && o.children.length === 0) {
+        emptySubGroups++;
+      }
+      if (!o.isMesh) return;
+      if (gunMeshes.has(o) || hitboxSet.has(o) || o.userData?.isOutlineHull || o === rp.muzzleFlash) return;
+      bodyMeshes++;
+      const slot = o.material?.userData?.matSlotKey;
+      if (slot === 'rig_static_vcolor') {
+        staticVColorMeshes++;
+        assert.ok(o.geometry?.attributes?.color, 'batched static rig geometry must include a vertex color attribute');
+        assert.equal(o.geometry.attributes.color.itemSize, 3);
+      } else if (slot === 'main') {
+        mainMeshes++;
+        mainMeshRef = o;
+      } else if (slot === 'visor') {
+        visorMeshes++;
+      }
+    });
+
+    assert.equal(emptySubGroups, 0, 'empty decorative sub-groups must be pruned after bone-scope mesh batching');
+    assert.equal(staticVColorMeshes, 13, 'each of the 13 bone scopes must have exactly 1 static vertex-colored mesh');
+    assert.ok(mainMeshes >= 1 && visorMeshes >= 1, 'dynamic main and visor meshes must remain separate');
+    assert.ok(bodyMeshes <= 22, `expected <= 22 body meshes per operator after vertex-color batching, got ${bodyMeshes}`);
+
+    rp.setOperatorColor(0xef4444);
+    assert.equal(mainMeshRef.material.color.getHex(), 0xef4444, 'setOperatorColor still updates main accent material');
+    assert.equal(staticVColorMat.color.getHex(), 0xffffff, 'shared static vertex-color material remains unmutated white');
+  });
+
+  it('culls remote humanoid rig animation by distance (>38m) and behind camera (>6m, dot < -0.25) while keeping posture, pitch, slide, and shot flash transitions accurate', async () => {
+    const game = await createTestGame3D();
+    game.localId = 'me';
+    game.inMatch = true;
+    game.position.set(0, 0, 0);
+    game.camera.position.set(0, 1.62, 0);
+    game.yaw = 0; // looking North (-Z)
+
+    const pushTick = (t, overBehind = {}) => {
+      const moveX = (t - 1000) * 0.004;
+      game.syncPlayersState(
+        [
+          { id: 'me', name: 'Me', x: 0, y: 0, z: 0, alive: true, hp: 100 },
+          { id: 'near_front', name: 'Near', x: moveX, y: 0, z: -10, yaw: 0, pitch: 0, alive: true, hp: 100 },
+          { id: 'far_front', name: 'Far', x: moveX, y: 0, z: -45, yaw: 0, pitch: 0, alive: true, hp: 100 },
+          { id: 'behind_idle', name: 'BehindIdle', x: 0, y: 0, z: 12, yaw: 0, pitch: 0, alive: true, hp: 100, ...overBehind },
+          { id: 'behind_move', name: 'BehindMove', x: 2 + moveX, y: 0, z: 12, yaw: 0, pitch: 0, alive: true, hp: 100 }
+        ],
+        t,
+        t
+      );
+    };
+
+    pushTick(1000);
+    pushTick(1040);
+
+    // Warm up 20 frames so initial weapon pose and posture blends settle
+    let now = 1040;
+    for (let i = 0; i < 20; i++) {
+      now += 16;
+      pushTick(now);
+      game.updateRemotePlayers(0.016, now);
+    }
+
+    const counts = { near_front: 0, far_front: 0, behind_idle: 0, behind_move: 0 };
+    const origAnimate = game.animateHumanoidRig.bind(game);
+    game.animateHumanoidRig = (rp, dt, tNow, isMoving, moveSpeed) => {
+      for (const [id, candidate] of game.remotePlayers.entries()) {
+        if (candidate === rp) counts[id] = (counts[id] || 0) + 1;
+      }
+      return origAnimate(rp, dt, tNow, isMoving, moveSpeed);
+    };
+
+    try {
+      const rpNear = game.remotePlayers.get('near_front');
+      const rpFar = game.remotePlayers.get('far_front');
+      const rpBehind = game.remotePlayers.get('behind_idle');
+      const phaseNearStart = rpNear.walkPhase || 0;
+      const phaseFarStart = rpFar.walkPhase || 0;
+
+      for (let i = 0; i < 40; i++) {
+        now += 16;
+        pushTick(now);
+        game.updateRemotePlayers(0.016, now);
+      }
+
+      assert.equal(counts.near_front, 40, 'close in-frustum player must animate every frame');
+      assert.equal(counts.far_front, 20, 'far player (>38m) must animate at half rate (every 2nd frame)');
+      assert.equal(counts.behind_idle, 0, 'stationary settled player behind camera (>6m) must skip rig animation');
+      assert.equal(counts.behind_move, 10, 'moving settled player behind camera (>6m) must animate every 4th frame');
+
+      const deltaPhaseNear = (rpNear.walkPhase || 0) - phaseNearStart;
+      const deltaPhaseFar = (rpFar.walkPhase || 0) - phaseFarStart;
+      assert.ok(
+        Math.abs(deltaPhaseNear - deltaPhaseFar) < 0.15,
+        `accumulated _skippedAnimDt must keep far player walkPhase (${deltaPhaseFar.toFixed(3)}) in sync with near player (${deltaPhaseNear.toFixed(3)})`
+      );
+
+      // Pitch transition on a stationary player behind camera must animate across multiple frames until head/torso rotations converge
+      const beforePitchCount = counts.behind_idle;
+      for (let i = 0; i < 16; i++) {
+        now += 16;
+        pushTick(now, { pitch: 0.8 });
+        game.updateRemotePlayers(0.016, now);
+      }
+      assert.ok(
+        counts.behind_idle - beforePitchCount >= 6,
+        `pitch transition behind camera must animate across multiple frames until head/torso pitch converge, got ${counts.behind_idle - beforePitchCount} frames`
+      );
+      assert.ok(Math.abs(rpBehind.headGroup.rotation.x - 0.8 * 0.45) < 0.03, 'headGroup pitch must converge to targetPitch * 0.45');
+
+      // Sliding posture behind camera must converge crouchBlend & slideBlend and then settle back to culled state
+      for (let i = 0; i < 30; i++) {
+        now += 16;
+        pushTick(now, { sliding: true, pitch: 0 });
+        game.updateRemotePlayers(0.016, now);
+      }
+      assert.ok(rpBehind.crouchBlend > 0.98 && rpBehind.slideBlend > 0.98, 'sliding player behind camera must converge both crouchBlend and slideBlend');
+      const settledSlideCount = counts.behind_idle;
+      for (let i = 0; i < 5; i++) {
+        now += 16;
+        pushTick(now, { sliding: true, pitch: 0 });
+        game.updateRemotePlayers(0.016, now);
+      }
+      assert.equal(counts.behind_idle, settledSlideCount, 'once sliding posture has settled, stationary player behind camera must resume culling');
+
+      // Remote gunfire behind camera must animate recoil/flash and clear gunMesh.userData.flashMesh after 55ms
+      const flashMesh = rpBehind.gunMesh?.userData?.flashMesh;
+      assert.ok(flashMesh, 'remote weapon mesh must have userData.flashMesh');
+      flashMesh.visible = true;
+      rpBehind.lastShotFlashAt = now;
+      rpBehind.recoilKick = 1.0;
+      const beforeShotCount = counts.behind_idle;
+      for (let i = 0; i < 6; i++) {
+        now += 16;
+        pushTick(now, { sliding: true, pitch: 0 });
+        game.updateRemotePlayers(0.016, now);
+      }
+      assert.ok(counts.behind_idle > beforeShotCount, 'recently fired remote player behind camera must not skip recoil/flash animation');
+      assert.equal(flashMesh.visible, false, 'gunMesh.userData.flashMesh must be hidden once >55ms have elapsed since lastShotFlashAt');
+    } finally {
+      game.animateHumanoidRig = origAnimate;
+    }
+  });
 });
+
 
 

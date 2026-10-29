@@ -664,6 +664,7 @@ export class MovementSyncMethods {
 
     player.isAiming = false;
     player.reloadStartedAt = now;
+    player.reloadInitialAmmo = currentAmmo;
     player.reloadWeapon = wId;
 
     if (cfg.shellByShell) {

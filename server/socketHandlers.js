@@ -193,6 +193,15 @@ export function attachGameSocketHandlers({ socket, roomManager, lanSignaling }) 
     }
   });
 
+  on('requestRespawn', () => {
+    if (!currentRoomCode) return;
+    const room = roomManager.rooms.get(currentRoomCode);
+    if (!room) return;
+    const player = room.players.get(socket.id);
+    if (!player) return;
+    roomManager.handleRequestRespawn(room, player);
+  }, { expectObject: false });
+
   on('changeMap', (payload) => {
     if (!currentRoomCode) return;
     const room = roomManager.rooms.get(currentRoomCode);

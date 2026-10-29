@@ -554,6 +554,7 @@ export class LoopAndInputMethods {
       }
 
       if (e.button === 0) {
+        if (!this.alive) return;
         this.isMouseDown = true;
         this.attemptShoot();
       } else if (e.button === 2) {

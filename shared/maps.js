@@ -18,12 +18,20 @@ import { CYBER_CITADEL_MAP } from './maps/cyberCitadel.js';
 import { CARGO_DOCK_MAP } from './maps/cargoDock.js';
 import { DESERT_OUTPOST_MAP } from './maps/desertOutpost.js';
 import { NEON_LAB_MAP } from './maps/neonLab.js';
+import { CROSSFIRE_PLUS_MAP } from './maps/crossfirePlus.js';
+import { FY_ICEWORLD_MAP } from './maps/fyIceworld.js';
+import { KILLHOUSE_CQB_MAP } from './maps/killhouseCqb.js';
+import { ARENA_DUEL_MAP } from './maps/arenaDuel.js';
 
 export const MAPS = {
     cyber_citadel: CYBER_CITADEL_MAP,
     cargo_dock: CARGO_DOCK_MAP,
     desert_outpost: DESERT_OUTPOST_MAP,
     neon_lab: NEON_LAB_MAP,
+    crossfire_plus: CROSSFIRE_PLUS_MAP,
+    fy_iceworld: FY_ICEWORLD_MAP,
+    killhouse_cqb: KILLHOUSE_CQB_MAP,
+    arena_duel: ARENA_DUEL_MAP,
 };
 
 // Precompute AABB bounds (`minX`, `maxX`, `minY`, `maxY`, `minZ`, `maxZ`) on every obstacle
@@ -35,7 +43,16 @@ for (const map of Object.values(MAPS)) {
     }
 }
 
-export const MAP_ORDER = ['cyber_citadel', 'cargo_dock', 'desert_outpost', 'neon_lab'];
+export const MAP_ORDER = [
+    'cyber_citadel',
+    'cargo_dock',
+    'desert_outpost',
+    'neon_lab',
+    'crossfire_plus',
+    'fy_iceworld',
+    'killhouse_cqb',
+    'arena_duel',
+];
 export const DEFAULT_MAP_ID = 'cyber_citadel';
 
 export function getMapConfig(mapId) {
@@ -55,6 +72,10 @@ export {
     CARGO_DOCK_MAP as CARGO_DOCK,
     DESERT_OUTPOST_MAP as DESERT_OUTPOST,
     NEON_LAB_MAP as NEON_LAB,
+    CROSSFIRE_PLUS_MAP as CROSSFIRE_PLUS,
+    FY_ICEWORLD_MAP as FY_ICEWORLD,
+    KILLHOUSE_CQB_MAP as KILLHOUSE_CQB,
+    ARENA_DUEL_MAP as ARENA_DUEL,
     createStairs,
     createPerimeterWalls,
     createDoubleDoors,

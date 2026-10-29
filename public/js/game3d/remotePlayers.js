@@ -356,6 +356,11 @@ export class RemotePlayersMethods {
     const renderT = this.snapshots.renderTime(now);
     const out = this._remoteSample;
     let starving = false;
+    const frameIdx = (this._remoteAnimFrame = ((this._remoteAnimFrame || 0) + 1) | 0);
+    const camPos = this.position || this.camera?.position || null;
+    const camYaw = this.yaw || 0;
+    const camFwdX = -Math.sin(camYaw);
+    const camFwdZ = -Math.cos(camYaw);
 
     for (const [id, rp] of this.remotePlayers.entries()) {
       // A killed player stays drawn until the interpolated timeline reaches its death snapshot (no vanishing 100+ ms
@@ -392,7 +397,58 @@ export class RemotePlayersMethods {
 
       const isMoving = rp.smoothedSpeed > 0.35;
       const rigMoveSpeed = rp.smoothedSpeed * 0.032;
-      this.animateHumanoidRig(rp, dt, now, isMoving, rigMoveSpeed);
+
+      const targetProne = rp.prone ? 1 : 0;
+      const targetSlide = (!rp.prone && (rp.sliding || rp.isSliding)) ? 1 : 0;
+      const targetCrouch = (!rp.prone && (rp.crouch || rp.crouching || rp.sliding || rp.isSliding)) ? 1 : 0;
+      const targetLean = Math.max(-1, Math.min(1, Number(rp.lean || 0)));
+      const aimPitch = rp.targetPitch || 0;
+      const targetTorsoPitch = -targetCrouch * 0.18 - targetProne * 1.05 + aimPitch * 0.25;
+      const targetHeadPitch = targetCrouch * 0.16 + targetProne * 0.92 + aimPitch * 0.45;
+      const flashMesh = rp.gunMesh?.userData?.flashMesh;
+      const recentlyFired =
+        Boolean(flashMesh?.visible) ||
+        (rp.lastShotFlashAt > 0 && now - rp.lastShotFlashAt <= 120);
+      const postureSettled =
+        !recentlyFired &&
+        Math.abs((rp.proneBlend || 0) - targetProne) < 0.01 &&
+        Math.abs((rp.slideBlend || 0) - targetSlide) < 0.01 &&
+        Math.abs((rp.crouchBlend || 0) - targetCrouch) < 0.01 &&
+        Math.abs((rp.leanBlend || 0) - targetLean) < 0.01 &&
+        rp._posedWeapon === (rp.currentWeapon || 'rifle') &&
+        Math.abs((rp.upperBodyGroup?.rotation?.x || 0) - targetTorsoPitch) < 0.025 &&
+        Math.abs((rp.headGroup?.rotation?.x || 0) - targetHeadPitch) < 0.015;
+
+      if (rp._cullSalt === undefined) {
+        rp._cullSalt = (this._nextCullSalt = ((this._nextCullSalt || 0) + 1) & 15);
+      }
+
+      let shouldAnimate = true;
+      if (postureSettled && camPos) {
+        const dx = rp.group.position.x - camPos.x;
+        const dz = rp.group.position.z - camPos.z;
+        const distSq = dx * dx + dz * dz;
+        const proj = dx * camFwdX + dz * camFwdZ;
+        // Behind camera (> 6m and dot < -0.25): skip when stationary, or run every 4th frame when moving
+        if (distSq > 36 && proj < 0 && (proj * proj) > 0.0625 * distSq) {
+          shouldAnimate = isMoving && ((frameIdx + rp._cullSalt) & 3) === 0;
+        } else if (distSq > 1444) {
+          // Far away (> 38m): run at half animation rate (every 2nd frame)
+          shouldAnimate = ((frameIdx + rp._cullSalt) & 1) === 0;
+        }
+      }
+
+      if (shouldAnimate) {
+        const animDt = dt + (rp._skippedAnimDt || 0);
+        rp._skippedAnimDt = 0;
+        rp._lastAnimPitch = aimPitch;
+        this.animateHumanoidRig(rp, animDt, now, isMoving, rigMoveSpeed);
+      } else {
+        rp._skippedAnimDt = (rp._skippedAnimDt || 0) + dt;
+        if (flashMesh && flashMesh.visible && now - (rp.lastShotFlashAt || 0) > 55) {
+          flashMesh.visible = false;
+        }
+      }
 
       const isGrounded = rp.onGround !== false && Math.abs(rp.velocity.y) < 0.85;
       const isRemoteCrouching = Boolean(rp.crouch || rp.crouching);

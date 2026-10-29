@@ -8,8 +8,8 @@ import { RoomManager } from '../roomManager.js';
 import { attachGameSocketHandlers } from '../socketHandlers.js';
 import { LanHub } from './hub.js';
 
-export function createHostCore({ send }) {
-  const hub = new LanHub({ send });
+export function createHostCore({ send, sendMany = null }) {
+  const hub = new LanHub({ send, sendMany });
   const roomManager = new RoomManager(hub.io);
   hub.onConnection = (socket) => attachGameSocketHandlers({ socket, roomManager });
   return {

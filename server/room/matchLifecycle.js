@@ -392,7 +392,10 @@ export class MatchLifecycleMethods {
           // Respawn human players whose 3s respawn delay has elapsed & advance reloads
           for (const p of room.players.values()) {
             if (!p.alive && now >= p.respawnAt) {
-              this.respawnPlayer(room, p);
+              if (p.respawnRequested) {
+                p.respawnRequested = false;
+                this.respawnPlayer(room, p);
+              }
             } else if (p.alive && p.reloadingUntil) {
               this.syncPlayerReloadState(p, now);
             }

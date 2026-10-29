@@ -109,6 +109,8 @@ export const deathOverlay = document.getElementById('death-overlay');
 export const deathKillerName = document.getElementById('death-killer-name');
 export const deathWeaponName = document.getElementById('death-weapon-name');
 export const respawnTimerEl = document.getElementById('respawn-timer');
+export const respawnCountdownWrap = document.getElementById('respawn-countdown-wrap');
+export const respawnReadyPrompt = document.getElementById('respawn-ready-prompt');
 export const btnOpenLoadoutDeath = document.getElementById('btn-open-loadout-death');
 
 export const loadoutModal = document.getElementById('loadout-modal');

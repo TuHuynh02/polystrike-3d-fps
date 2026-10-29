@@ -184,6 +184,22 @@
               <span class="map-badge">04</span>
               <span class="map-name">QUANTUM LAB</span>
             </button>
+            <button type="button" class="map-option" data-map="crossfire_plus">
+              <span class="map-badge">05 • CQB</span>
+              <span class="map-name">CROSSFIRE (+)</span>
+            </button>
+            <button type="button" class="map-option" data-map="fy_iceworld">
+              <span class="map-badge">06 • CQB</span>
+              <span class="map-name">ICEWORLD ARENA</span>
+            </button>
+            <button type="button" class="map-option" data-map="killhouse_cqb">
+              <span class="map-badge">07 • CQB</span>
+              <span class="map-name">KILLHOUSE CQB</span>
+            </button>
+            <button type="button" class="map-option" data-map="arena_duel">
+              <span class="map-badge">08 • CQB</span>
+              <span class="map-name">AIM DUEL ARENA</span>
+            </button>
           </div>
 
           <label class="field-label" for="lobby-quality-select">Đồ họa</label>
@@ -218,16 +234,17 @@
           <!-- Bottom Operator Control Dock -->
           <div class="showcase-dock">
             <div class="suit-color-row">
-              <span class="dock-label">MÀU GIÁP:</span>
+              <span class="dock-label">ĐẶC VỤ:</span>
               <div class="color-swatches" id="operator-color-swatches">
-                <button type="button" class="color-swatch active" data-color="0xe5a024" style="--swatch:#e5a024;" title="Ochre"></button>
-                <button type="button" class="color-swatch" data-color="0x4b5320" style="--swatch:#657c3a;" title="Olive"></button>
-                <button type="button" class="color-swatch" data-color="0x38bdf8" style="--swatch:#38bdf8;" title="Cyan"></button>
-                <button type="button" class="color-swatch" data-color="0xef4444" style="--swatch:#ef4444;" title="Crimson"></button>
-                <button type="button" class="color-swatch" data-color="0x94a3b8" style="--swatch:#94a3b8;" title="Slate"></button>
+                <button type="button" class="color-swatch active" data-color="0xe5a024" style="--swatch:#e5a024;" title="Demo 1: Cryzen Hero (Desert Tan)"></button>
+                <button type="button" class="color-swatch" data-color="0xef4444" style="--swatch:#ef4444;" title="Demo 2: Breacher (Kính Goggles)"></button>
+                <button type="button" class="color-swatch" data-color="0x94a3b8" style="--swatch:#94a3b8;" title="Demo 3: Night Ops (Ghost NVG)"></button>
+                <button type="button" class="color-swatch" data-color="0x4b5320" style="--swatch:#657c3a;" title="Demo 4: Woodland Recon"></button>
+                <button type="button" class="color-swatch" data-color="0x38bdf8" style="--swatch:#38bdf8;" title="Spec-Ops Cyan"></button>
               </div>
             </div>
             <div class="showcase-actions-row">
+              <button type="button" id="btn-showcase-poster" class="showcase-btn active">DÁNG POSTER</button>
               <button type="button" id="btn-showcase-walk" class="showcase-btn">ĐI BỘ</button>
               <button type="button" id="btn-showcase-crouch" class="showcase-btn">NGỒI</button>
               <button type="button" id="btn-showcase-fire" class="showcase-btn accent">BẮN THỬ</button>
@@ -553,7 +570,7 @@
       <div class="death-killer">
         <strong id="death-killer-name">Enemy</strong> • <span id="death-weapon-name">VANDAL-AK</span>
       </div>
-      <div class="respawn-text">Hồi sinh sau <strong id="respawn-timer">3</strong>s</div>
+      <div class="respawn-text"><span id="respawn-countdown-wrap">Hồi sinh sau <strong id="respawn-timer">3</strong>s</span><span id="respawn-ready-prompt" class="hidden">SẴN SÀNG — BẤM PHÍM BẤT KỲ HOẶC CLICK ĐỂ HỒI SINH</span></div>
       <div style="margin-top: 14px;">
         <button id="btn-open-loadout-death" type="button" class="btn btn-accent">
           [B] ĐỔI VŨ KHÍ
@@ -706,6 +723,10 @@
             <option value="cargo_dock">Cargo Dockyard</option>
             <option value="desert_outpost">Solar Outpost</option>
             <option value="neon_lab">Quantum Lab</option>
+            <option value="crossfire_plus">Crossfire Plus (+) [CQB]</option>
+            <option value="fy_iceworld">Iceworld Arena [CQB]</option>
+            <option value="killhouse_cqb">Killhouse CQB [CQB]</option>
+            <option value="arena_duel">Aim Duel Arena [CQB]</option>
           </select>
         </div>
 

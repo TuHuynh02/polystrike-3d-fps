@@ -198,6 +198,16 @@ export class CombatSystemMethods {
         shooter.reloadingUntil = 0;
         shooter.reloadWeapon = null;
         shooter.nextShellAt = 0;
+        shooter.reloadInitialAmmo = 0;
+      } else if (
+        shooter.ammo === 1 &&
+        shooter.reloadInitialAmmo === 1 &&
+        shooter.reloadWeapon === weaponId &&
+        now - (shooter.reloadStartedAt || 0) <= 250
+      ) {
+        // Auto-reload packet arrived slightly ahead of the inputBatch carrying the final bullet of the magazine.
+        shooter.reloadInitialAmmo = 0;
+        shooter.reloadingUntil = (shooter.reloadStartedAt || now) + weaponCfg.reloadMs;
       } else {
         return SHOT_REJECT.RELOAD;
       }
@@ -216,6 +226,9 @@ export class CombatSystemMethods {
       shooter.ammoByWeapon[weaponId] = shooter.ammo;
     }
     shooter.reserveAmmo = shooter.reserveAmmoByWeapon?.[weaponId] ?? shooter.reserveAmmo ?? 0;
+    if (shooter.ammo <= 0 && shooter.reserveAmmo > 0 && !(shooter.reloadingUntil > now)) {
+      this.handleReload(room, shooter, weaponId, now, false);
+    }
     return null;
   }
 
@@ -615,10 +628,12 @@ export class CombatSystemMethods {
     victim.reloadingUntil = 0;
     victim.reloadWeapon = null;
     victim.nextShellAt = 0;
+    victim.reloadInitialAmmo = 0;
     victim.invulnerableUntil = 0;
     victim.lastDeathX = victim.x;
     victim.lastDeathZ = victim.z;
     victim.respawnAt = now + MATCH_CONFIG.RESPAWN_DELAY_MS;
+    victim.respawnRequested = false;
 
     const isTdm = room.gameMode === 'tdm';
     let adrenalineHeal = 0;

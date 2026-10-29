@@ -610,7 +610,6 @@ export class CombatEffectsMethods {
     }
 
     if (!isMelee && currentAmmo <= 0) {
-      this.callbacks.onDryFire?.();
       if (reserveAmmo > 0) {
         this.startReload();
       }

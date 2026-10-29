@@ -120,6 +120,8 @@ import {
   deathKillerName,
   deathWeaponName,
   respawnTimerEl,
+  respawnCountdownWrap,
+  respawnReadyPrompt,
   btnOpenLoadoutDeath,
   loadoutModal,
   loadoutPrimaryGrid,
@@ -283,6 +285,64 @@ export function renderLoadoutModal() {
   }
 }
 
+const IGNORED_RESPAWN_KEY_CODES = new Set([
+  'KeyB',
+  'Tab',
+  'Escape',
+  'ShiftLeft',
+  'ShiftRight',
+  'ControlLeft',
+  'ControlRight',
+  'AltLeft',
+  'AltRight',
+  'MetaLeft',
+  'MetaRight',
+  'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12'
+]);
+
+const IGNORED_RESPAWN_KEYS = new Set([
+  'b', 'B', 'Tab', 'Escape', 'Shift', 'Control', 'Alt', 'Meta',
+  'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12'
+]);
+
+export function resetDeathRespawnUi(ready = false) {
+  appState.respawnReady = Boolean(ready);
+  appState.lastRespawnRequestAt = 0;
+  if (appState.respawnRetryTimer) {
+    clearTimeout(appState.respawnRetryTimer);
+    appState.respawnRetryTimer = null;
+  }
+  if (ready) {
+    respawnCountdownWrap?.classList?.add('hidden');
+    respawnReadyPrompt?.classList?.remove('hidden');
+  } else {
+    respawnCountdownWrap?.classList?.remove('hidden');
+    respawnReadyPrompt?.classList?.add('hidden');
+  }
+}
+
+export function requestManualRespawnIfReady() {
+  if (!appState.game?.inMatch || appState.game.alive || !appState.respawnReady) return false;
+  if (deathOverlay?.classList?.contains('hidden')) return false;
+  if (teamLobbyModal && !teamLobbyModal.classList.contains('hidden')) return false;
+  if (matchEndModal && !matchEndModal.classList.contains('hidden')) return false;
+  const now = performance.now();
+  if (appState.lastRespawnRequestAt && now - appState.lastRespawnRequestAt < 180) return false;
+  appState.lastRespawnRequestAt = now;
+  if (pauseModal?.classList?.contains('hidden') && (!loadoutModal || loadoutModal.classList.contains('hidden'))) {
+    appState.game.requestPointerLock?.();
+  }
+  appState.socket?.emit?.('requestRespawn');
+  if (appState.respawnRetryTimer) clearTimeout(appState.respawnRetryTimer);
+  appState.respawnRetryTimer = setTimeout(() => {
+    appState.respawnRetryTimer = null;
+    if (appState.game?.inMatch && !appState.game.alive && appState.respawnReady) {
+      appState.socket?.emit?.('requestRespawn');
+    }
+  }, 120);
+  return true;
+}
+
 export function toggleLoadoutModal(forceOpen = null) {
   if (!appState.game?.inMatch || !loadoutModal) return;
   const isCurrentlyHidden = loadoutModal.classList.contains('hidden');
@@ -295,6 +355,9 @@ export function toggleLoadoutModal(forceOpen = null) {
     appState.game.exitPointerLock?.();
   } else {
     loadoutModal.classList.add('hidden');
+    if (!isCurrentlyHidden && forceOpen === null) {
+      applySelectedLoadoutAndNotify();
+    }
     if (deathOverlay?.classList?.contains('hidden') && matchEndModal?.classList?.contains('hidden')) {
       appState.game.requestPointerLock?.();
     }
@@ -683,10 +746,13 @@ export function leaveActiveRoom(opts = {}) {
   appState.playerStateCache.clear();
   appState.lastScoreboardSig = '';
   appState.hudCache.leaderText = '';
+  appState.hudCache.leaderId = null;
+  appState.hudCache.teamScoreVisible = false;
   if (appState.respawnInterval) {
     clearInterval(appState.respawnInterval);
     appState.respawnInterval = null;
   }
+  resetDeathRespawnUi(false);
   if (appState.nextMatchInterval) {
     clearInterval(appState.nextMatchInterval);
     appState.nextMatchInterval = null;
@@ -871,6 +937,7 @@ if (btnSaveLoadout) {
     applySelectedLoadoutAndNotify();
     toggleLoadoutModal(false);
     showToast(`🎒 ${ WEAPONS[appState.selectedLoadout.primary]?.name || appState.selectedLoadout.primary }`);
+    requestManualRespawnIfReady();
   });
 }
 
@@ -883,6 +950,32 @@ if (btnOpenLoadoutDeath) {
 if (btnHudLoadout) {
   btnHudLoadout.addEventListener('click', () => {
     toggleLoadoutModal(true);
+  });
+}
+
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('keydown', (e) => {
+    if (!appState.game?.inMatch || appState.game.alive || !appState.respawnReady) return;
+    if (e.repeat) return;
+    if (IGNORED_RESPAWN_KEY_CODES.has(e.code) || IGNORED_RESPAWN_KEYS.has(e.key)) return;
+    if (deathOverlay?.classList?.contains('hidden')) return;
+    if (loadoutModal && !loadoutModal.classList.contains('hidden')) return;
+    if (pauseModal && !pauseModal.classList.contains('hidden')) return;
+    if (teamLobbyModal && !teamLobbyModal.classList.contains('hidden')) return;
+    if (matchEndModal && !matchEndModal.classList.contains('hidden')) return;
+    requestManualRespawnIfReady();
+  });
+
+  window.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    if (!appState.game?.inMatch || appState.game.alive || !appState.respawnReady) return;
+    if (deathOverlay?.classList?.contains('hidden')) return;
+    if (loadoutModal && !loadoutModal.classList.contains('hidden')) return;
+    if (pauseModal && !pauseModal.classList.contains('hidden')) return;
+    if (teamLobbyModal && !teamLobbyModal.classList.contains('hidden')) return;
+    if (matchEndModal && !matchEndModal.classList.contains('hidden')) return;
+    if (e.target?.closest?.('#btn-open-loadout-death, #loadout-modal, #pause-modal, #btn-hud-loadout')) return;
+    requestManualRespawnIfReady();
   });
 }
 
@@ -974,10 +1067,28 @@ if (operatorColorSwatches) {
   });
 }
 
+const btnShowcasePoster = typeof document !== 'undefined' ? document.getElementById('btn-showcase-poster') : null;
+if (btnShowcasePoster) {
+  btnShowcasePoster.addEventListener('click', () => {
+    const poster = appState.game.toggleLobbyPosterPose?.();
+    btnShowcasePoster.classList.toggle('active', Boolean(poster));
+    if (poster) {
+      appState.game.toggleLobbyWalk?.(false);
+      appState.game.toggleLobbyCrouch?.(false);
+      btnShowcaseWalk?.classList.remove('active');
+      btnShowcaseCrouch?.classList.remove('active');
+    }
+  });
+}
+
 if (btnShowcaseWalk) {
   btnShowcaseWalk.addEventListener('click', () => {
     const walking = appState.game.toggleLobbyWalk();
     btnShowcaseWalk.classList.toggle('active', walking);
+    if (walking) {
+      appState.game.toggleLobbyPosterPose?.(false);
+      btnShowcasePoster?.classList.remove('active');
+    }
   });
 }
 
@@ -985,6 +1096,10 @@ if (btnShowcaseCrouch) {
   btnShowcaseCrouch.addEventListener('click', () => {
     const crouching = appState.game.toggleLobbyCrouch();
     btnShowcaseCrouch.classList.toggle('active', crouching);
+    if (crouching) {
+      appState.game.toggleLobbyPosterPose?.(false);
+      btnShowcasePoster?.classList.remove('active');
+    }
   });
 }
 

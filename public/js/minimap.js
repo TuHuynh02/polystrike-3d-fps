@@ -25,7 +25,7 @@ export class TacticalMinimap {
 
     this.mapConfig = getMapConfig(DEFAULT_MAP_ID);
     this.arenaHalfSize = this.mapConfig.arenaHalfSize || 60;
-    this.lastRenderAt = 0;
+    this.lastRenderAt = -Infinity;
     this.lastCoordsUpdateAt = 0;
     this.lastCoordStr = '';
     this.gunfireBlips = new Map();
@@ -69,13 +69,29 @@ export class TacticalMinimap {
       ? getMapConfig(mapIdOrConfig)
       : (mapIdOrConfig || getMapConfig(DEFAULT_MAP_ID));
 
+    if (this.canvas && this.canvas.width > 0 && this.size === this._bakedSize && this.canvas.width !== this.size) {
+      this.size = this.canvas.width;
+    }
+
     this.mapConfig = cfg;
     this.arenaHalfSize = cfg.arenaHalfSize || 60;
-    this.lastRenderAt = 0;
+    this.lastRenderAt = -Infinity;
     if (this.gunfireBlips) this.gunfireBlips.clear();
 
     if (this.mapLabelEl && cfg.name) {
       this.mapLabelEl.textContent = cfg.name;
+    }
+
+    if (
+      cfg.id &&
+      this._bakedMapId === cfg.id &&
+      this._bakedSize === this.size &&
+      this._bakedObstaclesRef === (cfg.obstacles || null)
+    ) {
+      if (this.ctx && this.staticCanvas) {
+        this.ctx.drawImage(this.staticCanvas, 0, 0, this.size, this.size);
+      }
+      return;
     }
 
     this.bakeStaticObstacles();
@@ -85,6 +101,10 @@ export class TacticalMinimap {
     if (!this.staticCtx) return;
     const ctx = this.staticCtx;
     const s = this.size;
+    if (this.staticCanvas && (this.staticCanvas.width !== s || this.staticCanvas.height !== s)) {
+      this.staticCanvas.width = s;
+      this.staticCanvas.height = s;
+    }
     const span = this.arenaHalfSize * 2;
     const scale = s / span;
 
@@ -185,6 +205,10 @@ export class TacticalMinimap {
       ctx.restore?.();
     }
 
+    this._bakedMapId = this.mapConfig?.id || null;
+    this._bakedSize = s;
+    this._bakedObstaclesRef = this.mapConfig?.obstacles || null;
+
     if (this.ctx && this.staticCanvas) {
       this.ctx.drawImage(this.staticCanvas, 0, 0, s, s);
     }
@@ -213,11 +237,18 @@ export class TacticalMinimap {
     const now = typeof nowArg === 'number'
       ? nowArg
       : (typeof stateOrGame.now === 'number' ? stateOrGame.now : performance.now());
-    if (now - this.lastRenderAt < 33) return; // Cap radar redraw at ~30 FPS for zero overhead
+    if (now >= this.lastRenderAt && now - this.lastRenderAt < 33) return; // Cap radar redraw at ~30 FPS for zero overhead
     this.lastRenderAt = now;
+
+    if (this.canvas && this.canvas.width > 0 && this.size === this._bakedSize && this.canvas.width !== this.size) {
+      this.size = this.canvas.width;
+    }
 
     const ctx = this.ctx;
     const s = this.size;
+    if (this._bakedSize !== s || this._bakedMapId !== (this.mapConfig?.id || null)) {
+      this.bakeStaticObstacles();
+    }
 
     const pickups = stateOrGame.pickupMeshes || stateOrGame.pickups;
     const droppedWeapons = stateOrGame.droppedWeaponMeshes || stateOrGame.droppedWeapons;
@@ -277,6 +308,30 @@ export class TacticalMinimap {
       }
     }
 
+    // 3c. Render Teammates on Radar in TDM (Cyan Dots)
+    const gameMode = stateOrGame.gameMode;
+    const localTeam = stateOrGame.localTeam;
+    if (remotePlayers && typeof remotePlayers.values === 'function') {
+      ctx.fillStyle = '#38bdf8';
+      ctx.strokeStyle = '#090d16';
+      ctx.lineWidth = 1.1;
+      for (const rp of remotePlayers.values()) {
+        if (!rp || !rp.alive) continue;
+        const isTeammate = Boolean(
+          rp.isTeammate ?? (gameMode === 'tdm' && localTeam && rp.team && rp.team === localTeam)
+        );
+        if (!isTeammate) continue;
+        const rpPos = rp.group ? rp.group.position : rp;
+        if (!rpPos || typeof rpPos.x !== 'number') continue;
+        const rx = this.clampBlipCoord(this.worldToCanvasX(rpPos.x), 4);
+        const ry = this.clampBlipCoord(this.worldToCanvasY(rpPos.z), 4);
+        ctx.beginPath();
+        ctx.arc(rx, ry, 3.4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+
     // 4. Render Local Player Position & Viewing Direction Cone
     if (localPos) {
       const px = this.clampBlipCoord(this.worldToCanvasX(localPos.x), 5);
@@ -286,21 +341,27 @@ export class TacticalMinimap {
       const lookAngle = Math.atan2(dirZ, dirX);
       const halfFov = 0.52; // ~60 deg radar cone
 
-      // Translucent FOV cone
-      const coneGrad = ctx.createRadialGradient(px, py, 2, px, py, 34);
-      coneGrad.addColorStop(0, 'rgba(56, 189, 248, 0.42)');
-      coneGrad.addColorStop(1, 'rgba(56, 189, 248, 0.0)');
-      ctx.fillStyle = coneGrad;
+      if (!this._fovConeGrad || this._fovConeGradCtx !== ctx) {
+        const coneGrad = ctx.createRadialGradient(0, 0, 2, 0, 0, 34);
+        coneGrad.addColorStop(0, 'rgba(56, 189, 248, 0.42)');
+        coneGrad.addColorStop(1, 'rgba(56, 189, 248, 0.0)');
+        this._fovConeGrad = coneGrad;
+        this._fovConeGradCtx = ctx;
+      }
+
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.rotate(lookAngle);
+
+      // Translucent FOV cone (drawn in local player coordinate space around (0, 0))
+      ctx.fillStyle = this._fovConeGrad;
       ctx.beginPath();
-      ctx.moveTo(px, py);
-      ctx.arc(px, py, 34, lookAngle - halfFov, lookAngle + halfFov);
+      ctx.moveTo(0, 0);
+      ctx.arc(0, 0, 34, -halfFov, halfFov);
       ctx.closePath();
       ctx.fill();
 
       // Player directional arrow / chevron
-      ctx.save();
-      ctx.translate(px, py);
-      ctx.rotate(lookAngle);
       ctx.fillStyle = '#38bdf8';
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 1.3;

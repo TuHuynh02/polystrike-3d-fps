@@ -4,7 +4,8 @@
 import { createHostCore } from '../../server/lan/hostCore.js';
 
 const core = createHostCore({
-  send: (peerId, channel, text) => postMessage({ t: 'send', peerId, channel, text })
+  send: (peerId, channel, text) => postMessage({ t: 'send', peerId, channel, text }),
+  sendMany: (peerIds, channel, text) => postMessage({ t: 'sendMany', peerIds, channel, text })
 });
 
 self.onmessage = (event) => {

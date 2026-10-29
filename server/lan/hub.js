@@ -89,11 +89,13 @@ class LanServerSocket {
 export class LanHub {
   /**
    * @param {{ send: (peerId: string, channel: 'rel'|'unrel', text: string) => void,
+   *           sendMany?: (peerIds: string[], channel: 'rel'|'unrel', text: string) => void,
    *           onConnection?: (socket: LanServerSocket) => void,
    *           onPeerGone?: (peerId: string) => void }} options
    */
-  constructor({ send, onConnection = null, onPeerGone = null } = {}) {
+  constructor({ send, sendMany = null, onConnection = null, onPeerGone = null } = {}) {
     this.send = send;
+    this.sendMany = typeof sendMany === 'function' ? sendMany : null;
     this.onConnection = onConnection;
     this.onPeerGone = onPeerGone;
     this.sockets = new Map(); // peerId -> LanServerSocket
@@ -162,6 +164,27 @@ export class LanHub {
       if (!members || members.size === 0) return;
       const { args } = splitAck(rest); // broadcasts carry no acknowledgement
       const text = encodeEmit(event, args);
+      if (this.sendMany) {
+        let firstPeer = null;
+        let peerList = null;
+        for (const peerId of members) {
+          if (peerId === exceptPeerId) continue;
+          const socket = this.sockets.get(peerId);
+          if (!socket || socket.disconnected) continue;
+          if (firstPeer === null) {
+            firstPeer = peerId;
+          } else {
+            if (!peerList) peerList = [firstPeer];
+            peerList.push(peerId);
+          }
+        }
+        if (peerList) {
+          this.sendMany(peerList, channel, text);
+        } else if (firstPeer !== null) {
+          this.send(firstPeer, channel, text);
+        }
+        return;
+      }
       for (const peerId of members) {
         if (peerId === exceptPeerId) continue;
         const socket = this.sockets.get(peerId);

@@ -115,4 +115,60 @@ describe('LAN host core (real RoomManager behind a LanHub)', () => {
     await sleep(30);
     assert.equal(harness.core.hub.sockets.has('flood'), false, 'sustained flooding disconnects the socket (rate limiter)');
   });
+
+  it('batches multi-peer room broadcasts via sendMany while using send for single-recipient emits', async () => {
+    const { LanHub } = await import('../server/lan/hub.js');
+    const singleCalls = [];
+    const batchCalls = [];
+    const hub = new LanHub({
+      send: (peerId, channel, text) => singleCalls.push({ peerId, channel, text }),
+      sendMany: (peerIds, channel, text) => batchCalls.push({ peerIds: [...peerIds], channel, text })
+    });
+
+    const s1 = hub.connect('p1');
+    const s2 = hub.connect('p2');
+    const s3 = hub.connect('p3');
+    s1.join('ROOM1');
+
+    // Only 1 member in ROOM1 -> uses send() without allocating a batch list
+    hub.io.to('ROOM1').volatile.emit('stateUpdate', { t: 100 });
+    assert.equal(singleCalls.length, 1);
+    assert.equal(singleCalls[0].peerId, 'p1');
+    assert.equal(batchCalls.length, 0);
+
+    // 3 members in ROOM1 -> uses sendMany() once with all 3 peerIds
+    s2.join('ROOM1');
+    s3.join('ROOM1');
+    hub.io.to('ROOM1').volatile.emit('stateUpdate', { t: 120 });
+    assert.equal(batchCalls.length, 1);
+    assert.deepEqual(batchCalls[0].peerIds, ['p1', 'p2', 'p3']);
+    assert.equal(batchCalls[0].channel, CH_UNREL);
+
+    // socket.to('ROOM1') excludes sender ('p1') and batches remaining 2 recipients ('p2', 'p3')
+    s1.to('ROOM1').emit('playerDamaged', { victimId: 'p2', hp: 80 });
+    assert.equal(batchCalls.length, 2);
+    assert.deepEqual(batchCalls[1].peerIds, ['p2', 'p3']);
+    assert.equal(batchCalls[1].channel, CH_REL);
+
+    // Verify createHostCore forwards sendMany to its LanHub
+    const { createHostCore } = await import('../server/lan/hostCore.js');
+    const coreSingle = [];
+    const coreBatch = [];
+    const core = createHostCore({
+      send: (peerId, channel, text) => coreSingle.push({ peerId, channel, text }),
+      sendMany: (peerIds, channel, text) => coreBatch.push({ peerIds: [...peerIds], channel, text })
+    });
+    try {
+      core.peerOpen('host');
+      core.peerOpen('g1');
+      core.peerMessage('host', encodeEmit('joinRoom', [{ name: 'H', mode: 'private', roomCode: 'LAN123', mapId: 'cyber_citadel' }]));
+      core.peerMessage('g1', encodeEmit('joinRoom', [{ name: 'G', mode: 'private', roomCode: 'LAN123' }]));
+      await sleep(60);
+      assert.ok(coreBatch.length >= 1, 'createHostCore must use sendMany when broadcasting to 2+ peers in a room');
+      assert.deepEqual(coreBatch[0].peerIds, ['host', 'g1']);
+    } finally {
+      core.stop();
+    }
+  });
 });
+

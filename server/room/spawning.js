@@ -379,7 +379,9 @@ export class SpawningMethods {
     player.reloadingUntil = 0;
     player.reloadWeapon = null;
     player.nextShellAt = 0;
+    player.reloadInitialAmmo = 0;
     player.respawnAt = 0;
+    player.respawnRequested = false;
     player.invulnerableUntil = now + protectionMs;
     player.ammoByWeapon = createInitialAmmoMap();
     player.reserveAmmoByWeapon = createInitialReserveAmmoMap();
@@ -426,4 +428,21 @@ export class SpawningMethods {
     this.sendMoveAck(player, true); // owner learns the new epoch + authoritative spawn state
     this.sendSelfState(player, now, true);
   }
+
+  handleRequestRespawn(room, player, now = Date.now()) {
+    if (!room || !player) return { ok: false, error: 'invalid_context' };
+    if (room.state !== 'PLAYING') return { ok: false, error: 'match_not_active' };
+    if (player.alive) return { ok: false, error: 'already_alive' };
+    const respawnAt = player.respawnAt || 0;
+    if (now < respawnAt) {
+      if (now >= respawnAt - 250) {
+        player.respawnRequested = true;
+      }
+      return { ok: false, error: 'respawn_cooldown' };
+    }
+    player.respawnRequested = false;
+    this.respawnPlayer(room, player);
+    return { ok: true };
+  }
 }
+

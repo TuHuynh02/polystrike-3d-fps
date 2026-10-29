@@ -173,6 +173,7 @@ import {
   fetchActiveRooms,
   leaveActiveRoom,
   renderTeamWaitingLobby,
+  resetDeathRespawnUi,
   startLanGuestInPlace,
   syncLobbyWeaponSelectionUi
 } from './lobbyAndModals.js';
@@ -397,6 +398,8 @@ onActiveSocket('roomJoined', (data) => {
   sbRoomCode.textContent = `#${ appState.activeRoomCode }`;
   pauseInviteUrl.value = shareUrl;
   hudKillLimit.textContent = String(data.killLimit || (appState.currentRoomGameMode === 'tdm' ? 30 : 20));
+  appState.hudCache.leaderText = '';
+  appState.hudCache.leaderId = null;
   hudTimer.textContent = formatTime(data.timeRemaining || 300);
   updateTeamScoreHud(data.teamScores || { alpha: 0, bravo: 0 });
 
@@ -440,6 +443,7 @@ onActiveSocket('roomJoined', (data) => {
   lobbyScreen.classList.add('hidden');
   pauseModal.classList.add('hidden');
   loadoutModal?.classList.add('hidden');
+  resetDeathRespawnUi(false);
   deathOverlay.classList.add('hidden');
   matchEndModal.classList.add('hidden');
 
@@ -521,6 +525,7 @@ onActiveSocket('mapChanged', (data) => {
   const me = appState.latestPlayers.find((p) => p.id === appState.game.localId);
   if (me && appState.game.inMatch) {
     if (appState.respawnInterval) clearInterval(appState.respawnInterval);
+    resetDeathRespawnUi(false);
     deathOverlay.classList.add('hidden');
     damageOverlay.style.opacity = '0';
     appState.game.spawnLocalPlayer(me);
@@ -600,7 +605,15 @@ onActiveSocket('playerLeft', (data) => {
 });
 
 onActiveSocket('stateUpdate', (snapshot) => {
-  if (!appState.game.inMatch) return;
+  if (!appState.game.inMatch || !snapshot) return;
+  if (
+    typeof snapshot.t === 'number' &&
+    Number.isFinite(snapshot.t) &&
+    appState.game.snapshots &&
+    !appState.game.snapshots.acceptsEnvelope(snapshot.t)
+  ) {
+    return;
+  }
   const remSec = Math.max(0, Math.floor(snapshot.timeRemaining || 0));
   if (appState.hudCache.timerSec !== remSec) {
     appState.hudCache.timerSec = remSec;
@@ -613,9 +626,10 @@ onActiveSocket('stateUpdate', (snapshot) => {
     updateTeamScoreHud(snapshot.teamScores);
   }
   // Snapshot entries are hot-only between refreshes: rebuild complete player objects (shared/playerDelta.js)
-  appState.latestPlayers = appState.playerStateCache.merge(snapshot.players);
+  const latestPlayers = appState.playerStateCache.merge(snapshot.players);
+  appState.latestPlayers = latestPlayers;
   // `snapshot.t` = server timestamp (ms) of this tick: remote players are drawn by snapshot interpolation
-  appState.game.syncPlayersState(appState.latestPlayers, snapshot.t);
+  appState.game.syncPlayersState(latestPlayers, snapshot.t);
   if (Array.isArray(snapshot.barrels)) {
     appState.game.syncBarrels?.(snapshot.barrels);
   }
@@ -625,17 +639,22 @@ onActiveSocket('stateUpdate', (snapshot) => {
   if (Array.isArray(snapshot.droppedWeapons)) {
     appState.game.syncDroppedWeapons(snapshot.droppedWeapons);
   }
-  if (Array.isArray(snapshot.activeGrenades)) {
+  if (
+    Array.isArray(snapshot.activeGrenades) &&
+    (snapshot.activeGrenades.length > 0 || appState.game.activeGrenadeMeshes?.size > 0)
+  ) {
     appState.game.syncGrenades?.(snapshot.activeGrenades);
   }
 
   // Find leader and local stats
   let topPlayer = null;
-  for (const p of appState.latestPlayers) {
+  const localId = appState.game.localId;
+  for (let i = 0; i < latestPlayers.length; i++) {
+    const p = latestPlayers[i];
     if (!topPlayer || p.kills > topPlayer.kills) {
       topPlayer = p;
     }
-    if (p.id === appState.game.localId) {
+    if (p.id === localId) {
       if (p.team && p.team !== appState.currentLocalTeam) {
         appState.currentLocalTeam = p.team;
         appState.game.setTeamState?.(appState.currentRoomGameMode, appState.currentLocalTeam);
@@ -665,15 +684,30 @@ onActiveSocket('stateUpdate', (snapshot) => {
   }
 
   if (appState.currentRoomGameMode !== 'tdm' && topPlayer) {
-    const nextLeaderText = `👑 ${ topPlayer.name } (${ topPlayer.kills }/${ hudKillLimit.textContent })`;
-    if (appState.hudCache.leaderText !== nextLeaderText) {
-      appState.hudCache.leaderText = nextLeaderText;
-      hudLeader.textContent = nextLeaderText;
+    const cache = appState.hudCache;
+    if (
+      !cache.leaderText ||
+      cache.leaderId !== topPlayer.id ||
+      cache.leaderKills !== topPlayer.kills ||
+      cache.leaderName !== topPlayer.name
+    ) {
+      cache.leaderId = topPlayer.id;
+      cache.leaderKills = topPlayer.kills;
+      cache.leaderName = topPlayer.name;
+      const nextLeaderText = `👑 ${ topPlayer.name } (${ topPlayer.kills }/${ hudKillLimit.textContent })`;
+      if (cache.leaderText !== nextLeaderText) {
+        cache.leaderText = nextLeaderText;
+        hudLeader.textContent = nextLeaderText;
+      }
     }
   }
 
   if (!scoreboardModal.classList.contains('hidden')) {
-    renderScoreboard(appState.latestPlayers);
+    const now = performance.now();
+    if (now - (appState.lastScoreboardRenderAt || 0) >= 200) {
+      appState.lastScoreboardRenderAt = now;
+      renderScoreboard(latestPlayers);
+    }
   }
 });
 
@@ -856,6 +890,8 @@ onActiveSocket('killEvent', (data) => {
   if (data.victimId === appState.game.localId) {
     appState.game.alive = false;
     appState.game.isAiming = false;
+    appState.game.isMouseDown = false;
+    appState.game.isRightMouseDown = false;
     appState.localMultiKillCount = 0;
     appState.lastLocalKillAt = 0;
     appState.lastGrenadeThrowAt = 0;
@@ -871,18 +907,25 @@ onActiveSocket('killEvent', (data) => {
     deathKillerName.textContent = data.killerName;
     deathWeaponName.textContent = data.weaponName || (data.weapon === 'grenade' ? 'FRAG GRENADE' : data.weapon);
     deathOverlay.classList.remove('hidden');
+    appState.game.exitPointerLock?.();
 
-    let rem = 3;
-    respawnTimerEl.textContent = String(rem);
+    const delayMs = MATCH_CONFIG.RESPAWN_DELAY_MS || 3000;
+    const readyAt = performance.now() + delayMs;
+    resetDeathRespawnUi(false);
+    respawnTimerEl.textContent = String(Math.ceil(delayMs / 1000));
     if (appState.respawnInterval) clearInterval(appState.respawnInterval);
     appState.respawnInterval = setInterval(() => {
-      rem = Math.max(0, rem - 1);
-      respawnTimerEl.textContent = String(rem);
-      if (rem <= 0 && appState.respawnInterval) {
-        clearInterval(appState.respawnInterval);
-        appState.respawnInterval = null;
+      const remMs = Math.max(0, readyAt - performance.now());
+      const remSec = Math.ceil(remMs / 1000);
+      respawnTimerEl.textContent = String(remSec);
+      if (remMs <= 0) {
+        if (appState.respawnInterval) {
+          clearInterval(appState.respawnInterval);
+          appState.respawnInterval = null;
+        }
+        resetDeathRespawnUi(true);
       }
-    }, 1000);
+    }, 100);
   }
 });
 
@@ -908,7 +951,9 @@ onActiveSocket('playerRespawned', (data) => {
       clearInterval(appState.respawnInterval);
       appState.respawnInterval = null;
     }
+    resetDeathRespawnUi(false);
     deathOverlay.classList.add('hidden');
+    loadoutModal?.classList.add('hidden');
     damageOverlay.style.opacity = '0';
     appState.localMultiKillCount = 0;
     appState.lastLocalKillAt = 0;
@@ -925,6 +970,9 @@ onActiveSocket('playerRespawned', (data) => {
     updateHpHud(data.hp);
     updateGrenadeHud(data.grenades ?? data.grenadeCount ?? 1);
     triggerSpawnProtectionHud(data.spawnProtectionMs || MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500);
+    if (pauseModal?.classList?.contains('hidden') && matchEndModal?.classList?.contains('hidden')) {
+      appState.game.requestPointerLock?.();
+    }
   }
 });
 
@@ -1081,6 +1129,7 @@ onActiveSocket('matchEnded', (data) => {
     clearInterval(appState.respawnInterval);
     appState.respawnInterval = null;
   }
+  resetDeathRespawnUi(false);
   appState.game.isAiming = false;
   clearSpawnProtectionHud();
   clearAdrenalineHealHud();
@@ -1088,6 +1137,7 @@ onActiveSocket('matchEnded', (data) => {
   if (weaponPickupPrompt) weaponPickupPrompt.classList.add('hidden');
   appState.game.exitPointerLock();
   pauseModal.classList.add('hidden');
+  loadoutModal?.classList.add('hidden');
   deathOverlay.classList.add('hidden');
   sniperScope.classList.add('hidden');
   opticScope?.classList.add('hidden');
@@ -1153,6 +1203,7 @@ onActiveSocket('matchStarted', (data) => {
     clearInterval(appState.respawnInterval);
     appState.respawnInterval = null;
   }
+  resetDeathRespawnUi(false);
   if (appState.nextMatchInterval) {
     clearInterval(appState.nextMatchInterval);
     appState.nextMatchInterval = null;
@@ -1164,8 +1215,11 @@ onActiveSocket('matchStarted', (data) => {
   if (data.killLimit) {
     hudKillLimit.textContent = String(data.killLimit);
   }
+  appState.hudCache.leaderText = '';
+  appState.hudCache.leaderId = null;
   updateTeamScoreHud(data.teamScores || { alpha: 0, bravo: 0 });
   teamLobbyModal?.classList.add('hidden');
+  loadoutModal?.classList.add('hidden');
   matchEndModal.classList.add('hidden');
   deathOverlay.classList.add('hidden');
   hudScreen.classList.remove('hidden');

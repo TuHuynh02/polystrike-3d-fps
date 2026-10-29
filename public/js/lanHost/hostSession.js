@@ -34,7 +34,14 @@ async function startCore(onSend) {
       worker.onerror = null;
       worker.onmessage = (e) => {
         const m = e.data;
-        if (m?.t === 'send') onSend(m.peerId, m.channel, m.text);
+        if (m?.t === 'send') {
+          onSend(m.peerId, m.channel, m.text);
+        } else if (m?.t === 'sendMany' && Array.isArray(m.peerIds)) {
+          const { peerIds, channel, text } = m;
+          for (let i = 0; i < peerIds.length; i++) {
+            onSend(peerIds[i], channel, text);
+          }
+        }
       };
       return {
         kind: 'worker',
@@ -48,7 +55,14 @@ async function startCore(onSend) {
     }
   }
   const { createHostCore } = await import('../../server/lan/hostCore.js');
-  const core = createHostCore({ send: onSend });
+  const core = createHostCore({
+    send: onSend,
+    sendMany: (peerIds, channel, text) => {
+      for (let i = 0; i < peerIds.length; i++) {
+        onSend(peerIds[i], channel, text);
+      }
+    }
+  });
   return {
     kind: 'main-thread',
     peerOpen: core.peerOpen,

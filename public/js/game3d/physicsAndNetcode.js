@@ -80,6 +80,7 @@ export class PhysicsAndNetcodeMethods {
     this.reloadingUntil = 0;
     this.nextShellAt = 0;
     this.pumpCycleUntil = 0;
+    this.isMouseDown = false;
     this.isRightMouseDown = false;
     this.adsToggleActive = false;
     this.isAiming = false;
@@ -215,7 +216,16 @@ export class PhysicsAndNetcodeMethods {
 
     const now = performance.now();
     const activeCfg = WEAPONS[this.currentWeapon];
-    if (this.isMouseDown && activeCfg?.automatic && this.isPointerLocked && !this.pendingFire) {
+    const canShootWhileReloading = Boolean(
+      activeCfg?.shellByShell && (this.ammoByWeapon[this.currentWeapon] ?? 0) > 0
+    );
+    if (
+      this.isMouseDown &&
+      activeCfg?.automatic &&
+      this.isPointerLocked &&
+      !this.pendingFire &&
+      (this.reloadingUntil <= now || canShootWhileReloading)
+    ) {
       this.attemptShoot();
     }
     const f = this.cmdFields;
@@ -269,13 +279,17 @@ export class PhysicsAndNetcodeMethods {
       f.shotSeq = 0;
       const pending = this.pendingFire;
       if (pending) {
-        if (pending.weapon !== this.currentWeapon || !this.alive) {
+        const blockedByReload =
+          !pending.autoReloaded &&
+          this.reloadingUntil > now &&
+          !(WEAPONS[this.currentWeapon]?.shellByShell && (this.ammoByWeapon[this.currentWeapon] ?? 0) > 0);
+        if (pending.weapon !== this.currentWeapon || !this.alive || blockedByReload) {
           if (pending.ammoConsumed) {
             const wCfg = WEAPONS[pending.weapon];
             const maxMag = wCfg ? wCfg.magSize : 30;
             this.ammoByWeapon[pending.weapon] = Math.min(maxMag, (this.ammoByWeapon[pending.weapon] ?? 0) + 1);
           }
-          this.pendingFire = null; // switched weapons / died before the shot could leave
+          this.pendingFire = null; // switched weapons / died / reloading before the shot could leave
         } else if (
           isFireIntervalOk(
             nextSimMs,
@@ -763,10 +777,24 @@ export class PhysicsAndNetcodeMethods {
 
     if (this.equipUntil && now >= this.equipUntil) {
       this.equipUntil = 0;
+      if (
+        !cfg?.isMelee &&
+        !cfg?.infiniteAmmo &&
+        (this.ammoByWeapon[this.currentWeapon] ?? 0) <= 0 &&
+        (this.reserveAmmoByWeapon[this.currentWeapon] ?? 0) > 0 &&
+        !(this.reloadingUntil > now)
+      ) {
+        this.startReload();
+      }
     }
 
     // Automatic firing when holding mouse down with automatic weapon
-    if (this.isMouseDown && cfg.automatic && this.isPointerLocked) {
+    if (
+      this.isMouseDown &&
+      cfg.automatic &&
+      this.isPointerLocked &&
+      (this.reloadingUntil <= now || (cfg.shellByShell && (this.ammoByWeapon[this.currentWeapon] ?? 0) > 0))
+    ) {
       this.attemptShoot();
     }
 

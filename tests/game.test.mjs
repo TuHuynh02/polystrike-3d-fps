@@ -527,11 +527,15 @@ describe('1. Room Creation, Joining, Sanitization & Map Synchronization', () => 
     assert.equal(room.state, 'PLAYING', 'a solo match must not end just because nobody else is there');
     assert.equal(io.roomEmitted.some((e) => e.event === 'matchEnded'), false);
 
-    // Respawn after death runs through the normal tick path
+    // Respawn after death waits for manual requestRespawn once the 3s cooldown has elapsed
     player.alive = false;
     player.hp = 0;
+    player.respawnAt = Date.now() + 1500;
+    assert.equal(rm.handleRequestRespawn(room, player).ok, false, 'cannot respawn before 3s cooldown elapses');
     player.respawnAt = Date.now() - 1;
     rm.tick(0.04);
+    assert.equal(player.alive, false, 'tick() must not auto-respawn without manual requestRespawn');
+    assert.equal(rm.handleRequestRespawn(room, player).ok, true);
     assert.equal(player.alive, true);
     assert.equal(player.hp, MATCH_CONFIG.MAX_HP);
 
@@ -1508,10 +1512,12 @@ describe('4. Weapon Shooting, Hit Detection, Kill/Respawn, Grenades & Match Win'
     game.updateRemotePlayers(0.016, 1000);
     assert.equal(rpVictim.group.visible, false);
 
-    // Let the 3s respawn delay elapse and run a server tick -> the victim respawns with full HP & spawn protection
+    // Let the 3s respawn delay elapse -> victim waits for manual requestRespawn, then respawns with full HP & spawn protection
     victim.respawnAt = Date.now() - 1;
     rm.tick(0.04);
-    assert.equal(victim.alive, true, 'Victim must respawn after respawnAt delay');
+    assert.equal(victim.alive, false, 'Victim must wait for manual requestRespawn after 3s delay');
+    assert.equal(rm.handleRequestRespawn(room, victim).ok, true);
+    assert.equal(victim.alive, true, 'Victim must respawn upon requestRespawn after respawnAt delay');
     assert.equal(victim.hp, MATCH_CONFIG.MAX_HP, 'Respawned victim must have 100 HP');
     assert.ok(victim.invulnerableUntil > Date.now(), 'Respawned victim must receive spawn protection shield');
   });
@@ -1610,14 +1616,16 @@ describe('4. Weapon Shooting, Hit Detection, Kill/Respawn, Grenades & Match Win'
     assert.equal(killer.weapon, 'lmg');
     assert.equal(killer.ammo, 55);
 
-    // Advance victim respawn timer and run tick() -> victim respawns with full HP & spawn protection
+    // Advance victim respawn timer -> victim respawns on manual requestRespawn with full HP & spawn protection
     victim.respawnAt = Date.now() - 10;
     rm.tick(0.04);
+    assert.equal(victim.alive, false);
+    assert.equal(rm.handleRequestRespawn(room, victim).ok, true);
     assert.equal(victim.alive, true);
     assert.equal(victim.hp, MATCH_CONFIG.MAX_HP);
     assert.ok(victim.invulnerableUntil > Date.now());
     const respawnEvt = io.roomEmitted.find((e) => e.event === 'playerRespawned' && e.payload.playerId === 'victim');
-    assert.ok(respawnEvt, 'Expected playerRespawned event after 3s respawn delay');
+    assert.ok(respawnEvt, 'Expected playerRespawned event after manual requestRespawn');
   });
 
   it('simulates frag grenade physics, wall bouncing, fuse detonation, and LOS-checked AOE damage', () => {
@@ -1886,8 +1894,17 @@ describe('5. Health Pack Pickups, Healing Cap, Elevation Bounds & Cooldown Respa
 // 6. TERRAIN / MAP COLLISION, AABB RAYCASTING & 3D RENDERING INVARIANTS
 // ============================================================================
 describe('6. Terrain/Map Collision, AABB Raycasting, Entity Physics & 3D Rendering Invariants', () => {
-  it('validates all 4 map configurations, precomputed AABBs, spawn points, and health packs', () => {
-    assert.deepEqual(MAP_ORDER, ['cyber_citadel', 'cargo_dock', 'desert_outpost', 'neon_lab']);
+  it('validates all 8 map configurations, precomputed AABBs, spawn points, and health packs', () => {
+    assert.deepEqual(MAP_ORDER, [
+      'cyber_citadel',
+      'cargo_dock',
+      'desert_outpost',
+      'neon_lab',
+      'crossfire_plus',
+      'fy_iceworld',
+      'killhouse_cqb',
+      'arena_duel'
+    ]);
 
     for (const mapId of MAP_ORDER) {
       const cfg = getMapConfig(mapId);
@@ -2817,5 +2834,402 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
     game.cancelGrenadeCooking();
     assert.equal(game.grenadePreviewBeadGroup.visible, false);
   });
+
+  it('caches TacticalMinimap static obstacle bake & FOV gradient, renders TDM teammates in update(), and fast-paths unchanged world entity syncs', () => {
+    const minimap = new TacticalMinimap();
+    let bakeCount = 0;
+    const origBake = minimap.bakeStaticObstacles.bind(minimap);
+    minimap.bakeStaticObstacles = () => {
+      bakeCount++;
+      return origBake();
+    };
+
+    // Calling setMap with the already-baked map ID must skip redundant re-baking
+    const currentId = minimap.mapConfig.id;
+    minimap.setMap(currentId);
+    assert.equal(bakeCount, 0, 'setMap with identical mapId and canvas size must skip bakeStaticObstacles');
+    minimap.setMap('cargo_dock');
+    assert.equal(bakeCount, 1, 'setMap with a new mapId must bakeStaticObstacles once');
+    minimap.setMap('cargo_dock');
+    assert.equal(bakeCount, 1, 'repeating setMap with cargo_dock must not re-bake');
+
+    // Verify FOV radial gradient is created once and reused across frames, and TDM teammate blips draw inside update()
+    let gradCalls = 0;
+    let arcCalls = 0;
+    const origCreateGrad = minimap.ctx.createRadialGradient;
+    const origArc = minimap.ctx.arc;
+    minimap.ctx.createRadialGradient = (...args) => {
+      gradCalls++;
+      return origCreateGrad ? origCreateGrad.apply(minimap.ctx, args) : { addColorStop: () => {} };
+    };
+    minimap.ctx.arc = (...args) => {
+      arcCalls++;
+      return origArc ? origArc.apply(minimap.ctx, args) : undefined;
+    };
+    minimap._fovConeGrad = null;
+
+    const remotePlayers = new Map([
+      ['ally_1', { alive: true, team: 'alpha', isTeammate: true, group: { position: { x: 8, y: 0, z: -8 } } }],
+      ['enemy_1', { alive: true, team: 'bravo', isTeammate: false, group: { position: { x: -8, y: 0, z: 8 } } }]
+    ]);
+
+    try {
+      minimap.update(
+        {
+          inMatch: true,
+          gameMode: 'tdm',
+          localTeam: 'alpha',
+          position: { x: 0, y: 0, z: 0 },
+          yaw: 0,
+          remotePlayers
+        },
+        10
+      );
+      assert.equal(gradCalls, 1, 'first minimap.update at now=10 (<33ms) renders immediately and creates FOV radial gradient');
+      assert.equal(arcCalls, 2, 'minimap.update draws 1 arc for TDM teammate blip + 1 arc for local FOV cone');
+
+      // Resizing the minimap canvas must resize staticCanvas and trigger re-bake on next update
+      minimap.canvas.width = 240;
+      minimap.canvas.height = 240;
+      minimap.update(
+        {
+          inMatch: true,
+          gameMode: 'tdm',
+          localTeam: 'alpha',
+          position: { x: 4, y: 0, z: -4 },
+          yaw: 0.5,
+          remotePlayers
+        },
+        60
+      );
+      assert.equal(minimap.staticCanvas.width, 240, 'staticCanvas must resize when minimap canvas dimensions change');
+      assert.equal(bakeCount, 2, 'canvas resize must re-bake static obstacles onto resized offscreen canvas');
+      assert.equal(gradCalls, 1, 'subsequent minimap.update reuses cached FOV radial gradient');
+      assert.equal(arcCalls, 4);
+    } finally {
+      minimap.ctx.createRadialGradient = origCreateGrad;
+      minimap.ctx.arc = origArc;
+    }
+
+    // Verify syncDroppedWeapons fast-paths unchanged multi-drop lists and syncBarrels/syncPickups clear on []
+    const game = createTestGame3D();
+    let addDropCalls = 0;
+    const origAddDrop = game.addDroppedWeapon.bind(game);
+    game.addDroppedWeapon = (d) => {
+      addDropCalls++;
+      return origAddDrop(d);
+    };
+    const dropList = [
+      { id: 'dw_1', weapon: 'rifle', x: 3, y: 0, z: 4, ammo: 20, reserveAmmo: 60 },
+      { id: 'dw_2', weapon: 'smg', x: -3, y: 0, z: -4, ammo: 18, reserveAmmo: 72 }
+    ];
+    game.syncDroppedWeapons(dropList);
+    assert.equal(addDropCalls, 2);
+    game.syncDroppedWeapons(dropList);
+    assert.equal(addDropCalls, 2, 'repeated syncDroppedWeapons with unchanged multi-drop list must fast-path without re-adding');
+    game.syncDroppedWeapons([]);
+    assert.equal(game.droppedWeaponMeshes.size, 0);
+
+    game.syncBarrels([{ id: 'b_1', x: 2, y: 0, z: 2, hp: 60, maxHp: 60, exploded: false }]);
+    assert.equal(game.barrelMeshes.size, 1);
+    game.syncBarrels([]);
+    assert.equal(game.barrelMeshes.size, 0, 'syncBarrels([]) must clear existing barrel meshes');
+
+    game.syncPickups([{ id: 'pk_1', type: 'health', x: 4, y: 0, z: 4, active: true }]);
+    assert.equal(game.pickupMeshes.size, 1);
+    game.syncPickups([]);
+    assert.equal(game.pickupMeshes.size, 0, 'syncPickups([]) must clear existing pickup meshes');
+  });
+
+  it('enforces reload firing lockouts (except shotgun with ammo > 0), auto-reloads on empty magazine, and plays no sound when out of ammo', () => {
+    let dryFireCalls = 0;
+    let localShotCalls = 0;
+    let reloadStartCalls = 0;
+    let reloadCancelCalls = 0;
+
+    const game = createTestGame3D({
+      onDryFire: () => { dryFireCalls++; },
+      onLocalShot: () => { localShotCalls++; },
+      onReloadStart: () => { reloadStartCalls++; },
+      onReloadCancel: () => { reloadCancelCalls++; }
+    });
+    game.inMatch = true;
+    game.alive = true;
+    game.isPointerLocked = true;
+    game.equipUntil = 0;
+
+    // 1. Out of magazine ammo (0) with reserve ammo (> 0) -> auto-reloads and plays NO sound
+    game.currentWeapon = 'rifle';
+    game.ammoByWeapon.rifle = 0;
+    game.reserveAmmoByWeapon.rifle = 60;
+    game.reloadingUntil = 0;
+    game.attemptShoot();
+    assert.equal(dryFireCalls, 0, 'Empty magazine with reserve ammo must not play dry-fire sound');
+    assert.equal(localShotCalls, 0, 'Empty magazine must not play gunshot sound');
+    assert.equal(reloadStartCalls, 1, 'Empty magazine with reserve ammo must auto-trigger reload');
+    assert.ok(game.reloadingUntil > 0, 'Rifle must now be reloading');
+
+    // 2. Completely out of ammo (0 / 0) -> plays NO sound and does not reload
+    game.reloadingUntil = 0;
+    game.ammoByWeapon.rifle = 0;
+    game.reserveAmmoByWeapon.rifle = 0;
+    game.attemptShoot();
+    assert.equal(dryFireCalls, 0, 'Completely empty weapon (0/0) must not play any sound');
+    assert.equal(localShotCalls, 0, 'Completely empty weapon (0/0) must not play gunshot sound');
+    assert.equal(reloadStartCalls, 1, 'Completely empty weapon (0/0) cannot start reload');
+
+    // 3. Cannot shoot while reloading a non-shotgun weapon (even with bullets in mag during tactical reload)
+    game.ammoByWeapon.rifle = 15;
+    game.reserveAmmoByWeapon.rifle = 60;
+    game.startReload();
+    assert.ok(game.reloadingUntil > performance.now(), 'Tactical reload started');
+    game.lastShotAt = 0;
+    game.attemptShoot();
+    assert.equal(localShotCalls, 0, 'Non-shotgun weapon must not fire while reloading');
+    assert.equal(game.pendingFire, null, 'No pendingFire may be queued while reloading a magazine weapon');
+
+    // 4. Shotgun (shellByShell) CAN interrupt reload and fire if currentAmmo > 0, but NOT if currentAmmo === 0
+    game.switchWeapon('shotgun');
+    game.equipUntil = 0;
+    game.ammoByWeapon.shotgun = 0;
+    game.reserveAmmoByWeapon.shotgun = 16;
+    game.startReload();
+    assert.ok(game.reloadingUntil > performance.now(), 'Shotgun shell reload started at 0 ammo');
+    game.lastShotAt = 0;
+    game.attemptShoot();
+    assert.equal(localShotCalls, 0, 'Shotgun with 0 loaded shells cannot interrupt reload to fire');
+
+    // Load 2 shells into shotgun while still reloading -> shooting interrupts reload and fires immediately
+    game.ammoByWeapon.shotgun = 2;
+    game.lastShotAt = 0;
+    game.attemptShoot();
+    assert.equal(reloadCancelCalls, 1, 'Shotgun with >=1 shell must cancel reload when firing');
+    assert.equal(game.reloadingUntil, 0, 'Shotgun reload state must be cleared on interrupt shot when shells remain');
+    assert.equal(localShotCalls, 1, 'Shotgun interrupt shot must fire immediately');
+    assert.equal(game.ammoByWeapon.shotgun, 1, 'Shotgun shell consumed');
+  });
+
+  it('preserves 50Hz LAN tickMs (20ms) and 25Hz Render tickMs (40ms) across SnapshotInterpolator.configure and clear()', async () => {
+    const { SnapshotInterpolator } = await import('../public/js/snapshotBuffer.js');
+    const interp = new SnapshotInterpolator();
+
+    // Default Render 25Hz (40ms)
+    assert.equal(interp.jitter.intervalMs, 40);
+
+    // Configure for 50Hz LAN
+    interp.configure({ tickRate: 50, tickMs: 20, interpMinMs: 35, interpInitialMs: 50 });
+    assert.equal(interp.jitter.defaultIntervalMs, 20);
+    assert.equal(interp.jitter.intervalMs, 20);
+    assert.equal(interp.jitter.minMs, 35);
+    assert.equal(interp.jitter.initialMs, 50);
+    assert.equal(interp.delayMs, 50);
+
+    // Clearing between matches in a LAN session preserves the 20ms defaultIntervalMs
+    interp.clear();
+    assert.equal(interp.jitter.intervalMs, 20);
+    assert.equal(interp.delayMs, 50);
+  });
+
+  it('accepts final magazine round when auto-reload arrives ahead of inputBatch and auto-reloads on server when mag hits 0', () => {
+    const { rm, io } = createTestRoomManager();
+    const { room, player: shooter } = rm.addHumanPlayer(
+      { id: 'final_round_shooter' },
+      { name: 'FinalRound', mode: 'private', weapon: 'rifle', loadout: { primary: 'rifle', secondary: 'pistol', melee: 'knife' } }
+    );
+    const { player: target } = rm.addHumanPlayer(
+      { id: 'final_round_target' },
+      { name: 'Target', roomCode: room.code }
+    );
+
+    const now0 = Date.now();
+    shooter.invulnerableUntil = 0;
+    target.invulnerableUntil = 0;
+    placeServerSide(shooter, 0, 0, -16);
+    shooter.yaw = 0;
+    shooter.pitch = 0;
+    rm.resetPlayerMovement(shooter, now0);
+    placeServerSide(target, 0, 0, -22);
+    rm.resetPlayerMovement(target, now0);
+    recordPlayerSnapshot(target, now0);
+
+    // 1. Simulate browser ordering: shooter has 1 bullet left, attemptShoot triggers onReloadStart BEFORE inputBatch is flushed
+    shooter.ammo = 1;
+    shooter.ammoByWeapon.rifle = 1;
+    shooter.reserveAmmo = 60;
+    shooter.reserveAmmoByWeapon.rifle = 60;
+
+    const reloadRequests = [];
+    const game = createTestGame3D({
+      onReloadStart: (wId) => reloadRequests.push(wId)
+    });
+    game.localId = shooter.id;
+    game.inMatch = true;
+    game.alive = true;
+    game.isPointerLocked = true;
+    game.resetNetcode(shooter.moveEpoch);
+    game.setSpreadSeed(shooter.spreadSeed);
+    game.spawnLocalPlayer({
+      x: shooter.x,
+      y: shooter.y,
+      z: shooter.z,
+      yaw: 0,
+      weapon: 'rifle',
+      spreadSeed: shooter.spreadSeed,
+      loadout: shooter.loadout
+    });
+    game.equipUntil = 0;
+    game.ammoByWeapon.rifle = 1;
+    game.reserveAmmoByWeapon.rifle = 60;
+    game.lastShotAt = -1000;
+    game.onGround = true;
+    game.isAiming = true;
+    game.pitch = Math.atan2(1.21 - 1.62, 6);
+    game.yaw = 0;
+
+    // Client pulls trigger on final bullet -> queues pendingFire AND triggers auto-reload
+    game.attemptShoot();
+    assert.equal(game.ammoByWeapon.rifle, 0);
+    assert.equal(reloadRequests.length, 1);
+
+    // Server receives reload BEFORE the inputBatch containing the final shot
+    rm.handleReload(room, shooter, reloadRequests[0], now0 + 10);
+    assert.ok(shooter.reloadingUntil > now0, 'Server started reload');
+
+    // Next frame, client steps fixed physics and sends inputBatch with BTN.FIRE for the final bullet
+    for (let i = 0; i < 6 && game.pendingFire; i++) {
+      game.advanceFixedPhysics(1 / 60);
+    }
+    const batch = game.prediction.buildBatch();
+    assert.ok(batch && batch.cmds.some((c) => (c.btn & 64) !== 0));
+    shooter.moveCredit = 1;
+    recordPlayerSnapshot(target, now0 + 25);
+    rm.handleInputBatch(room, shooter, batch, now0 + 25);
+    rm.processPlayerInputs(room, shooter, now0 + 25);
+
+    const rejected = io.roomEmitted.find((e) => e.roomId === shooter.id && e.event === 'shotRejected');
+    assert.equal(rejected, undefined, 'Final round of magazine must NOT be rejected with SHOT_REJECT.RELOAD');
+    assert.equal(shooter.ammo, 0, 'Server must consume the final round of the magazine');
+    assert.ok(target.hp < 100, 'Final round of the magazine must deal damage to the target');
+    assert.equal(
+      shooter.reloadingUntil,
+      (shooter.reloadStartedAt || (now0 + 10)) + WEAPONS.rifle.reloadMs,
+      'Server reload duration must use full empty-magazine reloadMs after final round is consumed'
+    );
+
+    // 2. When server consumes the final bullet directly (inputBatch arrives before reload), server auto-starts reload
+    shooter.reloadingUntil = 0;
+    shooter.reloadWeapon = null;
+    shooter.ammo = 1;
+    shooter.ammoByWeapon.rifle = 1;
+    shooter.reserveAmmo = 30;
+    shooter.reserveAmmoByWeapon.rifle = 30;
+    shooter.lastShotAt = 0;
+    rm.handleShoot(room, shooter, {
+      weapon: 'rifle',
+      origin: { x: shooter.x, y: 1.5, z: shooter.z },
+      dir: { x: 0, y: 0, z: -1 }
+    }, now0 + 5000);
+    assert.equal(shooter.ammo, 0);
+    assert.ok(shooter.reloadingUntil > now0 + 5000, 'Server must automatically start reload when magazine reaches 0 with reserve > 0');
+  });
+
+  it('verifies manual respawn boundary latching, spawnLocalPlayer isMouseDown reset, and [B] close vs #btn-save-loadout respawn', async () => {
+    const { rm } = createTestRoomManager();
+    const { room, player: victim } = rm.addHumanPlayer(
+      { id: 'respawn_edge_p1' },
+      { name: 'RespawnTester', mode: 'private' }
+    );
+
+    const now0 = Date.now();
+    victim.alive = false;
+    victim.hp = 0;
+    victim.respawnAt = now0 + 3000;
+    victim.respawnRequested = false;
+
+    // 1. Early requestRespawn (>250ms before respawnAt) is rejected and does NOT latch respawnRequested
+    const earlyRes = rm.handleRequestRespawn(room, victim, now0 + 1000);
+    assert.equal(earlyRes.ok, false);
+    assert.equal(earlyRes.error, 'respawn_cooldown');
+    assert.equal(victim.respawnRequested, false);
+
+    // 2. Boundary requestRespawn (within 250ms of respawnAt due to client/server timer jitter) latches respawnRequested for tick()
+    const nearRes = rm.handleRequestRespawn(room, victim, now0 + 2850);
+    assert.equal(nearRes.ok, false);
+    assert.equal(victim.respawnRequested, true, 'Request within 250ms of respawnAt should latch respawnRequested');
+    victim.respawnAt = Date.now() - 5;
+    rm.tick(0.04);
+    assert.equal(victim.alive, true, 'tick() must honor latched respawnRequested once respawnAt is reached');
+    assert.equal(victim.respawnRequested, false);
+
+    // 3. spawnLocalPlayer resets isMouseDown = false so holding/clicking mouse to respawn does not fire a shot on spawn
+    const game = createTestGame3D();
+    game.isMouseDown = true;
+    game.spawnLocalPlayer({ x: 0, y: 0, z: 0, yaw: 0, weapon: 'rifle' });
+    assert.equal(game.isMouseDown, false, 'spawnLocalPlayer must reset isMouseDown to false');
+
+    // 4. UI modal contract: pressing [B] (toggleLoadoutModal()) while dead closes loadout modal WITHOUT respawning;
+    //    only clicking #btn-save-loadout (or pressing a valid key / clicking death overlay) emits requestRespawn
+    const { appState } = await import('../public/js/ui/userPrefsAndKeys.js');
+    const { loadoutModal, deathOverlay, pauseModal, matchEndModal, teamLobbyModal } = await import('../public/js/ui/domElements.js');
+    const { toggleLoadoutModal, resetDeathRespawnUi, requestManualRespawnIfReady } = await import('../public/js/ui/lobbyAndModals.js');
+
+    const ensureClassList = (el, hidden = true) => {
+      if (!el) return;
+      const set = new Set(hidden ? ['hidden'] : []);
+      el.classList = {
+        add: (...cls) => cls.forEach((c) => set.add(c)),
+        remove: (...cls) => cls.forEach((c) => set.delete(c)),
+        contains: (c) => set.has(c),
+        toggle: (c, force) => {
+          const next = force !== undefined ? Boolean(force) : !set.has(c);
+          if (next) set.add(c);
+          else set.delete(c);
+          return next;
+        }
+      };
+    };
+    ensureClassList(loadoutModal, true);
+    ensureClassList(deathOverlay, false);
+    ensureClassList(pauseModal, true);
+    ensureClassList(matchEndModal, true);
+    ensureClassList(teamLobbyModal, true);
+
+    let respawnEmits = 0;
+    const prevGame = appState.game;
+    const prevSocket = appState.socket;
+    try {
+      appState.game = {
+        inMatch: true,
+        alive: false,
+        exitPointerLock: () => {},
+        requestPointerLock: () => {},
+        setLobbyWeapon: () => {},
+        setLoadout: () => {}
+      };
+      appState.socket = {
+        emit: (ev) => {
+          if (ev === 'requestRespawn') respawnEmits++;
+        }
+      };
+      resetDeathRespawnUi(true);
+
+      // Open loadout modal with [B], then close it with [B] (toggleLoadoutModal() with forceOpen = null)
+      toggleLoadoutModal(true);
+      assert.equal(loadoutModal.classList.contains('hidden'), false);
+      toggleLoadoutModal();
+      assert.equal(loadoutModal.classList.contains('hidden'), true);
+      assert.equal(respawnEmits, 0, 'Closing #loadout-modal via [B] must NOT emit requestRespawn');
+
+      // Explicit manual respawn trigger (used by #btn-save-loadout, valid keydown, or death-overlay click) emits requestRespawn
+      assert.equal(requestManualRespawnIfReady(), true);
+      assert.equal(respawnEmits, 1, 'requestManualRespawnIfReady must emit requestRespawn when respawnReady is true');
+      resetDeathRespawnUi(false);
+    } finally {
+      appState.game = prevGame;
+      appState.socket = prevSocket;
+    }
+  });
 });
+
+
 

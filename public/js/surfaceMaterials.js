@@ -59,6 +59,42 @@ export const SURFACE_PLANS = {
     crate: S('metal_plate', 1.6, 'obs', 0.55, 0.45),
     pillar: S('metal_plate', 2, 0x8782b0, 0.46, 0.55),
     step: S('metal_plate', 1.6, 0x7b78a6, 0.46, 0.55)
+  },
+  crossfire_plus: {
+    floor: S('concrete_floor_worn_001', 3.5, 0x8e98a8, 0.88, 0.04),
+    wall: S('concrete_block_wall', 2.2, 0x9ca5b4, 0.88, 0.04),
+    platform: S('metal_plate', 2, 0x929dad, 0.52, 0.48),
+    container: S('rusty_metal_02', 2, 'obs', 0.55, 0.45),
+    crate: S('metal_plate', 1.6, 'obs', 0.58, 0.42),
+    pillar: S('concrete_block_wall', 2.2, 0xa89b8c, 0.85, 0.06),
+    step: S('metal_plate', 1.6, 0x828e9e, 0.5, 0.5)
+  },
+  fy_iceworld: {
+    floor: S('concrete_floor_worn_001', 3.5, 0xa8c5da, 0.78, 0.10),
+    wall: S('concrete_block_wall', 2.2, 0xb8d4e8, 0.82, 0.08),
+    platform: S('metal_plate', 2, 0x96bad4, 0.5, 0.48),
+    container: S('metal_plate', 2, 'obs', 0.5, 0.5),
+    crate: S('metal_plate', 1.6, 'obs', 0.55, 0.45),
+    pillar: S('concrete_block_wall', 2.2, 0xbce0f5, 0.8, 0.1),
+    step: S('metal_plate', 1.6, 0x8cb0cc, 0.5, 0.5)
+  },
+  killhouse_cqb: {
+    floor: S('concrete_floor_worn_001', 3.5, 0x969490, 0.9, 0.03),
+    wall: S('red_brick', 2.2, 0xb39c82, 0.88, 0.03),
+    platform: S('rusty_metal_02', 2, 0x9c8e80, 0.58, 0.42),
+    container: S('rusty_metal_02', 2, 'obs', 0.55, 0.45),
+    crate: S('rusty_metal_02', 1.6, 'obs', 0.62, 0.35),
+    pillar: S('concrete_block_wall', 2.2, 0xa2988e, 0.88, 0.04),
+    step: S('metal_plate', 1.6, 0x8a8680, 0.52, 0.48)
+  },
+  arena_duel: {
+    floor: S('concrete_floor_worn_001', 3.5, 0x8e829c, 0.84, 0.08),
+    wall: S('metal_plate', 2.2, 0x9c88ac, 0.52, 0.48),
+    platform: S('metal_plate', 2, 0xa28cb4, 0.48, 0.52),
+    container: S('metal_plate', 2, 'obs', 0.48, 0.52),
+    crate: S('metal_plate', 1.6, 'obs', 0.56, 0.44),
+    pillar: S('concrete_block_wall', 2.2, 0xa892b8, 0.82, 0.08),
+    step: S('metal_plate', 1.6, 0x8c7a9e, 0.48, 0.52)
   }
 };
 

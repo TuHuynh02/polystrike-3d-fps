@@ -120,7 +120,11 @@ export function batchBoneScope(scopeRoot, boneScopeId, stopNodes, primaryMesh = 
   const byMat = new Map();
   const meshesToRemove = [];
   const groupsToCheck = [];
-  const outlineKey = `outline_rig_v2_${boneScopeId}`;
+  const baseScopeId = boneScopeId.replace(/_(v[1234]_[a-z]+)$/, '');
+  const sharesBaseOutline =
+    baseScopeId !== 'chest' &&
+    (baseScopeId !== 'head' || boneScopeId.endsWith('_v4_recon'));
+  const outlineKey = `outline_rig_v2_${sharesBaseOutline ? baseScopeId : boneScopeId}`;
   const needOutlineGeo = withOutline || !RIG_GEO_CACHE.has(outlineKey);
   const allOutlineEntries = needOutlineGeo ? [] : null;
   const staticBatchMat = getStaticRigVColorMaterial();
