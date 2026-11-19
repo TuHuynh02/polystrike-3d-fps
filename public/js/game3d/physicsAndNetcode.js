@@ -48,6 +48,13 @@ import { getAssetManager } from '../assets.js';
 import { applyPbrToSlots, revertPbrSlots, surfaceSetsForMap } from '../surfaceMaterials.js';
 import { CRATE_MODEL_NAMES } from '../arenaProps.js';
 import { applyWeaponAssetOverride, isWeaponOverrideEnabled, measureWeaponGroup } from '../weaponAssetOverrides.js';
+import { refreshCs2WeaponEnvMap, resetCs2ViewmodelParts } from '../weapons/cs2WeaponGlb.js';
+import { resetFpsArmsPose, updateFpsArmsReloadPose } from '../weapons/fpsArmsRig.js';
+
+function cs2Smoothstep(a, b, x) {
+  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+}
 
 export function shadowTypeFor(kind) {
   if (kind === 'pcfsoft') return THREE.PCFSoftShadowMap;
@@ -85,8 +92,32 @@ export class PhysicsAndNetcodeMethods {
     this.adsToggleActive = false;
     this.isAiming = false;
     this.isSprinting = false;
+    this.barrelHeat = 0;
+    this.inspectUntil = 0;
+    if (this.vmSprings) {
+      for (const s of Object.values(this.vmSprings)) {
+        if (s && typeof s === 'object') {
+          s.x = 0;
+          s.v = 0;
+        }
+      }
+    }
     for (const wId of WEAPON_ORDER) {
-      setWeaponAdsCulling(this.viewmodelMeshes[wId], false);
+      const vm = this.viewmodelMeshes[wId];
+      setWeaponAdsCulling(vm, false);
+      if (vm?.userData?.isCs2Glb) {
+        resetCs2ViewmodelParts(vm);
+      }
+      if (vm?.userData?.activeWeaponMesh) {
+        vm.userData.activeWeaponMesh.rotation.set(0, 0, 0);
+        if (vm.userData.knifePivotBasePos) {
+          vm.userData.activeWeaponMesh.position.copy(vm.userData.knifePivotBasePos);
+        }
+      }
+      if (vm?.userData?.barrelHeatMesh && vm?.userData?.barrelHeatMat) {
+        vm.userData.barrelHeatMat.opacity = 0;
+        vm.userData.barrelHeatMesh.visible = false;
+      }
     }
     this.isSliding = false;
     this._slideTapActive = false;
@@ -345,12 +376,23 @@ export class PhysicsAndNetcodeMethods {
       }
       if (res.slideStarted) {
         this.landingDipVel = Math.min(this.landingDipVel || 0, -1.35);
+        this.vmSpringImpulse?.('jY', -0.45);
+        this.vmSpringImpulse?.('jP', 0.35);
         this.callbacks.onSlide?.();
       }
-      if (res.jumpPadTriggered) this.callbacks.onJumpPad?.(res.jumpPadTriggered);
-      else if (res.jumped) this.callbacks.onJump?.();
+      if (res.jumpPadTriggered) {
+        this.vmSpringImpulse?.('jY', 0.85);
+        this.vmSpringImpulse?.('jP', -0.65);
+        this.callbacks.onJumpPad?.(res.jumpPadTriggered);
+      } else if (res.jumped) {
+        this.vmSpringImpulse?.('jY', 0.48);
+        this.vmSpringImpulse?.('jP', -0.38);
+        this.callbacks.onJump?.();
+      }
       if (res.landed) {
         this.landingDipVel = -2.2 * res.impact;
+        this.vmSpringImpulse?.('jY', -0.75 * res.impact);
+        this.vmSpringImpulse?.('jP', 0.55 * res.impact);
         this.callbacks.onLand?.(res.impact);
       }
     }
@@ -432,6 +474,9 @@ export class PhysicsAndNetcodeMethods {
       this.reloadingUntil = 0;
       this.nextShellAt = 0;
       const activeVm = this.viewmodelMeshes?.[wId];
+      if (activeVm?.userData?.isCs2Glb) {
+        resetCs2ViewmodelParts(activeVm);
+      }
       if (activeVm?.userData?.magMesh && activeVm.userData.magMesh.userData.basePos) {
         activeVm.userData.magMesh.position.copy(activeVm.userData.magMesh.userData.basePos);
       }
@@ -639,6 +684,9 @@ export class PhysicsAndNetcodeMethods {
         this.nextShellAt = 0;
         const wId = this.currentWeapon;
         const activeVm = this.viewmodelMeshes?.[wId];
+        if (activeVm?.userData?.isCs2Glb) {
+          resetCs2ViewmodelParts(activeVm);
+        }
         if (activeVm?.userData?.magMesh && activeVm.userData.magMesh.userData.basePos) {
           activeVm.userData.magMesh.position.copy(activeVm.userData.magMesh.userData.basePos);
         }
@@ -716,6 +764,37 @@ export class PhysicsAndNetcodeMethods {
     return out.kind;
   }
 
+  vmSpringImpulse(key, dv) {
+    const s = this.vmSprings?.[key];
+    if (s) {
+      s.v = Math.max(-9, Math.min(9, s.v + dv));
+    }
+  }
+
+  stepVmSprings(dt) {
+    const bank = this.vmSprings;
+    if (!bank) return;
+    const list = this._vmSpringList || (this._vmSpringList = [
+      bank.kZ, bank.kP, bank.kY, bank.kR, bank.swX, bank.swY, bank.jY, bank.jP, bank.bump
+    ]);
+    const clampedDt = Math.min(0.05, Math.max(0, dt));
+    const steps = Math.min(8, Math.max(1, Math.ceil(clampedDt / 0.008)));
+    const h = clampedDt / steps;
+    for (let idx = 0; idx < list.length; idx++) {
+      const s = list[idx];
+      if (!s) continue;
+      for (let i = 0; i < steps; i++) {
+        const acc = -s.k * s.x - s.d * s.v;
+        s.v += acc * h;
+        s.x += s.v * h;
+      }
+      if (Math.abs(s.x) < 1e-5 && Math.abs(s.v) < 1e-5) {
+        s.x = 0;
+        s.v = 0;
+      }
+    }
+  }
+
   updateLocalPhysics(dt) {
     if (!this.inMatch || !this.alive) return;
 
@@ -765,6 +844,9 @@ export class PhysicsAndNetcodeMethods {
         this.reserveAmmoByWeapon[wId] = resAmmo - take;
 
         const activeVm = this.viewmodelMeshes[wId];
+        if (activeVm?.userData?.isCs2Glb) {
+          resetCs2ViewmodelParts(activeVm);
+        }
         if (activeVm?.userData?.magMesh && activeVm.userData.magMesh.userData.basePos) {
           activeVm.userData.magMesh.position.copy(activeVm.userData.magMesh.userData.basePos);
         }
@@ -968,8 +1050,10 @@ export class PhysicsAndNetcodeMethods {
       this.camera.updateProjectionMatrix();
     }
 
-    // Update First-Person Weapon Viewmodel Animation
-    this.recoilOffset = Math.max(0, this.recoilOffset - dt * 0.85);
+    // Update First-Person Weapon Viewmodel Animation + Saltline Second-Order Spring-Damper Bank
+    this.stepVmSprings(dt);
+    this.barrelHeat = Math.max(0, (this.barrelHeat || 0) - dt * 0.34);
+    this.recoilOffset = Math.max(0, this.recoilOffset - dt * 1.15);
     this.boltKickOffset = Math.max(0, this.boltKickOffset - dt * 8.5);
     const swayDecay = Math.exp(-10 * dt);
     this.swayX *= swayDecay;
@@ -992,6 +1076,35 @@ export class PhysicsAndNetcodeMethods {
     const equipProgress = isEquipping ? 1 - (this.equipUntil - now) / this.equipDuration : 1;
     const equipDropY = isEquipping ? (1 - equipProgress) * -0.26 : 0;
 
+    // Cancel active weapon inspect cleanly on combat, ADS, reload, equip, sprint, slide, or menu
+    if ((this.inspectUntil || 0) > now) {
+      const firedSinceInspect = (this.lastShotAt ?? -1000) !== (this._inspectShotBaseline ?? -1000)
+        || Boolean(this.pendingFire)
+        || this.meleeSwingUntil > now;
+      if (
+        !this.alive ||
+        !this.inMatch ||
+        this.inMenu ||
+        isReloading ||
+        this.reloading ||
+        isEquipping ||
+        this.isAiming ||
+        this.isRightMouseDown ||
+        this.isSprinting ||
+        this.isSliding ||
+        this.isCookingGrenade ||
+        this.grenadeThrowUntil > now ||
+        firedSinceInspect
+      ) {
+        this.inspectUntil = 0;
+      }
+    }
+    const isInspecting = (this.inspectUntil || 0) > now;
+    if (!isInspecting && Math.abs(this.viewmodelRig.rotation.x) > Math.PI) {
+      const twoPi = Math.PI * 2;
+      this.viewmodelRig.rotation.x = ((((this.viewmodelRig.rotation.x + Math.PI) % twoPi) + twoPi) % twoPi) - Math.PI;
+    }
+
     // Align 3D weapon optic center (Holo / Red-Dot) directly onto screen center (0, 0) during ADS
     const isAimingSteady =
       this.isAiming &&
@@ -1003,29 +1116,164 @@ export class PhysicsAndNetcodeMethods {
     const isTacSlidePose = this.isSliding && !isAimingSteady && !isReloading;
     const slideRumbleX = isTacSlidePose ? Math.sin(now * 0.048) * 0.0022 * slideSpeedRatio : 0;
     const slideRumbleY = isTacSlidePose ? Math.cos(now * 0.062) * 0.0026 * slideSpeedRatio : 0;
+    const idleBreathFactor = (!isAimingSteady && !isReloading && !isInspecting && !this.isSliding && !this.isSprinting && this.onGround)
+      ? Math.max(0, 1 - horizSpeed * 0.45)
+      : 0;
+    const breathSec = now * 0.001;
+    if (activeVm?.userData?.isCs2Glb) {
+      this._updateCs2ViewmodelPose(
+        activeVm,
+        dt,
+        now,
+        cfg,
+        isReloading,
+        isEquipping,
+        equipProgress,
+        isInspecting,
+        isAimingSteady,
+        isTacSlidePose,
+        slideLateralDot,
+        slideRumbleX,
+        slideRumbleY,
+        idleBreathFactor,
+        breathSec
+      );
+    } else {
+    const breathX = Math.sin(breathSec * 1.35) * 0.0016 * idleBreathFactor;
+    const breathY = (Math.sin(breathSec * 2.7) * 0.0020 + Math.cos(breathSec * 1.35) * 0.0009) * idleBreathFactor;
+    const breathRotX = Math.sin(breathSec * 2.7 - 0.4) * 0.0036 * idleBreathFactor;
+    const breathRotZ = Math.cos(breathSec * 1.35) * 0.0040 * idleBreathFactor;
+
+    let inspectX = 0.205;
+    let inspectY = -0.19;
+    let inspectZ = -0.335;
+    let inspectRotX = 0;
+    let inspectRotY = 0.045;
+    let inspectRotZ = 0;
+    let isKnifeSpinning = false;
+    let knifeTargetRotX = 0;
+    let knifeTargetRotZ = 0;
+    let knifeRingOffY = 0;
+    let knifeRingOffZ = 0;
+    if (isInspecting) {
+      const isKnifeInspect = this.currentWeapon === 'knife';
+      const inspectDur = this.inspectDuration || (isKnifeInspect ? 2200 : 2800);
+      const ip = Math.max(0, Math.min(1, 1 - (this.inspectUntil - now) / inspectDur));
+      if (isKnifeInspect) {
+        isKnifeSpinning = true;
+        if (ip < 0.14) {
+          const u = ip / 0.14;
+          const e = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) * 0.5;
+          inspectX = 0.205 + (0.132 - 0.205) * e;
+          inspectY = -0.19 + (-0.125 - (-0.19)) * e;
+          inspectZ = -0.335 + (-0.295 - (-0.335)) * e;
+          inspectRotX = 0.16 * e;
+          inspectRotY = 0.045 + (0.18 - 0.045) * e;
+          inspectRotZ = -0.14 * e;
+          knifeTargetRotX = 0.22 * Math.sin(e * Math.PI * 0.5);
+          knifeTargetRotZ = 0.06 * e;
+          knifeRingOffY = 0.004 * e;
+          knifeRingOffZ = -0.003 * e;
+        } else if (ip < 0.78) {
+          const u = (ip - 0.14) / 0.64;
+          const e = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) * 0.5;
+          inspectX = 0.132 + Math.sin(u * Math.PI) * 0.010;
+          inspectY = -0.125 + Math.sin(u * Math.PI * 2) * 0.011;
+          inspectZ = -0.295 - Math.sin(u * Math.PI) * 0.010;
+          inspectRotX = 0.16 + Math.sin(u * Math.PI * 2) * 0.045;
+          inspectRotY = 0.18 + Math.sin(u * Math.PI) * 0.05;
+          inspectRotZ = -0.14 + Math.sin(u * Math.PI * 2) * 0.05;
+          knifeTargetRotX = 0.22 * (1 - Math.min(1, u * 4)) - e * Math.PI * 4;
+          knifeTargetRotZ = 0.06 * (1 - u) + Math.sin(u * Math.PI * 2) * 0.08;
+          knifeRingOffY = 0.004 * (1 - u) + Math.sin(u * Math.PI) * 0.012;
+          knifeRingOffZ = -0.003 * (1 - u) - Math.sin(u * Math.PI) * 0.008;
+        } else {
+          const u = (ip - 0.78) / 0.22;
+          const e = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) * 0.5;
+          inspectX = 0.132 + (0.205 - 0.132) * e;
+          inspectY = -0.125 + (-0.19 - (-0.125)) * e;
+          inspectZ = -0.295 + (-0.335 - (-0.295)) * e;
+          inspectRotX = 0.16 * (1 - e) - Math.sin(u * Math.PI) * 0.03 * (1 - u);
+          inspectRotY = 0.18 + (0.045 - 0.18) * e;
+          inspectRotZ = -0.14 * (1 - e);
+          knifeTargetRotX = -Math.PI * 4;
+          knifeTargetRotZ = 0;
+          knifeRingOffY = 0;
+          knifeRingOffZ = 0;
+        }
+      } else {
+        if (ip < 0.22) {
+          const u = ip / 0.22;
+          const e = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) * 0.5;
+          inspectX = 0.205 + (0.055 - 0.205) * e;
+          inspectY = -0.19 + (-0.115 - (-0.19)) * e;
+          inspectZ = -0.335 + (-0.285 - (-0.335)) * e;
+          inspectRotX = 0.16 * e;
+          inspectRotY = 0.045 + (0.86 - 0.045) * e;
+          inspectRotZ = -0.42 * e;
+        } else if (ip < 0.48) {
+          const u = (ip - 0.22) / 0.26;
+          const e = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) * 0.5;
+          inspectX = 0.055 + 0.015 * e;
+          inspectY = -0.115 + Math.sin(u * Math.PI) * 0.009;
+          inspectZ = -0.285 - 0.012 * e;
+          inspectRotX = 0.16 + 0.06 * e;
+          inspectRotY = 0.86 - 0.18 * e;
+          inspectRotZ = -0.42 + 0.24 * e;
+        } else if (ip < 0.78) {
+          const u = (ip - 0.48) / 0.30;
+          const e = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) * 0.5;
+          inspectX = 0.070 + (0.105 - 0.070) * e;
+          inspectY = -0.115 + (-0.132 - (-0.115)) * e + Math.sin(u * Math.PI) * 0.012;
+          inspectZ = -0.297 + (-0.308 - (-0.297)) * e;
+          inspectRotX = 0.22 + (0.08 - 0.22) * e;
+          inspectRotY = 0.68 + (-0.50 - 0.68) * e;
+          inspectRotZ = -0.18 + (0.50 - (-0.18)) * e;
+        } else {
+          const u = (ip - 0.78) / 0.22;
+          const e = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) * 0.5;
+          inspectX = 0.105 + (0.205 - 0.105) * e;
+          inspectY = -0.132 + (-0.19 - (-0.132)) * e;
+          inspectZ = -0.308 + (-0.335 - (-0.308)) * e;
+          inspectRotX = 0.08 * (1 - e);
+          inspectRotY = -0.50 + (0.045 - (-0.50)) * e;
+          inspectRotZ = 0.50 * (1 - e);
+        }
+      }
+    }
+
+    const sp = this.vmSprings;
+    const spHipScale = isAimingSteady ? 0 : 1.0;
+    const spAdsZScale = isAimingSteady ? 0.045 : 1.0;
+    const springPosX = sp ? (sp.swX.x * 0.022 + sp.kY.x * 0.008) * spHipScale : 0;
+    const springPosY = sp ? (sp.swY.x * 0.020 + sp.jY.x * 0.028 - sp.bump.x * 0.016) * spHipScale : 0;
+    const springPosZ = sp ? (sp.kZ.x * 0.068 + sp.bump.x * 0.012) * spAdsZScale : 0;
+
     const targetVmX = isAimingSteady
       ? adsPos.x
-      : (isTacSlidePose ? 0.135 : this.isSprinting ? 0.17 : 0.24) + this.currentLean * 0.03 + slideRumbleX;
+      : (isInspecting ? inspectX : isTacSlidePose ? 0.128 : this.isSprinting ? 0.165 : 0.205) + this.currentLean * 0.03 + slideRumbleX + breathX;
     const targetVmY = (isReloading
-      ? -0.27
+      ? -0.265
       : isAimingSteady
         ? adsPos.y
-        : isTacSlidePose
-          ? -0.172 + slideRumbleY
-          : -0.21) + equipDropY + this.landingDip * (isAimingSteady ? 0 : 0.45);
-    const targetVmZ = isAimingSteady ? adsPos.z : isTacSlidePose ? -0.355 : -0.40;
+        : isInspecting
+          ? inspectY
+          : isTacSlidePose
+            ? -0.162 + slideRumbleY
+            : -0.19) + equipDropY + this.landingDip * (isAimingSteady ? 0 : 0.45) + breathY;
+    const targetVmZ = isAimingSteady ? adsPos.z : isInspecting ? inspectZ : isTacSlidePose ? -0.315 : -0.335;
 
-    const bobAmp = isAimingSteady ? 0 : this.isSprinting ? 1.35 : 0.95;
+    const bobAmp = isAimingSteady ? 0 : isInspecting ? 0.35 : this.isSprinting ? 1.35 : 0.95;
     const bobX = Math.cos(this.weaponBobTime * 0.5) * 0.012 * bobAmp;
     const bobY = Math.abs(Math.sin(this.weaponBobTime)) * 0.014 * bobAmp;
     const swayScale = isAimingSteady ? 0 : 1.0;
-    const recoilZScale = isAimingSteady ? 0.12 : 1.0;
+    const recoilZScale = isAimingSteady ? 0.08 : 1.0;
 
-    const vmPosBlend = 1 - Math.exp(-(isAimingSteady ? 32 : 18) * dt);
-    const vmRotBlend = 1 - Math.exp(-(isAimingSteady ? 32 : 16) * dt);
-    this.viewmodelRig.position.x += (targetVmX + bobX + this.swayX * swayScale - this.viewmodelRig.position.x) * vmPosBlend;
-    this.viewmodelRig.position.y += (targetVmY - bobY + this.swayY * swayScale - this.viewmodelRig.position.y) * vmPosBlend;
-    this.viewmodelRig.position.z += (targetVmZ + this.recoilOffset * recoilZScale - this.viewmodelRig.position.z) * Math.min(1, dt * 28);
+    const vmPosBlend = 1 - Math.exp(-(isAimingSteady ? 34 : isInspecting ? 20 : 18) * dt);
+    const vmRotBlend = 1 - Math.exp(-(isAimingSteady ? 34 : isInspecting ? 22 : 16) * dt);
+    this.viewmodelRig.position.x += (targetVmX + bobX + this.swayX * swayScale + springPosX - this.viewmodelRig.position.x) * vmPosBlend;
+    this.viewmodelRig.position.y += (targetVmY - bobY + this.swayY * swayScale + springPosY - this.viewmodelRig.position.y) * vmPosBlend;
+    this.viewmodelRig.position.z += (targetVmZ + this.recoilOffset * recoilZScale + springPosZ - this.viewmodelRig.position.z) * Math.min(1, dt * (isAimingSteady ? 34 : 28));
 
     const distToAds = Math.hypot(
       this.viewmodelRig.position.x - adsPos.x,
@@ -1035,10 +1283,25 @@ export class PhysicsAndNetcodeMethods {
     const isThroughScopeView = isAimingSteady && !isSniperScoped && distToAds < 0.085;
     setWeaponAdsCulling(activeVm, isThroughScopeView);
 
-    let targetRotX = isAimingSteady ? 0 : this.recoilOffset * 1.15 + (this.swayRotX || 0);
-    let targetRotY = 0;
-    let targetRotZ = isAimingSteady ? 0 : -this.cameraRoll * 0.85 - (this.swayRotY || 0) * 0.35;
-    if (!isAimingSteady) targetRotY += (this.swayRotY || 0);
+    if (activeVm?.userData?.barrelHeatMesh && activeVm?.userData?.barrelHeatMat) {
+      const heatAlpha = isThroughScopeView ? 0 : Math.max(0, ((this.barrelHeat || 0) - 0.18) * 0.58);
+      activeVm.userData.barrelHeatMat.opacity = heatAlpha;
+      activeVm.userData.barrelHeatMesh.visible = heatAlpha > 0.01;
+    }
+
+    const springRotX = (!isAimingSteady && sp) ? (sp.kP.x * 0.115 + sp.jP.x * 0.055 + sp.bump.x * 0.045) : 0;
+    const springRotY = (!isAimingSteady && sp) ? (sp.kY.x * 0.065 + sp.swX.x * 0.045) : 0;
+    const springRotZ = (!isAimingSteady && sp) ? (sp.kR.x * 0.095 - sp.swX.x * 0.032) : 0;
+
+    let targetRotX = isAimingSteady
+      ? 0
+      : (isInspecting ? inspectRotX : this.recoilOffset * 0.85) + springRotX + (this.swayRotX || 0) + breathRotX;
+    let targetRotY = isAimingSteady
+      ? 0
+      : (isInspecting ? inspectRotY : 0.045) + springRotY + (this.swayRotY || 0);
+    let targetRotZ = isAimingSteady
+      ? 0
+      : (isInspecting ? inspectRotZ : 0) - this.cameraRoll * 0.85 + springRotZ - (this.swayRotY || 0) * 0.35 + breathRotZ;
 
     if (isReloading) {
       const reloadPct = Math.max(0, Math.min(1, 1 - (this.reloadingUntil - now) / this.reloadDuration));
@@ -1139,6 +1402,40 @@ export class PhysicsAndNetcodeMethods {
     this.viewmodelRig.rotation.y += (targetRotY - this.viewmodelRig.rotation.y) * vmRotBlend;
     this.viewmodelRig.rotation.z += (targetRotZ - this.viewmodelRig.rotation.z) * vmRotBlend;
 
+    const activeWeaponMesh = activeVm?.userData?.activeWeaponMesh;
+    if (activeWeaponMesh) {
+      if (isKnifeSpinning) {
+        const knifeSpinBlend = 1 - Math.exp(-34 * dt);
+        activeWeaponMesh.rotation.x += (knifeTargetRotX - activeWeaponMesh.rotation.x) * knifeSpinBlend;
+        activeWeaponMesh.rotation.y += (0 - activeWeaponMesh.rotation.y) * vmRotBlend;
+        activeWeaponMesh.rotation.z += (knifeTargetRotZ - activeWeaponMesh.rotation.z) * vmRotBlend;
+        const basePivotPos = activeVm.userData.knifePivotBasePos;
+        if (basePivotPos) {
+          activeWeaponMesh.position.x += (basePivotPos.x - activeWeaponMesh.position.x) * vmPosBlend;
+          activeWeaponMesh.position.y += (basePivotPos.y + knifeRingOffY - activeWeaponMesh.position.y) * vmPosBlend;
+          activeWeaponMesh.position.z += (basePivotPos.z + knifeRingOffZ - activeWeaponMesh.position.z) * vmPosBlend;
+        }
+      } else {
+        if (Math.abs(activeWeaponMesh.rotation.x) > Math.PI) {
+          const twoPi = Math.PI * 2;
+          activeWeaponMesh.rotation.x = ((((activeWeaponMesh.rotation.x + Math.PI) % twoPi) + twoPi) % twoPi) - Math.PI;
+        }
+        activeWeaponMesh.rotation.x += (0 - activeWeaponMesh.rotation.x) * vmRotBlend;
+        activeWeaponMesh.rotation.y += (0 - activeWeaponMesh.rotation.y) * vmRotBlend;
+        activeWeaponMesh.rotation.z += (0 - activeWeaponMesh.rotation.z) * vmRotBlend;
+        if (Math.abs(activeWeaponMesh.rotation.x) < 1e-4) activeWeaponMesh.rotation.x = 0;
+        if (Math.abs(activeWeaponMesh.rotation.y) < 1e-4) activeWeaponMesh.rotation.y = 0;
+        if (Math.abs(activeWeaponMesh.rotation.z) < 1e-4) activeWeaponMesh.rotation.z = 0;
+        const basePivotPos = activeVm.userData.knifePivotBasePos;
+        if (basePivotPos) {
+          activeWeaponMesh.position.x += (basePivotPos.x - activeWeaponMesh.position.x) * vmPosBlend;
+          activeWeaponMesh.position.y += (basePivotPos.y - activeWeaponMesh.position.y) * vmPosBlend;
+          activeWeaponMesh.position.z += (basePivotPos.z - activeWeaponMesh.position.z) * vmPosBlend;
+        }
+      }
+    }
+    }
+
     if (now - this.lastShotAt > 50) {
       if (activeVm?.userData?.flashMesh) {
         activeVm.userData.flashMesh.visible = false;
@@ -1173,6 +1470,380 @@ export class PhysicsAndNetcodeMethods {
         this.lastInputBatchAt = now;
         this.callbacks.onInputBatch?.(batch);
       }
+    }
+  }
+
+  /**
+   * 1P viewmodel pose & procedural animation driver for MIT CS2 GLB weapons (`ak47.glb`, `awp.glb`, `knife.glb`).
+   * Zero per-frame allocations; applies exact CS2 hip/ADS poses, crisp recoil kick, figure-8 walk bob,
+   * smoothstep reload mag drop (`magNode` + `handLNode`/`armLNode` + `boltNode`), and KeyF inspect
+   * (broadside rifle/AWP inspect; isolated `Knife` blade twirl keeping `HandR`/`ArmR` upright).
+   */
+  _updateCs2ViewmodelPose(
+    activeVm,
+    dt,
+    now,
+    cfg,
+    isReloading,
+    isEquipping,
+    equipProgress,
+    isInspecting,
+    isAimingSteady,
+    isTacSlidePose,
+    slideLateralDot,
+    slideRumbleX,
+    slideRumbleY,
+    idleBreathFactor,
+    breathSec
+  ) {
+    const ud = activeVm.userData;
+    const sceneEnv = this.scene?.environment || null;
+    if (ud._boundEnvMap !== sceneEnv) {
+      refreshCs2WeaponEnvMap(activeVm, sceneEnv);
+      ud._boundEnvMap = sceneEnv;
+    }
+
+    const cs2Pose = ud.cs2Pose || {
+      hip: { pos: [0.29, -0.14, -0.36], rot: [0.02, 0.02, 0.03] },
+      ads: { pos: [0, -0.07064, -0.12], rot: [0.03266, 0, 0] }
+    };
+    const hipPos = cs2Pose.hip.pos;
+    const hipRot = cs2Pose.hip.rot;
+    const adsPosArr = cs2Pose.ads?.pos || hipPos;
+    const adsRotArr = cs2Pose.ads?.rot || hipRot;
+    const isKnifeCs2 = this.currentWeapon === 'knife';
+    const useAdsPose = isAimingSteady && !isKnifeCs2;
+
+    const motion = useAdsPose ? 0.25 : 1.0;
+    const br = useAdsPose ? 0.12 : (idleBreathFactor > 0 ? idleBreathFactor : 0.25);
+    const brY = 0.0015 * Math.sin(breathSec * 1.3) * br;
+    const brRX = 0.0025 * Math.sin(breathSec * 1.3 + 0.6) * br;
+    const brRZ = 0.0015 * Math.sin(breathSec * 0.9) * br;
+
+    const bobAmp = useAdsPose ? 0.22 : isInspecting ? 0.28 : this.isSprinting ? 1.25 : 0.95;
+    const bobX = Math.sin(this.weaponBobTime * 0.5) * 0.0085 * bobAmp;
+    const bobY = -(0.5 + 0.5 * Math.cos(this.weaponBobTime)) * 0.0072 * bobAmp;
+
+    const sp = this.vmSprings;
+    const spHipScale = useAdsPose ? 0.15 : 1.0;
+    const spAdsZScale = useAdsPose ? 0.30 : 1.0;
+    const springPosX = sp ? (sp.swX.x * 0.018 + sp.kY.x * 0.007) * spHipScale : 0;
+    const springPosY = sp ? (sp.swY.x * 0.016 + sp.jY.x * 0.024 - sp.bump.x * 0.014) * spHipScale : 0;
+    const springPosZ = sp ? (sp.kZ.x * 0.056 + sp.bump.x * 0.010) * spAdsZScale : 0;
+    const springRotX = sp ? (sp.kP.x * 0.095 + sp.jP.x * 0.045 + sp.bump.x * 0.036) * (useAdsPose ? 0.28 : 1.0) : 0;
+    const springRotY = sp ? (sp.kY.x * 0.052 + sp.swX.x * 0.038) * spHipScale : 0;
+    const springRotZ = sp ? (sp.kR.x * 0.075 - sp.swX.x * 0.028) * spHipScale : 0;
+
+    let tX = (useAdsPose ? adsPosArr[0] : hipPos[0]) + (useAdsPose ? 0 : this.currentLean * 0.025 + slideRumbleX);
+    let tY = (useAdsPose ? adsPosArr[1] : hipPos[1]) + this.landingDip * (useAdsPose ? 0.08 : 0.42) + brY + (useAdsPose ? 0 : slideRumbleY);
+    let tZ = useAdsPose ? adsPosArr[2] : hipPos[2];
+
+    let tRotX = (useAdsPose ? adsRotArr[0] : hipRot[0]) + this.recoilOffset * (useAdsPose ? 0.26 : 0.72) + springRotX + (this.swayRotX || 0) * motion + brRX - bobY * (useAdsPose ? 0.5 : 2.2);
+    let tRotY = (useAdsPose ? adsRotArr[1] : hipRot[1]) + springRotY + (this.swayRotY || 0) * motion;
+    let tRotZ = (useAdsPose ? adsRotArr[2] : hipRot[2]) - this.cameraRoll * (useAdsPose ? 0.22 : 0.80) + springRotZ - (this.swayRotY || 0) * 0.30 * motion + brRZ + bobX * (useAdsPose ? 0.3 : 1.2);
+
+    if (isEquipping) {
+      const clampedEq = Math.max(0, Math.min(1, equipProgress));
+      const e = 1 - Math.pow(1 - clampedEq, 3);
+      tY -= 0.30 * (1 - e);
+      tZ += 0.05 * (1 - e);
+      tRotX -= 0.72 * (1 - e);
+      tRotZ += 0.32 * (1 - e);
+    }
+
+    let isKnifeSpinning = false;
+    let knifeTargetRotX = 0;
+    let knifeTargetRotZ = 0;
+
+    if (isInspecting) {
+      const inspectDur = this.inspectDuration || (isKnifeCs2 ? 2200 : 2800);
+      const ip = Math.max(0, Math.min(1, 1 - (this.inspectUntil - now) / inspectDur));
+      if (isKnifeCs2) {
+        isKnifeSpinning = true;
+        const liftIn = cs2Smoothstep(0, 0.14, ip);
+        const liftOut = 1 - cs2Smoothstep(0.78, 1.0, ip);
+        const lift = liftIn * liftOut;
+        // Keep HandR & ArmR upright; gently lift hand closer to center while Knife node performs 720-deg twirl
+        tX = hipPos[0] - 0.055 * lift;
+        tY = hipPos[1] + 0.048 * lift + Math.sin(ip * Math.PI * 2) * 0.006 * lift;
+        tZ = hipPos[2] + 0.032 * lift;
+        tRotX = hipRot[0] + 0.08 * lift;
+        tRotY = hipRot[1] + 0.10 * lift;
+        tRotZ = hipRot[2] - 0.08 * lift;
+        if (ip < 0.14) {
+          const u = ip / 0.14;
+          const e = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) * 0.5;
+          knifeTargetRotX = 0.24 * Math.sin(e * Math.PI * 0.5);
+          knifeTargetRotZ = 0.05 * e;
+        } else if (ip < 0.78) {
+          const u = (ip - 0.14) / 0.64;
+          const e = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) * 0.5;
+          knifeTargetRotX = 0.24 * (1 - Math.min(1, u * 4)) - e * Math.PI * 4;
+          knifeTargetRotZ = 0.05 * (1 - u) + Math.sin(u * Math.PI * 2) * 0.06;
+        } else {
+          knifeTargetRotX = -Math.PI * 4;
+          knifeTargetRotZ = 0;
+        }
+      } else {
+        // Broadside CS2 inspect showing oiled wood / blued steel edge-wear / AWP scope glass
+        let dx = 0;
+        let dy = 0;
+        let dz = 0;
+        let drx = 0;
+        let dry = 0;
+        let drz = 0;
+        if (ip < 0.22) {
+          const u = ip / 0.22;
+          const e = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) * 0.5;
+          dx = -0.145 * e;
+          dy = 0.062 * e;
+          dz = 0.055 * e;
+          drx = 0.16 * e;
+          dry = 0.82 * e;
+          drz = -0.40 * e;
+        } else if (ip < 0.48) {
+          const u = (ip - 0.22) / 0.26;
+          const e = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) * 0.5;
+          dx = -0.145 + 0.016 * e;
+          dy = 0.062 + Math.sin(u * Math.PI) * 0.008;
+          dz = 0.055 - 0.012 * e;
+          drx = 0.16 + 0.06 * e;
+          dry = 0.82 - 0.16 * e;
+          drz = -0.40 + 0.22 * e;
+        } else if (ip < 0.78) {
+          const u = (ip - 0.48) / 0.30;
+          const e = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) * 0.5;
+          dx = -0.129 + 0.034 * e;
+          dy = 0.062 - 0.016 * e + Math.sin(u * Math.PI) * 0.010;
+          dz = 0.043 - 0.010 * e;
+          drx = 0.22 - 0.13 * e;
+          dry = 0.66 - 1.14 * e;
+          drz = -0.18 + 0.64 * e;
+        } else {
+          const u = (ip - 0.78) / 0.22;
+          const e = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) * 0.5;
+          dx = -0.095 * (1 - e);
+          dy = 0.046 * (1 - e);
+          dz = 0.033 * (1 - e);
+          drx = 0.09 * (1 - e);
+          dry = -0.48 * (1 - e);
+          drz = 0.46 * (1 - e);
+        }
+        tX = hipPos[0] + dx;
+        tY = hipPos[1] + dy;
+        tZ = hipPos[2] + dz;
+        tRotX = hipRot[0] + drx;
+        tRotY = hipRot[1] + dry;
+        tRotZ = hipRot[2] + drz;
+      }
+    }
+
+    const magNode = ud.magNode;
+    const handLNode = ud.handLNode;
+    const armLNode = ud.armLNode;
+    const boltNode = ud.boltNode;
+
+    if (isReloading) {
+      const reloadPct = Math.max(0, Math.min(1, 1 - (this.reloadingUntil - now) / (this.reloadDuration || 1600)));
+      if (this.reloadMode === 'shell') {
+        const shellPulse = this.nextShellAt > 0
+          ? Math.sin(Math.max(0, 1 - (this.nextShellAt - now) / (cfg.shellReloadMs || 390)) * Math.PI)
+          : 0;
+        tRotX += -0.22 + shellPulse * 0.14;
+        tRotZ += 0.46;
+        tRotY += 0.20;
+        tX += 0.025;
+        tY -= 0.03;
+        if (ud.fpsArms) {
+          updateFpsArmsReloadPose(ud, reloadPct, 0, 0, shellPulse, true);
+        } else if (handLNode && ud.handLHomePos) {
+          handLNode.position.set(
+            ud.handLHomePos.x,
+            ud.handLHomePos.y - 0.08 * shellPulse,
+            ud.handLHomePos.z + 0.08 * shellPulse
+          );
+          if (armLNode && ud.armLHomePos) {
+            armLNode.position.set(
+              ud.armLHomePos.x + (handLNode.position.x - ud.handLHomePos.x),
+              ud.armLHomePos.y + (handLNode.position.y - ud.handLHomePos.y),
+              ud.armLHomePos.z + (handLNode.position.z - ud.handLHomePos.z)
+            );
+          }
+        }
+      } else {
+        // CS2 smoothstep mag-drop + left-arm reload tracking + charge kick
+        const tilt = cs2Smoothstep(0, 0.14, reloadPct) * (1 - cs2Smoothstep(0.86, 1.0, reloadPct));
+        tRotZ += 0.36 * tilt;
+        tRotX += 0.12 * tilt;
+        tRotY += 0.14 * tilt;
+        tX -= 0.025 * tilt;
+        tY -= 0.012 * tilt;
+
+        const outPhase = cs2Smoothstep(0.16, 0.36, reloadPct);
+        const backPhase = cs2Smoothstep(0.50, 0.72, reloadPct);
+        const magDrop = outPhase * (1 - backPhase);
+        const charge = cs2Smoothstep(0.78, 0.86, reloadPct) * (1 - cs2Smoothstep(0.86, 0.96, reloadPct));
+
+        if (magNode && ud.magHomePos) {
+          magNode.position.set(
+            ud.magHomePos.x,
+            ud.magHomePos.y - 0.28 * magDrop,
+            ud.magHomePos.z + 0.04 * magDrop
+          );
+          magNode.rotation.set(-0.6 * magDrop, 0, 0.25 * magDrop);
+          magNode.visible = !(reloadPct > 0.36 && reloadPct < 0.50);
+        }
+        if (ud.fpsArms) {
+          updateFpsArmsReloadPose(ud, reloadPct, magDrop, charge, 0, false);
+        } else if (handLNode && ud.handLHomePos) {
+          const hf = cs2Smoothstep(0.08, 0.18, reloadPct) * (1 - cs2Smoothstep(0.72, 0.84, reloadPct));
+          handLNode.position.set(
+            ud.handLHomePos.x,
+            ud.handLHomePos.y - 0.26 * magDrop - 0.02 * hf,
+            ud.handLHomePos.z - 0.16 * hf + 0.03 * magDrop
+          );
+          if (ud.handLHomeRot) {
+            handLNode.rotation.set(
+              ud.handLHomeRot.x - 0.6 * hf,
+              ud.handLHomeRot.y,
+              ud.handLHomeRot.z
+            );
+          }
+          if (armLNode && ud.armLHomePos) {
+            armLNode.position.set(
+              ud.armLHomePos.x + (handLNode.position.x - ud.handLHomePos.x),
+              ud.armLHomePos.y + (handLNode.position.y - ud.handLHomePos.y),
+              ud.armLHomePos.z + (handLNode.position.z - ud.handLHomePos.z)
+            );
+          }
+        }
+        tRotX -= 0.105 * charge;
+        tZ -= 0.02 * charge;
+        if (boltNode && ud.boltHomePos) {
+          boltNode.position.z = ud.boltHomePos.z + 0.06 * charge;
+        }
+      }
+    } else {
+      if (magNode && ud.magHomePos) {
+        magNode.position.copy(ud.magHomePos);
+        if (ud.magHomeRot) magNode.rotation.copy(ud.magHomeRot);
+        else magNode.rotation.set(0, 0, 0);
+        magNode.visible = true;
+      }
+      if (ud.fpsArms) {
+        resetFpsArmsPose(ud);
+      } else {
+        if (handLNode && ud.handLHomePos) {
+          handLNode.position.copy(ud.handLHomePos);
+          if (ud.handLHomeRot) handLNode.rotation.copy(ud.handLHomeRot);
+        }
+        if (armLNode && ud.armLHomePos) {
+          armLNode.position.copy(ud.armLHomePos);
+        }
+      }
+
+      if (!useAdsPose && !isInspecting && this.isSprinting) {
+        if (isKnifeCs2) {
+          tX -= 0.02;
+          tY -= 0.02;
+          tRotX -= 0.12;
+          tRotY += 0.14;
+        } else {
+          tX -= 0.04;
+          tY -= 0.025;
+          tRotX -= 0.22;
+          tRotY += 0.34;
+          tRotZ += 0.16;
+        }
+      } else if (isTacSlidePose && !isInspecting && !isKnifeCs2) {
+        tX -= 0.065;
+        tY += 0.02;
+        tZ += 0.02;
+        tRotX += 0.06;
+        tRotY += 0.15;
+        tRotZ += 0.56 - slideLateralDot * 0.12;
+      }
+
+      if (this.pumpCycleUntil > now) {
+        const cyclePct = Math.max(0, Math.min(1, 1 - (this.pumpCycleUntil - now) / (this.pumpCycleDuration || 460)));
+        const tiltA = cs2Smoothstep(0.1, 0.3, cyclePct) * (1 - cs2Smoothstep(0.7, 0.95, cyclePct));
+        const boltPull = cs2Smoothstep(0.3, 0.45, cyclePct) * (1 - cs2Smoothstep(0.55, 0.7, cyclePct));
+        const boltRotScale = useAdsPose ? 0.15 : 1.0;
+        tRotZ += 0.244 * tiltA * boltRotScale;
+        tRotX += 0.105 * tiltA * boltRotScale;
+        tY -= 0.04 * tiltA * boltRotScale;
+        tX += 0.02 * tiltA * boltRotScale;
+        if (boltNode && ud.boltHomePos) {
+          boltNode.position.z = ud.boltHomePos.z + 0.06 * boltPull;
+        }
+      } else if (boltNode && ud.boltHomePos) {
+        boltNode.position.z = ud.boltHomePos.z + this.boltKickOffset * 0.04 * (useAdsPose ? 0.25 : 1.0);
+      }
+    }
+
+    if (this.meleeSwingUntil > now) {
+      const swingPct = Math.max(0, Math.min(1, 1 - (this.meleeSwingUntil - now) / 280));
+      const s = Math.sin(swingPct * Math.PI);
+      const arc = cs2Smoothstep(0.05, 0.45, swingPct) * (1 - cs2Smoothstep(0.55, 1.0, swingPct));
+      tRotZ -= 1.15 * arc;
+      tRotY += 0.58 * s;
+      tX -= 0.13 * arc;
+      tZ -= 0.08 * s;
+    }
+
+    if (this.isCookingGrenade) {
+      tRotX += 0.20;
+      tRotZ -= 0.16;
+      tY -= 0.035;
+    } else if (this.grenadeThrowUntil > now) {
+      const tossPct = Math.max(0, Math.min(1, 1 - (this.grenadeThrowUntil - now) / 260));
+      const tossArc = Math.sin(tossPct * Math.PI);
+      tRotX += tossArc * 0.38;
+      tRotZ += tossArc * 0.32;
+      tY -= tossArc * 0.08;
+    }
+
+    const swayScale = useAdsPose ? 0.22 : 1.0;
+    const recoilZScale = useAdsPose ? 0.30 : 0.85;
+    const vmPosBlend = 1 - Math.exp(-(useAdsPose ? 34 : isInspecting ? 20 : 18) * dt);
+    const vmRotBlend = 1 - Math.exp(-(useAdsPose ? 34 : isInspecting ? 22 : 16) * dt);
+
+    this.viewmodelRig.position.x += (tX + bobX + this.swayX * swayScale + springPosX - this.viewmodelRig.position.x) * vmPosBlend;
+    this.viewmodelRig.position.y += (tY + bobY + this.swayY * swayScale + springPosY - this.viewmodelRig.position.y) * vmPosBlend;
+    this.viewmodelRig.position.z += (tZ + this.recoilOffset * recoilZScale + springPosZ - this.viewmodelRig.position.z) * Math.min(1, dt * (useAdsPose ? 34 : 28));
+
+    this.viewmodelRig.rotation.x += (tRotX - this.viewmodelRig.rotation.x) * vmRotBlend;
+    this.viewmodelRig.rotation.y += (tRotY - this.viewmodelRig.rotation.y) * vmRotBlend;
+    this.viewmodelRig.rotation.z += (tRotZ - this.viewmodelRig.rotation.z) * vmRotBlend;
+
+    const knifeNode = ud.knifeNode;
+    if (knifeNode) {
+      if (isKnifeSpinning) {
+        const knifeSpinBlend = 1 - Math.exp(-34 * dt);
+        knifeNode.rotation.x += (knifeTargetRotX - knifeNode.rotation.x) * knifeSpinBlend;
+        knifeNode.rotation.y += (0 - knifeNode.rotation.y) * vmRotBlend;
+        knifeNode.rotation.z += (knifeTargetRotZ - knifeNode.rotation.z) * vmRotBlend;
+      } else {
+        if (Math.abs(knifeNode.rotation.x) > Math.PI) {
+          const twoPi = Math.PI * 2;
+          knifeNode.rotation.x = ((((knifeNode.rotation.x + Math.PI) % twoPi) + twoPi) % twoPi) - Math.PI;
+        }
+        knifeNode.rotation.x += (0 - knifeNode.rotation.x) * vmRotBlend;
+        knifeNode.rotation.y += (0 - knifeNode.rotation.y) * vmRotBlend;
+        knifeNode.rotation.z += (0 - knifeNode.rotation.z) * vmRotBlend;
+        if (Math.abs(knifeNode.rotation.x) < 1e-4) knifeNode.rotation.x = 0;
+        if (Math.abs(knifeNode.rotation.y) < 1e-4) knifeNode.rotation.y = 0;
+        if (Math.abs(knifeNode.rotation.z) < 1e-4) knifeNode.rotation.z = 0;
+      }
+      if (ud.knifeHomePos) {
+        knifeNode.position.x += (ud.knifeHomePos.x - knifeNode.position.x) * vmPosBlend;
+        knifeNode.position.y += (ud.knifeHomePos.y - knifeNode.position.y) * vmPosBlend;
+        knifeNode.position.z += (ud.knifeHomePos.z - knifeNode.position.z) * vmPosBlend;
+      }
+    }
+
+    if (ud.flashMesh?.visible && ud.flashSprite?.material) {
+      ud.flashSprite.material.rotation = ud.flashMesh.rotation.z;
     }
   }
 }

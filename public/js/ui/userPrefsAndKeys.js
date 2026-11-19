@@ -11,6 +11,7 @@ import {
 
 export const USER_PREFS_STORAGE_KEY = 'polystrike_user_prefs_v1';
 export const LEGACY_NAME_STORAGE_KEY = 'polystrike_name';
+export const CLIENT_DEFAULT_MAP_ID = 'desert_outpost';
 export { VALID_OPERATOR_COLORS, DEFAULT_OPERATOR_COLOR };
 export const KEYBOARD_LOCK_CODES = [
   'KeyW',
@@ -104,7 +105,7 @@ export function loadUserPrefs() {
   const resolvedMapCfg = candidateMap ? getMapConfig(candidateMap) : null;
   const selectedMap = candidateMap && resolvedMapCfg?.id === candidateMap
     ? candidateMap
-    : (DEFAULT_MAP_ID || 'cyber_citadel');
+    : (CLIENT_DEFAULT_MAP_ID || DEFAULT_MAP_ID || 'desert_outpost');
 
   const parsedSens = Number(raw.sensitivity);
   const sensitivity = Number.isFinite(parsedSens)
@@ -230,6 +231,8 @@ export const appState = {
     chAiming: null,
     chMoving: null,
     chSteady: null,
-    chRecoiling: null
+    chRecoiling: null,
+    hotbarSig: '',
+    weaponHudSig: ''
   }
 };

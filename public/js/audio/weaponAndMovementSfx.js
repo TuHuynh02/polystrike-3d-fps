@@ -8,9 +8,61 @@ export class WeaponAndMovementSfxMethods {
     const spatialChain =
       targetNode?._spatialChain ||
       (targetNode?.input && (targetNode?.distGain || targetNode?.gain) ? targetNode : null);
+    const masterOut = this.getMasterInput?.(ctx) || ctx.destination;
     const out =
       (targetNode?.input && typeof targetNode.connect !== 'function' ? targetNode.input : targetNode) ||
-      ctx.destination;
+      masterOut;
+
+    // Fast-path Saltline physical-modeling pre-synthesized gunshot buffer (2-node graph + outdoor reverb send)
+    const saltlineBuf = this.getSaltlineAudioBuffer?.(ctx, weaponId);
+    if (saltlineBuf) {
+      const src = ctx.createBufferSource();
+      src.buffer = saltlineBuf;
+      if (src.playbackRate) {
+        const rate = 0.972 + Math.random() * 0.056;
+        src.playbackRate.value = rate;
+        src.playbackRate.setValueAtTime?.(rate, now);
+      }
+      const shotGain = ctx.createGain();
+      const peakGain = Math.min(1.0, vol * (weaponId === 'm4a1' ? 0.72 : 0.95));
+      if (shotGain.gain) {
+        shotGain.gain.value = peakGain;
+        shotGain.gain.setValueAtTime?.(peakGain, now);
+      }
+      src.connect(shotGain);
+      shotGain.connect(out);
+      if (!targetNode && this._reverbSend && weaponId !== 'knife' && weaponId !== 'm4a1') {
+        shotGain.connect(this._reverbSend);
+      }
+      const bufDur = (saltlineBuf.duration || 0.35) + 0.05;
+      const cleanSrc = this._bindSourceCleanup(src, [shotGain], spatialChain, bufDur);
+
+      if (!targetNode && vol <= 0.62) {
+        this._lastNonSpatialShot = {
+          at: typeof performance !== 'undefined' ? performance.now() : Date.now(),
+          gains: [shotGain],
+          cleanups: [cleanSrc]
+        };
+      }
+
+      src.start(now);
+      src.stop(now + bufDur);
+
+      if (spatialChain) {
+        this.scheduleChainCleanup(spatialChain, bufDur + 0.05);
+      }
+      if (!targetNode && vol > 0.7) {
+        if (weaponId === 'shotgun') {
+          this.schedulePumpCycle(ctx, now + 0.25, vol * 0.68);
+        } else if (weaponId === 'sniper') {
+          this.schedulePumpCycle(ctx, now + 0.36, vol * 0.74);
+        }
+      }
+      if (!targetNode && vol > 0.75 && weaponId !== 'knife') {
+        this.scheduleShellClink(ctx, now + 0.20 + Math.random() * 0.07, vol * 0.32);
+      }
+      return;
+    }
 
     // 1. Gunpowder crack / blast (filtered noise)
     const noise = ctx.createBufferSource();
@@ -202,6 +254,30 @@ export class WeaponAndMovementSfxMethods {
   }
 
   scheduleShellClink(ctx, startAt, vol) {
+    const out = this.getMasterInput?.(ctx) || ctx.destination;
+    const clinkBuf = this.getSaltlineAudioBuffer?.(ctx, 'shell_clink');
+    if (clinkBuf) {
+      const src = ctx.createBufferSource();
+      src.buffer = clinkBuf;
+      if (src.playbackRate) {
+        const rate = 0.94 + Math.random() * 0.14;
+        src.playbackRate.value = rate;
+        src.playbackRate.setValueAtTime?.(rate, startAt);
+      }
+      const gain = ctx.createGain();
+      if (gain.gain) {
+        gain.gain.value = vol;
+        gain.gain.setValueAtTime?.(vol, startAt);
+      }
+      src.connect(gain);
+      gain.connect(out);
+      const relDur = Math.max(0.12, startAt - (ctx.currentTime || 0) + 0.12);
+      this._bindSourceCleanup(src, [gain], null, relDur);
+      src.start(startAt);
+      src.stop(startAt + 0.11);
+      return;
+    }
+
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';
@@ -211,7 +287,7 @@ export class WeaponAndMovementSfxMethods {
     gain.gain.setValueAtTime(vol, startAt);
     gain.gain.exponentialRampToValueAtTime(0.0005, startAt + 0.04);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(out);
     const relDur = Math.max(0.05, startAt - (ctx.currentTime || 0) + 0.05);
     this._bindSourceCleanup(osc, [gain], null, relDur);
     osc.start(startAt);
@@ -219,6 +295,7 @@ export class WeaponAndMovementSfxMethods {
   }
 
   schedulePumpCycle(ctx, startAt, vol) {
+    const out = this.getMasterInput?.(ctx) || ctx.destination;
     [0, 0.11].forEach((offset, idx) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -228,7 +305,7 @@ export class WeaponAndMovementSfxMethods {
       gain.gain.setValueAtTime(0.18 * vol, startAt + offset);
       gain.gain.exponentialRampToValueAtTime(0.001, startAt + offset + 0.065);
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(out);
       const relDur = Math.max(0.08, startAt + offset - (ctx.currentTime || 0) + 0.08);
       this._bindSourceCleanup(osc, [gain], null, relDur);
       osc.start(startAt + offset);
@@ -240,6 +317,7 @@ export class WeaponAndMovementSfxMethods {
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;
+    const out = this.getMasterInput?.(ctx) || ctx.destination;
 
     // 1. Crisp Kevlar / Flesh Impact Thump
     const thud = ctx.createOscillator();
@@ -250,7 +328,7 @@ export class WeaponAndMovementSfxMethods {
     thudGain.gain.setValueAtTime(isHeadshot ? 0.34 : 0.28, now);
     thudGain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
     thud.connect(thudGain);
-    thudGain.connect(ctx.destination);
+    thudGain.connect(out);
     this._bindSourceCleanup(thud, [thudGain], null, 0.08);
     thud.start(now);
     thud.stop(now + 0.075);
@@ -266,7 +344,7 @@ export class WeaponAndMovementSfxMethods {
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
 
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(out);
     this._bindSourceCleanup(osc, [gain], null, 0.09);
     osc.start(now);
     osc.stop(now + 0.085);
@@ -284,7 +362,7 @@ export class WeaponAndMovementSfxMethods {
         dinkGain.gain.setValueAtTime(idx === 0 ? 0.28 : 0.18, now + 0.012);
         dinkGain.gain.exponentialRampToValueAtTime(0.0008, now + 0.15);
         dink.connect(dinkGain);
-        dinkGain.connect(ctx.destination);
+        dinkGain.connect(out);
         const cleanDink = this._bindSourceCleanup(dink, [dinkGain], null, 0.17);
         dink.start(now + 0.012);
         dink.stop(now + 0.16);
@@ -303,6 +381,7 @@ export class WeaponAndMovementSfxMethods {
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;
+    const out = this.getMasterInput?.(ctx) || ctx.destination;
 
     // 1. Kevlar plate impact thump
     const plate = ctx.createOscillator();
@@ -313,7 +392,7 @@ export class WeaponAndMovementSfxMethods {
     plateGain.gain.setValueAtTime(armorBroken ? 0.34 : 0.25, now);
     plateGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
     plate.connect(plateGain);
-    plateGain.connect(ctx.destination);
+    plateGain.connect(out);
     this._bindSourceCleanup(plate, [plateGain], null, 0.11);
     plate.start(now);
     plate.stop(now + 0.105);
@@ -330,7 +409,7 @@ export class WeaponAndMovementSfxMethods {
       gain.gain.setValueAtTime(armorBroken ? 0.22 : 0.16, t0);
       gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.13);
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(out);
       this._bindSourceCleanup(osc, [gain], null, idx * 0.02 + 0.15);
       osc.start(t0);
       osc.stop(t0 + 0.14);
@@ -341,6 +420,7 @@ export class WeaponAndMovementSfxMethods {
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;
+    const out = this.getMasterInput?.(ctx) || ctx.destination;
     const confirmGains = [];
     const confirmCleanups = [];
 
@@ -353,7 +433,7 @@ export class WeaponAndMovementSfxMethods {
     subGain.gain.setValueAtTime(0.36, now);
     subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
     sub.connect(subGain);
-    subGain.connect(ctx.destination);
+    subGain.connect(out);
     confirmCleanups.push(this._bindSourceCleanup(sub, [subGain], null, 0.26));
     sub.start(now);
     sub.stop(now + 0.25);
@@ -370,7 +450,7 @@ export class WeaponAndMovementSfxMethods {
       gain.gain.setValueAtTime(0.24, now + i * 0.05);
       gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.05 + 0.2);
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(out);
       confirmCleanups.push(this._bindSourceCleanup(osc, [gain], null, i * 0.05 + 0.23));
       osc.start(now + i * 0.05);
       osc.stop(now + i * 0.05 + 0.22);
@@ -388,6 +468,7 @@ export class WeaponAndMovementSfxMethods {
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;
+    const out = this.getMasterInput?.(ctx) || ctx.destination;
 
     if (mode === 'shell') {
       // Initial shotgun shell carrier latch click
@@ -399,7 +480,7 @@ export class WeaponAndMovementSfxMethods {
       gain.gain.setValueAtTime(0.14, now);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.055);
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(out);
       this._bindSourceCleanup(osc, [gain], null, 0.07);
       osc.start(now);
       osc.stop(now + 0.06);
@@ -412,16 +493,33 @@ export class WeaponAndMovementSfxMethods {
     // Dry/Empty reload: 3 stages (Mag release + Mag lock-in + Metallic Bolt rack at 80%)
     const stages = mode === 'tactical'
       ? [
-          { t: durSec * 0.10, f1: 390, f2: 195, gain: 0.15 },
-          { t: durSec * 0.65, f1: 490, f2: 860, gain: 0.19 }
+          { t: durSec * 0.10, bufKey: 'magout', f1: 390, f2: 195, gain: 0.22 },
+          { t: durSec * 0.65, bufKey: 'magin', f1: 490, f2: 860, gain: 0.26 }
         ]
       : [
-          { t: durSec * 0.08, f1: 380, f2: 190, gain: 0.15 },
-          { t: durSec * 0.50, f1: 480, f2: 820, gain: 0.18 },
-          { t: durSec * 0.80, f1: 680, f2: 1080, gain: 0.18 }
+          { t: durSec * 0.08, bufKey: 'magout', bufGain: 0.22, f1: 380, f2: 190, gain: 0.22 },
+          { t: durSec * 0.50, bufKey: 'magin', bufGain: 0.25, f1: 480, f2: 820, gain: 0.25 },
+          { t: durSec * 0.80, bufKey: 'bolt_rack', bufGain: 0.28, f1: 680, f2: 1080, gain: 0.28 }
         ];
 
     stages.forEach((st) => {
+      const foleyBuf = this.getSaltlineAudioBuffer?.(ctx, st.bufKey);
+      if (foleyBuf) {
+        const src = ctx.createBufferSource();
+        src.buffer = foleyBuf;
+        const gain = ctx.createGain();
+        if (gain.gain) {
+          gain.gain.value = st.gain;
+          gain.gain.setValueAtTime?.(st.gain, now + st.t);
+        }
+        src.connect(gain);
+        gain.connect(out);
+        const foleyDur = (foleyBuf.duration || 0.14) + 0.03;
+        this._bindSourceCleanup(src, [gain], null, st.t + foleyDur);
+        src.start(now + st.t);
+        src.stop(now + st.t + foleyDur);
+        return;
+      }
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'square';
@@ -430,7 +528,7 @@ export class WeaponAndMovementSfxMethods {
       gain.gain.setValueAtTime(st.gain, now + st.t);
       gain.gain.exponentialRampToValueAtTime(0.001, now + st.t + 0.075);
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(out);
       this._bindSourceCleanup(osc, [gain], null, st.t + 0.09);
       osc.start(now + st.t);
       osc.stop(now + st.t + 0.085);
@@ -441,6 +539,7 @@ export class WeaponAndMovementSfxMethods {
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;
+    const out = this.getMasterInput?.(ctx) || ctx.destination;
 
     // Brass shell sliding into tube + spring catch click
     const osc = ctx.createOscillator();
@@ -451,7 +550,7 @@ export class WeaponAndMovementSfxMethods {
     gain.gain.setValueAtTime(0.18, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.065);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(out);
     this._bindSourceCleanup(osc, [gain], null, 0.08);
     osc.start(now);
     osc.stop(now + 0.07);
@@ -465,6 +564,7 @@ export class WeaponAndMovementSfxMethods {
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;
+    const out = this.getMasterInput?.(ctx) || ctx.destination;
 
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -474,7 +574,7 @@ export class WeaponAndMovementSfxMethods {
     gain.gain.setValueAtTime(0.14, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.03);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(out);
     this._bindSourceCleanup(osc, [gain], null, 0.04);
     osc.start(now);
     osc.stop(now + 0.035);
@@ -484,6 +584,7 @@ export class WeaponAndMovementSfxMethods {
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;
+    const out = this.getMasterInput?.(ctx) || ctx.destination;
 
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -493,7 +594,7 @@ export class WeaponAndMovementSfxMethods {
     gain.gain.setValueAtTime(0.11, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.055);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(out);
     this._bindSourceCleanup(osc, [gain], null, 0.07);
     osc.start(now);
     osc.stop(now + 0.06);
@@ -503,6 +604,7 @@ export class WeaponAndMovementSfxMethods {
     const ctx = this.ensureContext();
     if (!ctx || !this.noiseBuffer) return;
     const now = ctx.currentTime;
+    const out = this.getMasterInput?.(ctx) || ctx.destination;
 
     const noise = ctx.createBufferSource();
     noise.buffer = this.noiseBuffer;
@@ -517,7 +619,7 @@ export class WeaponAndMovementSfxMethods {
 
     noise.connect(filter);
     filter.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(out);
     this._bindSourceCleanup(noise, [filter, gain], null, 0.08);
     noise.start(now);
     noise.stop(now + 0.075);
@@ -527,6 +629,7 @@ export class WeaponAndMovementSfxMethods {
     const ctx = this.ensureContext();
     if (!ctx || !this.noiseBuffer) return;
     const now = ctx.currentTime;
+    const out = this.getMasterInput?.(ctx) || ctx.destination;
 
     // 1. Tactical knee-pad drop thump
     const thud = ctx.createOscillator();
@@ -537,7 +640,7 @@ export class WeaponAndMovementSfxMethods {
     thudGain.gain.setValueAtTime(0.18, now);
     thudGain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
     thud.connect(thudGain);
-    thudGain.connect(ctx.destination);
+    thudGain.connect(out);
     this._bindSourceCleanup(thud, [thudGain], null, 0.14);
     thud.start(now);
     thud.stop(now + 0.125);
@@ -557,7 +660,7 @@ export class WeaponAndMovementSfxMethods {
 
     noise.connect(filter);
     filter.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(out);
     this._bindSourceCleanup(noise, [filter, gain], null, 0.51);
     noise.start(now);
     noise.stop(now + 0.49);
@@ -572,7 +675,7 @@ export class WeaponAndMovementSfxMethods {
     surgeGain.gain.setValueAtTime(0.075, now);
     surgeGain.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
     surge.connect(surgeGain);
-    surgeGain.connect(ctx.destination);
+    surgeGain.connect(out);
     this._bindSourceCleanup(surge, [surgeGain], null, 0.36);
     surge.start(now);
     surge.stop(now + 0.35);
@@ -582,6 +685,7 @@ export class WeaponAndMovementSfxMethods {
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;
+    const out = this.getMasterInput?.(ctx) || ctx.destination;
     const scale = Math.max(0.3, Math.min(1.5, intensity));
 
     const osc = ctx.createOscillator();
@@ -592,7 +696,7 @@ export class WeaponAndMovementSfxMethods {
     gain.gain.setValueAtTime(0.15 * scale, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.11);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(out);
     this._bindSourceCleanup(osc, [gain], null, 0.13);
     osc.start(now);
     osc.stop(now + 0.12);
@@ -602,6 +706,7 @@ export class WeaponAndMovementSfxMethods {
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;
+    const out = this.getMasterInput?.(ctx) || ctx.destination;
 
     [523.25, 659.25, 783.99, 1046.5].forEach((freq, idx) => {
       const osc = ctx.createOscillator();
@@ -611,7 +716,7 @@ export class WeaponAndMovementSfxMethods {
       gain.gain.setValueAtTime(0.18, now + idx * 0.045);
       gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.045 + 0.14);
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(out);
       this._bindSourceCleanup(osc, [gain], null, idx * 0.045 + 0.16);
       osc.start(now + idx * 0.045);
       osc.stop(now + idx * 0.045 + 0.15);
@@ -622,6 +727,7 @@ export class WeaponAndMovementSfxMethods {
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;
+    const out = this.getMasterInput?.(ctx) || ctx.destination;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';
@@ -630,7 +736,7 @@ export class WeaponAndMovementSfxMethods {
     gain.gain.setValueAtTime(0.13, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(out);
     this._bindSourceCleanup(osc, [gain], null, 0.12);
     osc.start(now);
     osc.stop(now + 0.11);
@@ -640,6 +746,7 @@ export class WeaponAndMovementSfxMethods {
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;
+    const out = this.getMasterInput?.(ctx) || ctx.destination;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sawtooth';
@@ -648,7 +755,7 @@ export class WeaponAndMovementSfxMethods {
     gain.gain.setValueAtTime(0.2, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(out);
     this._bindSourceCleanup(osc, [gain], null, 0.27);
     osc.start(now);
     osc.stop(now + 0.26);
@@ -658,6 +765,7 @@ export class WeaponAndMovementSfxMethods {
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;
+    const out = this.getMasterInput?.(ctx) || ctx.destination;
     const chord = type === 'damage'
       ? [440, 554.37, 659.25, 880]
       : type === 'speed'
@@ -671,7 +779,7 @@ export class WeaponAndMovementSfxMethods {
       gain.gain.setValueAtTime(0.18, now + idx * 0.04);
       gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.04 + 0.16);
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(out);
       this._bindSourceCleanup(osc, [gain], null, idx * 0.04 + 0.18);
       osc.start(now + idx * 0.04);
       osc.stop(now + idx * 0.04 + 0.17);
@@ -682,6 +790,7 @@ export class WeaponAndMovementSfxMethods {
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;
+    const out = this.getMasterInput?.(ctx) || ctx.destination;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'triangle';
@@ -690,7 +799,7 @@ export class WeaponAndMovementSfxMethods {
     gain.gain.setValueAtTime(0.15, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.065);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(out);
     this._bindSourceCleanup(osc, [gain], null, 0.08);
     osc.start(now);
     osc.stop(now + 0.07);

@@ -376,6 +376,57 @@ export function syncLobbyWeaponSelectionUi(weaponId) {
   }
 }
 
+const LOBBY_MAP_META = {
+  desert_outpost: {
+    badge: 'D2',
+    eyebrow: 'DE_DUST2 // MOROCCO — SECTOR A/B · 60HZ',
+    title: 'DE_DUST2 // MOROCCO — SECTOR A/B',
+    subtitle: 'MID DOUBLE DOORS · SHORT A CATWALK · LONG A & B TUNNELS — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
+  },
+  cargo_dock: {
+    badge: 'B4',
+    eyebrow: 'BERTH 4 // SALTLINE TERMINAL · 60HZ',
+    title: 'SALTLINE TERMINAL // BERTH 4',
+    subtitle: 'ĐƠN VỊ ĐỘT KÍCH CẢNG BIỂN — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
+  },
+  cyber_citadel: {
+    badge: '03',
+    eyebrow: 'SECTOR 03 // CYBER CITADEL · 60HZ',
+    title: 'CYBER CITADEL // CORE SPIRE',
+    subtitle: 'PHÁO ĐÀI TÁC CHIẾN ĐA TẦNG — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
+  },
+  neon_lab: {
+    badge: '04',
+    eyebrow: 'SECTOR 04 // QUANTUM LAB · 60HZ',
+    title: 'QUANTUM LAB // CONTAINMENT BAY',
+    subtitle: 'PHÒNG THÍ NGHIỆM PHẢN ỨNG NHANH — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
+  },
+  crossfire_plus: {
+    badge: 'CQB',
+    eyebrow: 'SECTOR CQB // CROSSFIRE (+) · 60HZ',
+    title: 'CROSSFIRE (+) // INTERSECTION',
+    subtitle: 'GIAO LỘ BỐN HƯỚNG TỐC ĐỘ CAO — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
+  },
+  fy_iceworld: {
+    badge: 'CQB',
+    eyebrow: 'SECTOR CQB // ICEWORLD ARENA · 60HZ',
+    title: 'ICEWORLD ARENA // FROZEN GRID',
+    subtitle: 'ĐẤU TRƯỜNG CẬN CHIẾN ĐỐI XỨNG — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
+  },
+  killhouse_cqb: {
+    badge: 'CQB',
+    eyebrow: 'SECTOR CQB // KILLHOUSE · 60HZ',
+    title: 'KILLHOUSE CQB // BREACH COURSE',
+    subtitle: 'KHU HUẤN LUYỆN ĐỘT KÍCH CẬN CHIẾN — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
+  },
+  arena_duel: {
+    badge: '1V1',
+    eyebrow: 'SECTOR 1V1 // AIM DUEL ARENA · 60HZ',
+    title: 'AIM DUEL ARENA // PROVING GROUND',
+    subtitle: 'SÂN ĐẤU ĐỐI KHÁNG PHẢN XẠ — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
+  }
+};
+
 export function syncLobbyMapSelectionUi(mapId) {
   if (mapGrid?.querySelectorAll) {
     mapGrid.querySelectorAll('.map-option').forEach((el) => {
@@ -385,6 +436,57 @@ export function syncLobbyMapSelectionUi(mapId) {
   if (pauseMapSelect) {
     pauseMapSelect.value = mapId;
   }
+  if (typeof document !== 'undefined' && typeof document.getElementById === 'function') {
+    const mapCfg = getMapConfig(mapId);
+    const resolvedId = mapCfg?.id || mapId;
+    const meta = LOBBY_MAP_META[resolvedId] || {
+      badge: 'OP',
+      eyebrow: `${ String(mapCfg?.name || resolvedId || 'SECTOR').toUpperCase() } · 60HZ`,
+      title: String(mapCfg?.name || resolvedId || 'COMBAT SECTOR').toUpperCase(),
+      subtitle: 'CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
+    };
+    const tagEl = document.getElementById('lobby-sector-tag');
+    const eyebrowEl = document.getElementById('lobby-sector-eyebrow');
+    const locTitleEl = document.getElementById('lobby-loc-title');
+    const locSubEl = document.getElementById('lobby-loc-subtitle');
+    if (tagEl) tagEl.textContent = meta.badge;
+    if (eyebrowEl) eyebrowEl.textContent = meta.eyebrow;
+    if (locTitleEl) locTitleEl.textContent = meta.title;
+    if (locSubEl) locSubEl.textContent = meta.subtitle;
+  }
+}
+
+export function syncLobbyCameraModeUi(mode = 'harbor') {
+  const validMode = mode === 'weapon' || mode === 'operator' ? mode : 'harbor';
+  lobbyScreen?.setAttribute?.('data-camera-mode', validMode);
+  const camModesRoot = typeof document !== 'undefined' ? document.getElementById('lobby-camera-modes') : null;
+  if (camModesRoot?.querySelectorAll) {
+    camModesRoot.querySelectorAll('[data-camera-mode]').forEach((btn) => {
+      const isActive = btn.dataset?.cameraMode === validMode;
+      btn.classList?.toggle('active', isActive);
+      btn.setAttribute?.('aria-pressed', isActive ? 'true' : 'false');
+    });
+  }
+  appState.game?.setLobbyCameraMode?.(validMode);
+  return validMode;
+}
+
+export function setActiveLobbyTab(tabName = 'deploy') {
+  const validTab = tabName === 'rooms' ? 'rooms' : 'deploy';
+  const tabsRoot = typeof document !== 'undefined' ? document.getElementById('lobby-tabs') : null;
+  if (tabsRoot?.querySelectorAll) {
+    tabsRoot.querySelectorAll('[data-lobby-tab]').forEach((btn) => {
+      const isActive = btn.dataset?.lobbyTab === validTab;
+      btn.classList?.toggle('active', isActive);
+      btn.setAttribute?.('aria-selected', isActive ? 'true' : 'false');
+    });
+  }
+  if (lobbyScreen?.querySelectorAll) {
+    lobbyScreen.querySelectorAll('[data-lobby-pane]').forEach((pane) => {
+      pane.classList?.toggle('hidden', pane.dataset?.lobbyPane !== validTab);
+    });
+  }
+  return validTab;
 }
 
 export function applySelectedLoadoutAndNotify() {
@@ -445,10 +547,12 @@ export function applyRestoredUserPrefs() {
     // 4. Selected Combat Sector Map
     appState.selectedMapId = userPrefs.selectedMap;
     syncLobbyMapSelectionUi(appState.selectedMapId);
-    if (appState.selectedMapId !== DEFAULT_MAP_ID) {
-      appState.game.loadMap(appState.selectedMapId);
+    const currentLoadedMap = appState.game?.currentMapConfig?.id || appState.game?.currentMapId;
+    if (appState.selectedMapId && currentLoadedMap !== appState.selectedMapId) {
+      appState.game?.loadMap?.(appState.selectedMapId);
     }
     updateMapHud(appState.selectedMapId);
+    syncLobbyCameraModeUi('harbor');
 
     // 5. Mouse Sensitivity
     if (sensSlider) {
@@ -481,7 +585,7 @@ export function requestJoinRoom({ mode = 'public', roomCode = '' }) {
   lobbyError.classList.add('hidden');
   if (!appState.socket.connected) {
     lobbyError.textContent = appState.lanInfo && !appState.lanInfo.error
-      ? '🔌 Đang kết nối LAN tới chủ phòng, vui lòng đợi vài giây...'
+      ? 'Đang kết nối LAN tới chủ phòng, vui lòng đợi vài giây...'
       : `${ SERVER_UNREACHABLE_MESSAGE }. Vui lòng đợi hoặc tải lại trang.`;
     lobbyError.classList.remove('hidden');
     return;
@@ -627,7 +731,7 @@ export async function startLanGuestInPlace(rawCode, { startGuestFn } = {}) {
       requestJoinRoom({ mode: 'private', roomCode: cleanCode });
     } else {
       appState.serverErrorShown = true;
-      lobbyError.textContent = '🔌 Đang kết nối LAN tới chủ phòng...';
+      lobbyError.textContent = 'Đang kết nối LAN tới chủ phòng...';
       lobbyError.classList.remove('hidden');
     }
     return appState.lanInfo;
@@ -672,7 +776,7 @@ export async function startLanGuestInPlace(rawCode, { startGuestFn } = {}) {
       joinWhenConnected();
     } else {
       appState.serverErrorShown = true;
-      lobbyError.textContent = '🔌 Đang kết nối LAN tới chủ phòng...';
+      lobbyError.textContent = 'Đang kết nối LAN tới chủ phòng...';
       lobbyError.classList.remove('hidden');
       appState.socket.once?.('connect', joinWhenConnected);
     }
@@ -789,6 +893,7 @@ export function leaveActiveRoom(opts = {}) {
   matchEndModal.classList.add('hidden');
   hudScreen.classList.add('hidden');
   lobbyScreen.classList.remove('hidden');
+  syncLobbyCameraModeUi('harbor');
   try {
     window.history.replaceState(null, '', window.location.pathname || '/');
   } catch {
@@ -821,7 +926,7 @@ export function renderTeamWaitingLobby(lobbyData = {}) {
 
   const renderRosterColumn = (list) => {
     if (list.length === 0) {
-      return `<div class="rooms-empty">Chưa có chiến binh ở phe này</div>`;
+      return `<div class="rooms-empty">Chưa có đặc vụ ở phe này</div>`;
     }
     return list
       .map((p) => {
@@ -831,10 +936,10 @@ export function renderTeamWaitingLobby(lobbyData = {}) {
         return `
           <div class="team-roster-item ${ isMe ? 'is-me' : '' }">
             <span>
-              ${ isHost ? '👑 ' : '' }<strong>${ escapeHtml(p.name) }</strong> ${ isMe ? '(Bạn)' : '' }
+              ${ isHost ? '<span class="host-tag">[HOST]</span> ' : '' }<strong>${ escapeHtml(p.name) }</strong> ${ isMe ? '(Bạn)' : '' }
             </span>
             <span class="team-roster-status ${ readyBool ? 'ready' : 'waiting' }">
-              ${ readyBool ? '✓ SẴN SÀNG' : 'ĐANG CHỜ' }
+              ${ readyBool ? 'SẴN SÀNG' : 'ĐANG CHỜ' }
             </span>
           </div>
         `;
@@ -846,7 +951,7 @@ export function renderTeamWaitingLobby(lobbyData = {}) {
   if (teamBravoRoster) teamBravoRoster.innerHTML = renderRosterColumn(bravoList);
 
   if (btnTeamReady) {
-    btnTeamReady.textContent = appState.currentLocalReady ? '✗ HỦY SẴN SÀNG' : '✓ SẴN SÀNG';
+    btnTeamReady.textContent = appState.currentLocalReady ? 'HỦY SẴN SÀNG' : 'SẴN SÀNG';
   }
 
   const isHost = Boolean(appState.game.localId && appState.currentRoomHostId === appState.game.localId);
@@ -861,11 +966,11 @@ export function renderTeamWaitingLobby(lobbyData = {}) {
 
   if (teamLobbyStatus) {
     if (players.length >= 2 && (alphaList.length === 0 || bravoList.length === 0)) {
-      teamLobbyStatus.textContent = '⚠️ Cần ít nhất 1 người ở mỗi phe (Xanh và Đỏ) để bắt đầu trận đấu!';
+      teamLobbyStatus.textContent = 'Cần ít nhất 1 người ở mỗi phe (Alpha và Bravo) để bắt đầu trận đấu.';
     } else if (isHost) {
-      teamLobbyStatus.textContent = '👑 Bạn là Chủ phòng: Có thể bấm BẮT ĐẦU TRẬN ngay hoặc chờ tất cả bấm SẴN SÀNG.';
+      teamLobbyStatus.textContent = 'CHỦ PHÒNG // Có thể bấm BẮT ĐẦU TRẬN ngay hoặc chờ tất cả bấm SẴN SÀNG.';
     } else {
-      teamLobbyStatus.textContent = 'Chọn phe và bấm Sẵn Sàng. Khi tất cả sẵn sàng, trận đấu sẽ tự động bắt đầu!';
+      teamLobbyStatus.textContent = 'Chọn phe và bấm Sẵn Sàng. Khi tất cả sẵn sàng, trận đấu sẽ tự động bắt đầu.';
     }
   }
 }
@@ -936,7 +1041,7 @@ if (btnSaveLoadout) {
   btnSaveLoadout.addEventListener('click', () => {
     applySelectedLoadoutAndNotify();
     toggleLoadoutModal(false);
-    showToast(`🎒 ${ WEAPONS[appState.selectedLoadout.primary]?.name || appState.selectedLoadout.primary }`);
+    showToast(`TRANG BỊ // ${ WEAPONS[appState.selectedLoadout.primary]?.name || appState.selectedLoadout.primary }`);
     requestManualRespawnIfReady();
   });
 }
@@ -1002,6 +1107,32 @@ if (lobbyGameModeGrid) {
   });
 }
 
+const lobbyCameraModes = typeof document !== 'undefined' ? document.getElementById('lobby-camera-modes') : null;
+if (lobbyCameraModes) {
+  lobbyCameraModes.addEventListener('click', (e) => {
+    const btn = e.target.closest?.('[data-camera-mode]');
+    if (!btn) return;
+    syncLobbyCameraModeUi(btn.dataset.cameraMode);
+  });
+}
+
+const lobbyTabs = typeof document !== 'undefined' ? document.getElementById('lobby-tabs') : null;
+if (lobbyTabs) {
+  lobbyTabs.addEventListener('click', (e) => {
+    const btn = e.target.closest?.('[data-lobby-tab]');
+    if (!btn) return;
+    setActiveLobbyTab(btn.dataset.lobbyTab);
+  });
+}
+
+const btnOpenRoomsTab = typeof document !== 'undefined' ? document.getElementById('btn-open-rooms-tab') : null;
+if (btnOpenRoomsTab) {
+  btnOpenRoomsTab.addEventListener('click', () => {
+    setActiveLobbyTab('rooms');
+    roomCodeInput?.focus?.();
+  });
+}
+
 weaponGrid.addEventListener('click', (e) => {
   const btn = e.target.closest('.weapon-option');
   if (!btn) return;
@@ -1016,6 +1147,7 @@ weaponGrid.addEventListener('click', (e) => {
   syncLobbyWeaponSelectionUi(appState.selectedStartingWeapon);
   appState.game?.setLoadout?.(appState.selectedLoadout);
   appState.game?.setLobbyWeapon?.(appState.selectedStartingWeapon);
+  syncLobbyCameraModeUi('weapon');
   syncHotbarSlotsHud();
   renderLoadoutModal();
   saveUserPrefs({
@@ -1059,6 +1191,7 @@ if (operatorColorSwatches) {
     if (!Number.isNaN(hexVal)) {
       appState.selectedOperatorColor = hexVal;
       appState.game.setLobbyOperatorColor(hexVal);
+      syncLobbyCameraModeUi('operator');
       operatorColorSwatches.querySelectorAll('.color-swatch').forEach((el) => {
         el.classList.toggle('active', el === sw);
       });
@@ -1070,6 +1203,7 @@ if (operatorColorSwatches) {
 const btnShowcasePoster = typeof document !== 'undefined' ? document.getElementById('btn-showcase-poster') : null;
 if (btnShowcasePoster) {
   btnShowcasePoster.addEventListener('click', () => {
+    syncLobbyCameraModeUi('operator');
     const poster = appState.game.toggleLobbyPosterPose?.();
     btnShowcasePoster.classList.toggle('active', Boolean(poster));
     if (poster) {
@@ -1083,6 +1217,7 @@ if (btnShowcasePoster) {
 
 if (btnShowcaseWalk) {
   btnShowcaseWalk.addEventListener('click', () => {
+    syncLobbyCameraModeUi('operator');
     const walking = appState.game.toggleLobbyWalk();
     btnShowcaseWalk.classList.toggle('active', walking);
     if (walking) {
@@ -1094,6 +1229,7 @@ if (btnShowcaseWalk) {
 
 if (btnShowcaseCrouch) {
   btnShowcaseCrouch.addEventListener('click', () => {
+    syncLobbyCameraModeUi('operator');
     const crouching = appState.game.toggleLobbyCrouch();
     btnShowcaseCrouch.classList.toggle('active', crouching);
     if (crouching) {
@@ -1105,6 +1241,9 @@ if (btnShowcaseCrouch) {
 
 if (btnShowcaseFire) {
   btnShowcaseFire.addEventListener('click', () => {
+    if ((appState.game?.lobbyCameraMode || 'harbor') === 'harbor') {
+      syncLobbyCameraModeUi('operator');
+    }
     if (!appState.sfx.enabled) {
       appState.sfx.enabled = true;
       if (soundCheckbox) soundCheckbox.checked = true;
@@ -1118,6 +1257,9 @@ if (btnShowcaseFire) {
 
 if (btnShowcaseRotate) {
   btnShowcaseRotate.addEventListener('click', () => {
+    if ((appState.game?.lobbyCameraMode || 'harbor') === 'harbor') {
+      syncLobbyCameraModeUi('operator');
+    }
     appState.game.lobbyAutoRotate = !appState.game.lobbyAutoRotate;
     btnShowcaseRotate.classList.toggle('active', appState.game.lobbyAutoRotate);
   });
@@ -1131,6 +1273,7 @@ if (mapGrid) {
     syncLobbyMapSelectionUi(appState.selectedMapId);
     // Live 3D map preview in the lobby background
     appState.game.loadMap(appState.selectedMapId);
+    syncLobbyCameraModeUi('harbor');
     updateMapHud(appState.selectedMapId);
     saveUserPrefs({ selectedMap: appState.selectedMapId });
   });
@@ -1275,28 +1418,74 @@ for (const sel of qualitySelects) {
 }
 renderQualityUi();
 
-// Asset loading progress: only visible when preloading glTF props + PBR textures takes a noticeable time
+// Saltline-style non-blocking 4-stage preload bar: Lobby is 100% interactive immediately; bar steps through stages & auto-hides at 100%
 {
   const box = document.getElementById('asset-loading');
+  const stageBadge = document.getElementById('asset-loading-stage');
   const text = document.getElementById('asset-loading-text');
+  const pctEl = document.getElementById('asset-loading-pct');
   const fill = document.getElementById('asset-loading-fill');
-  let showTimer = null;
-  let finished = false;
-  const onProgress = ({ loaded, total }) => {
-    if (text) text.textContent = `Đang tải đồ họa… ${loaded}/${total}`;
-    if (fill) fill.style.width = total ? `${Math.round((loaded / total) * 100)}%` : '0%';
+  const stepChips = box ? Array.from(box.querySelectorAll('[data-boot-step]')) : [];
+
+  const setPreloadState = (stepIdx, label, pct) => {
+    const cleanPct = Math.max(0, Math.min(100, Math.round(pct)));
+    if (stageBadge) stageBadge.textContent = `CHẶNG ${stepIdx}/4`;
+    if (text) text.textContent = label;
+    if (pctEl) pctEl.textContent = `${cleanPct}%`;
+    if (fill) fill.style.width = `${cleanPct}%`;
+    for (let i = 0; i < stepChips.length; i++) {
+      const n = i + 1;
+      stepChips[i].classList.toggle('done', n < stepIdx || cleanPct >= 100);
+      stepChips[i].classList.toggle('active', n === stepIdx && cleanPct < 100);
+    }
   };
-  showTimer = setTimeout(() => {
-    if (!finished) box?.classList.remove('hidden');
-  }, 450);
-  appState.game
-    .preloadAssets(onProgress)
-    .catch(() => {})
-    .finally(() => {
-      finished = true;
-      clearTimeout(showTimer);
+
+  (async () => {
+    if (box) {
+      box.classList.remove('hidden', 'is-complete');
+      setPreloadState(1, 'Khởi tạo HDR, AgX & Bầu trời…', 8);
+    }
+    await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 12)));
+    setPreloadState(1, 'Khởi tạo HDR, AgX & Bầu trời…', 20);
+
+    // Stage 2: PBR surface sets & glTF props
+    setPreloadState(2, 'Nạp vật liệu PBR & mô hình 3D…', 22);
+    try {
+      await appState.game.preloadAssets(({ loaded, total }) => {
+        const ratio = total > 0 ? loaded / total : 1;
+        setPreloadState(2, `Nạp vật liệu PBR & mô hình (${loaded}/${total})…`, 22 + ratio * 40);
+      });
+    } catch {
+      // Fallback procedural materials already active
+    }
+
+    // Stage 3: Time-sliced Saltline procedural WebAudio waveform synthesis
+    setPreloadState(3, 'Tổng hợp âm thanh cơ khí Saltline…', 64);
+    try {
+      await appState.sfx?.prewarmAudioBuffers?.((ratio) => {
+        setPreloadState(3, 'Tổng hợp âm thanh cơ khí Saltline…', 64 + ratio * 22);
+      });
+    } catch {
+      // On-demand fallback available
+    }
+
+    // Stage 4: Pre-compile arena & weapon viewmodel GPU shaders
+    setPreloadState(4, 'Biên dịch trước Shader 3D…', 88);
+    try {
+      await appState.game.prewarmShaders?.((ratio) => {
+        setPreloadState(4, 'Biên dịch trước Shader 3D…', 88 + ratio * 12);
+      });
+    } catch {
+      // Safe fallback
+    }
+
+    setPreloadState(4, 'Sẵn sàng chiến đấu', 100);
+    box?.classList.add('is-complete');
+    setTimeout(() => {
       box?.classList.add('hidden');
-    });
+      box?.classList.remove('is-complete');
+    }, 380);
+  })();
 }
 
 activeRoomsList.addEventListener('click', (e) => {
@@ -1368,7 +1557,7 @@ export function initLanServerRoom() {
     }
     lanUrlInput.value = url;
     await refreshLanServerUrl();
-    showToast(lanServerUrl ? '✅ Đã lưu server LAN' : 'Đã xóa server LAN: phòng riêng tạo trên server này');
+    showToast(lanServerUrl ? 'ĐÃ LƯU SERVER LAN' : 'ĐÃ XÓA SERVER LAN — TẠO PHÒNG TRÊN SERVER NÀY');
   });
   refreshLanServerUrl();
 
@@ -1421,7 +1610,7 @@ export function initLanServerRoom() {
       autoJoinGuest();
     } else {
       appState.serverErrorShown = true; // cleared (and the message hidden) by the socket's `connect`
-      lobbyError.textContent = '🔌 Đang kết nối LAN tới chủ phòng...';
+      lobbyError.textContent = 'Đang kết nối LAN tới chủ phòng...';
       lobbyError.classList.remove('hidden');
       appState.socket.once?.('connect', autoJoinGuest);
     }

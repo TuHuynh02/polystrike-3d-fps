@@ -67,11 +67,18 @@ export class AssetManager {
     this.loadImage = opts.loadImage || defaultLoadImage;
     this.importGltfLoader =
       opts.importGltfLoader || (async () => (await import('three/addons/loaders/GLTFLoader.js')).GLTFLoader);
+    this.importRgbeLoader =
+      opts.importRgbeLoader || (async () => (await import('three/addons/loaders/RGBELoader.js')).RGBELoader);
     this.models = new Map(); // name -> Promise<gltf|null>
     this.loadedModels = new Map(); // name -> gltf (resolved ok)
+    this.gltfAssets = new Map(); // relPath -> Promise<gltf|null>
+    this.loadedGltfAssets = new Map(); // relPath -> gltf (resolved ok)
+    this.hdris = new Map(); // relPath -> Promise<THREE.Texture|null>
+    this.loadedHdris = new Map(); // relPath -> THREE.Texture
     this.textures = new Map(); // key -> Promise<THREE.Texture|null>
     this.loadedTextures = new Map(); // key -> THREE.Texture
     this._loaderPromise = null;
+    this._rgbeLoaderPromise = null;
     this.maxAnisotropy = 1;
   }
 
@@ -85,6 +92,13 @@ export class AssetManager {
       this._loaderPromise = this.importGltfLoader().then((Cls) => new Cls());
     }
     return this._loaderPromise;
+  }
+
+  async _getRgbeLoader() {
+    if (!this._rgbeLoaderPromise) {
+      this._rgbeLoaderPromise = this.importRgbeLoader().then((Cls) => new Cls());
+    }
+    return this._rgbeLoaderPromise;
   }
 
   /** Loads (once) and caches `<name>.glb`. Resolves to the glTF result or null. Never throws. */
@@ -104,6 +118,55 @@ export class AssetManager {
       }
     })();
     this.models.set(name, p);
+    return p;
+  }
+
+  /** Loads (once) and caches `${ASSET_BASE}${relPath}` as a glTF result or null. Never throws. */
+  loadAssetGltf(relPath) {
+    if (!relPath) return Promise.resolve(null);
+    const cleanRel = String(relPath).replace(/^\/+/, '');
+    if (!cleanRel) return Promise.resolve(null);
+    if (this.gltfAssets.has(cleanRel)) return this.gltfAssets.get(cleanRel);
+    const url = `${ASSET_BASE}${cleanRel}`;
+    const p = (async () => {
+      try {
+        const loader = await this._getLoader();
+        const gltf = await loader.loadAsync(url);
+        if (!gltf?.scene) throw new Error('empty glTF scene');
+        this.loadedGltfAssets.set(cleanRel, gltf);
+        return gltf;
+      } catch (err) {
+        warnOnce(`gltf:${cleanRel}`, `glTF "${cleanRel}" unavailable, using procedural fallback`, err);
+        return null;
+      }
+    })();
+    this.gltfAssets.set(cleanRel, p);
+    return p;
+  }
+
+  /** Loads (once) and caches an equirectangular `.hdr` texture at `${ASSET_BASE}${relPath}`, or null on failure. */
+  loadHdri(relPath) {
+    if (!relPath) return Promise.resolve(null);
+    const cleanRel = String(relPath).replace(/^\/+/, '');
+    if (!cleanRel) return Promise.resolve(null);
+    if (this.hdris.has(cleanRel)) return this.hdris.get(cleanRel);
+    const url = `${ASSET_BASE}${cleanRel}`;
+    const p = (async () => {
+      try {
+        const loader = await this._getRgbeLoader();
+        const tex = await loader.loadAsync(url);
+        if (!tex) throw new Error('empty HDRI texture');
+        tex.mapping = THREE.EquirectangularReflectionMapping;
+        tex.userData = { ...(tex.userData || {}), shared: true };
+        tex.needsUpdate = true;
+        this.loadedHdris.set(cleanRel, tex);
+        return tex;
+      } catch (err) {
+        warnOnce(`hdri:${cleanRel}`, `HDRI "${cleanRel}" unavailable, using procedural fallback`, err);
+        return null;
+      }
+    })();
+    this.hdris.set(cleanRel, p);
     return p;
   }
 
@@ -229,6 +292,12 @@ export class AssetManager {
 
   dispose() {
     for (const name of Array.from(this.loadedModels.keys())) this.disposeModel(name);
+    for (const gltf of this.loadedGltfAssets.values()) disposeObjectDeep(gltf.scene);
+    this.loadedGltfAssets.clear();
+    this.gltfAssets.clear();
+    for (const tex of this.loadedHdris.values()) tex.dispose();
+    this.loadedHdris.clear();
+    this.hdris.clear();
     for (const tex of this.loadedTextures.values()) tex.dispose();
     this.loadedTextures.clear();
     this.textures.clear();

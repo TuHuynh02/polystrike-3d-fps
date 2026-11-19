@@ -313,13 +313,13 @@ export function bindGameSocketListeners(targetSocket = appState.socket) {
     }
   }, {
     isInMatch: () => Boolean(appState.game.inMatch || appState.activeRoomCode),
-    onLost: () => showToast(appState.lanInfo ? '⚠️ Mất kết nối LAN với chủ phòng' : '⚠️ Mất kết nối — đang kết nối lại...'),
+    onLost: () => showToast(appState.lanInfo ? 'MẤT KẾT NỐI LAN VỚI CHỦ PHÒNG' : 'MẤT KẾT NỐI — ĐANG KẾT NỐI LẠI...'),
     rejoin: () => {
       if (!appState.lastJoinPayload) return;
       appState.game.clearAllRemotePlayers();
       appState.socket.emit('joinRoom', { ...appState.lastJoinPayload, roomCode: appState.activeRoomCode || appState.lastJoinPayload.roomCode });
     },
-    onReconnected: () => showToast('🔄 Đã kết nối lại — vào lại phòng')
+    onReconnected: () => showToast('ĐÃ KẾT NỐI LẠI — VÀO LẠI PHÒNG')
   });
 
 onActiveSocket('disconnect', () => {
@@ -385,9 +385,18 @@ onActiveSocket('roomJoined', (data) => {
   appState.game.clearAllRemotePlayers();
   appState.game.snapshots?.configure?.(data.net); // server tick rate -> interpolation delay floor
 
-  // Load room map geometry & update HUD map indicators
+  // Load room map geometry & update HUD map indicators (reuse already-loaded Lobby arena when map matches)
   const roomMapId = data.mapId || appState.selectedMapId || DEFAULT_MAP_ID;
-  appState.game.loadMap(roomMapId);
+  if (
+    appState.game.currentMapId === roomMapId &&
+    appState.game.worldMeshes?.length > 0 &&
+    !appState.game.needsMapRebuild &&
+    typeof appState.game.resetMatchMapState === 'function'
+  ) {
+    appState.game.resetMatchMapState();
+  } else {
+    appState.game.loadMap(roomMapId);
+  }
   updateMapHud(roomMapId);
 
   // Update browser URL with ?room=CODE so copying URL directly from address bar works
@@ -460,12 +469,12 @@ onActiveSocket('roomJoined', (data) => {
       killLimit: data.killLimit || 30,
       players: appState.latestPlayers
     });
-    showToast(`🛡️ Phòng Đấu Đội #${ appState.activeRoomCode } • Chọn phe và Sẵn sàng!`);
+    showToast(`PHÒNG ĐẤU ĐỘI #${ appState.activeRoomCode } // CHỌN PHE & SẴN SÀNG`);
   } else {
     teamLobbyModal?.classList.add('hidden');
     hudScreen.classList.remove('hidden');
     appState.game.requestPointerLock();
-    showToast(`🎯 Phòng #${ appState.activeRoomCode } • ${ getMapConfig(roomMapId).name }`);
+    showToast(`PHÒNG #${ appState.activeRoomCode } // ${ getMapConfig(roomMapId).name }`);
   }
   syncLanHostMeta({ mapId: roomMapId });
 });
@@ -474,7 +483,7 @@ onActiveSocket('loadoutUpdated', (data) => {
   if (!appState.game.inMatch && !appState.activeRoomCode) return;
   if (data?.loadout?.pending) {
     // Mid-life loadout swaps are applied on the next respawn (prefs below keep the pending pick)
-    showToast('🎒 Trang bị mới sẽ có hiệu lực khi hồi sinh');
+    showToast('TRANG BỊ MỚI ÁP DỤNG KHI HỒI SINH');
   }
   if (data?.loadout) {
     appState.selectedLoadout = {
@@ -501,7 +510,7 @@ onActiveSocket('loadoutUpdated', (data) => {
 
 onActiveSocket('playerJoined', (data) => {
   if ((!appState.game.inMatch && !appState.activeRoomCode) || !data?.name) return;
-  showToast(`👤 ${ data.name } đã vào phòng`);
+  showToast(`${ data.name } ĐÃ VÀO PHÒNG`);
   syncLanHostMeta({ humans: Math.max(1, (appState.latestPlayers?.length || 1) + 1) });
 });
 
@@ -533,7 +542,7 @@ onActiveSocket('mapChanged', (data) => {
     updateGrenadeHud(me.grenades ?? me.grenadeCount ?? 1);
     triggerSpawnProtectionHud(MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500);
   }
-  showToast(`🗺️ ${ data.mapName || getMapConfig(newMapId).name }`);
+  showToast(`BẢN ĐỒ // ${ data.mapName || getMapConfig(newMapId).name }`);
   syncLanHostMeta({ mapId: newMapId });
 });
 
@@ -548,7 +557,7 @@ onActiveSocket('spawnProtectionEnded', (data) => {
 // Server rejected a host-only or team-lobby action: tell the player and restore the controls
 onActiveSocket('actionDenied', (data) => {
   if (!appState.game.inMatch && !appState.activeRoomCode) return;
-  showToast(`⛔ ${ data?.message || 'Hành động không được phép.' }`);
+  showToast(`${ data?.message || 'HÀNH ĐỘNG KHÔNG ĐƯỢC PHÉP' }`);
   if (data?.action === 'changeMap') {
     updateMapHud(appState.game.currentMapConfig?.id || appState.selectedMapId);
   }
@@ -562,7 +571,7 @@ onActiveSocket('hostChanged', (data) => {
       renderTeamWaitingLobby({ hostId: data.hostId, players: appState.latestPlayers });
     }
   }
-  showToast(`👑 ${ data.name } là chủ phòng mới`);
+  showToast(`CHỦ PHÒNG MỚI // ${ data.name }`);
 });
 
 // Authoritative movement state for the commands the server has simulated (sent to this player only):
@@ -584,7 +593,7 @@ onActiveSocket('shotRejected', (data) => {
   if (now - appState.lastShotRejectToastAt >= 1800) {
     appState.lastShotRejectToastAt = now;
     const msg = SHOT_REJECT_MESSAGES[data.reason] || 'Phát bắn bị từ chối — đã đồng bộ lại đạn';
-    showToast(`⚠️ ${ msg }`);
+    showToast(msg);
   }
 });
 
@@ -694,7 +703,7 @@ onActiveSocket('stateUpdate', (snapshot) => {
       cache.leaderId = topPlayer.id;
       cache.leaderKills = topPlayer.kills;
       cache.leaderName = topPlayer.name;
-      const nextLeaderText = `👑 ${ topPlayer.name } (${ topPlayer.kills }/${ hudKillLimit.textContent })`;
+      const nextLeaderText = `DẪN ĐẦU // ${ topPlayer.name } (${ topPlayer.kills }/${ hudKillLimit.textContent })`;
       if (cache.leaderText !== nextLeaderText) {
         cache.leaderText = nextLeaderText;
         hudLeader.textContent = nextLeaderText;
@@ -790,7 +799,7 @@ onActiveSocket('damageDealt', (data) => {
     if (typeof data.armor === 'number') updateArmorHud(data.armor);
     if (data.armorBroken) {
       appState.sfx.playArmorHit?.(true);
-      showCenterBanner('🛡️ GIÁP KEVLAR ĐÃ VỠ!');
+      showCenterBanner('GIÁP KEVLAR ĐÃ VỠ');
     } else if ((Number(data.armorDamage) || 0) > 0) {
       appState.sfx.playArmorHit?.(false);
     } else {
@@ -823,7 +832,7 @@ onActiveSocket('damageDealt', (data) => {
 onActiveSocket('spawnProtectedHit', (data) => {
   if (!appState.game.inMatch) return;
   if (data.attackerId === appState.game.localId) {
-    showCenterBanner('🛡️ MỤC TIÊU BẤT TỬ');
+    showCenterBanner('MỤC TIÊU BẤT TỬ');
   }
 });
 
@@ -1029,26 +1038,26 @@ onActiveSocket('pickupState', (data) => {
     if (pType === 'armor') {
       appState.sfx.playPowerupPickup?.('armor');
       updateArmorHud(data.newArmor ?? 50);
-      showCenterBanner('🛡️ +50 GIÁP KEVLAR');
+      showCenterBanner('+50 GIÁP KEVLAR');
       return;
     }
     if (pType === 'speed') {
       appState.sfx.playPowerupPickup?.('speed');
       appState.game.speedBoostUntil = performance.now() + (data.speedBoostMs || 10000);
       updateActiveBuffsHud();
-      showCenterBanner('⚡ TĂNG TỐC X1.3 (10S)');
+      showCenterBanner('TĂNG TỐC X1.3 (10S)');
       return;
     }
     if (pType === 'damage') {
       appState.sfx.playPowerupPickup?.('damage');
       appState.game.damageBoostUntil = performance.now() + (data.damageBoostMs || 10000);
       updateActiveBuffsHud();
-      showCenterBanner('🔥 QUÁ TẢI SÁT THƯƠNG X1.35 (10S)');
+      showCenterBanner('SÁT THƯƠNG X1.35 (10S)');
       return;
     }
     appState.sfx.playPickup();
     updateHpHud(data.newHp);
-    showCenterBanner('💚 +50 HP');
+    showCenterBanner('+50 HP');
   }
 });
 
@@ -1079,18 +1088,18 @@ onActiveSocket('streakEvent', (data) => {
     if (isMe && typeof data.armor === 'number') {
       updateArmorHud(data.armor);
     }
-    showToast(`🛑 SHUTDOWN! ${data.killerName} đã chấm dứt chuỗi ${data.endedStreak} mạng của ${data.victimName}!`);
+    showToast(`CHẤM DỨT CHUỖI // ${data.killerName} HẠ ${data.victimName} (${data.endedStreak})`);
     if (isMe) {
-      showCenterBanner(`🛑 CHẤM DỨT CHUỖI (${data.rewardText || '+25 GIÁP'})`);
+      showCenterBanner(`CHẤM DỨT CHUỖI (${data.rewardText || '+25 GIÁP'})`);
     }
     return;
   }
   if (isMe) {
     if (typeof data.armor === 'number') updateArmorHud(data.armor);
     if (typeof data.grenades === 'number') updateGrenadeHud(data.grenades);
-    showCenterBanner(`🔥 ${data.label} (${data.streak} MẠNG) • ${data.rewardText || ''}`);
+    showCenterBanner(`${data.label} (${data.streak} MẠNG) // ${data.rewardText || ''}`);
   } else {
-    showToast(`🔥 ${data.playerName}: ${data.label} (${data.streak} mạng liên tiếp)!`);
+    showToast(`${data.playerName}: ${data.label} (${data.streak} MẠNG)`);
   }
 });
 
@@ -1114,7 +1123,7 @@ onActiveSocket('weaponSwapped', (data) => {
     appState.game.applySwappedWeapon(data);
     appState.sfx.playWeaponDrop?.();
     const wCfg = WEAPONS[data.weapon];
-    showCenterBanner(`🔫 ${ wCfg ? wCfg.name : data.weapon } (${ data.ammo }/${ data.reserveAmmo })`);
+    showCenterBanner(`${ wCfg ? wCfg.name : data.weapon } (${ data.ammo }/${ data.reserveAmmo })`);
   }
 });
 
@@ -1252,7 +1261,7 @@ onActiveSocket('matchStarted', (data) => {
     updateGrenadeHud(me.grenades ?? me.grenadeCount ?? 1);
     triggerSpawnProtectionHud(MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500);
   }
-  showCenterBanner(appState.currentRoomGameMode === 'tdm' ? '⚔️ ĐẤU ĐỘI BẮT ĐẦU' : '🔥 BẮT ĐẦU');
+  showCenterBanner(appState.currentRoomGameMode === 'tdm' ? 'ĐẤU ĐỘI BẮT ĐẦU' : 'BẮT ĐẦU TRẬN');
   appState.game.requestPointerLock();
   syncLanHostMeta({ state: 'PLAYING' });
   for (const delay of [200, 600]) setTimeout(measurePing, delay);

@@ -48,6 +48,7 @@ import { getAssetManager } from '../assets.js';
 import { applyPbrToSlots, revertPbrSlots, surfaceSetsForMap } from '../surfaceMaterials.js';
 import { CRATE_MODEL_NAMES } from '../arenaProps.js';
 import { applyWeaponAssetOverride, isWeaponOverrideEnabled, measureWeaponGroup } from '../weaponAssetOverrides.js';
+import { getSharedSmokeTex } from './combatEffects.js';
 
 export function shadowTypeFor(kind) {
   if (kind === 'pcfsoft') return THREE.PCFSoftShadowMap;
@@ -570,7 +571,8 @@ export class GrenadeMethods {
     const fuseMat = new THREE.MeshBasicMaterial({
       color: 0xff3b30,
       transparent: true,
-      opacity: 0.95
+      opacity: 0.95,
+      toneMapped: false
     });
     const fuseBeacon = new THREE.Mesh(this.sharedHitOrbGeo, fuseMat);
     fuseBeacon.scale.setScalar(0.42);
@@ -584,7 +586,9 @@ export class GrenadeMethods {
       side: THREE.DoubleSide,
       transparent: true,
       opacity: 0.55,
-      depthWrite: false
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false
     });
     const glowRing = new THREE.Mesh(this.sharedGrenadeRingGeo, glowRingMat);
     glowRing.scale.setScalar(4.2);
@@ -677,7 +681,7 @@ export class GrenadeMethods {
 
     if (!this.explosionPool) this.explosionPool = [];
     let fxObj = this.explosionPool.pop();
-    let coreSphere, coreMat, fireballSphere, fireballMat, blastWaveSphere, blastWaveMat, shockwaveRing, shockwaveMat, torusRing, torusMat, sparkMat, particles;
+    let coreSphere, coreMat, fireballSphere, fireballMat, blastWaveSphere, blastWaveMat, shockwaveRing, shockwaveMat, torusRing, torusMat, sparkMat, particles, smokeClouds;
 
     if (fxObj) {
       ({
@@ -694,36 +698,42 @@ export class GrenadeMethods {
         sparkMat,
         particles
       } = fxObj);
+      smokeClouds = fxObj.smokeClouds || (fxObj.smokeClouds = []);
       coreMat.opacity = 1.0;
       fireballMat.opacity = 0.92;
-      blastWaveMat.opacity = 0.42;
+      blastWaveMat.opacity = 0.28;
       shockwaveMat.opacity = 0.95;
       torusMat.opacity = 0.88;
       sparkMat.opacity = 1.0;
       particles.length = 0;
+      smokeClouds.length = 0;
     } else {
       coreMat = new THREE.MeshBasicMaterial({
-        color: 0xfef08a,
+        color: 0xfffbeb,
         transparent: true,
         opacity: 1.0,
-        depthWrite: false
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false
       });
       coreSphere = new THREE.Mesh(this.sharedExplosionSphereGeo, coreMat);
 
       fireballMat = new THREE.MeshBasicMaterial({
-        color: 0xf97316,
+        color: 0xff6b1a,
         transparent: true,
         opacity: 0.92,
-        depthWrite: false
+        depthWrite: false,
+        toneMapped: false
       });
       fireballSphere = new THREE.Mesh(this.sharedExplosionSphereGeo, fireballMat);
 
       blastWaveMat = new THREE.MeshBasicMaterial({
-        color: 0xef4444,
+        color: 0xfdba74,
         transparent: true,
-        opacity: 0.42,
-        wireframe: true,
-        depthWrite: false
+        opacity: 0.28,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false
       });
       blastWaveSphere = new THREE.Mesh(this.sharedExplosionSphereGeo, blastWaveMat);
 
@@ -732,25 +742,33 @@ export class GrenadeMethods {
         side: THREE.DoubleSide,
         transparent: true,
         opacity: 0.95,
-        depthWrite: false
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false
       });
       shockwaveRing = new THREE.Mesh(this.sharedShockwaveRingGeo, shockwaveMat);
       shockwaveRing.rotation.x = -Math.PI / 2;
 
       torusMat = new THREE.MeshBasicMaterial({
-        color: 0xfacc15,
+        color: 0xfde047,
         transparent: true,
         opacity: 0.88,
-        depthWrite: false
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false
       });
       torusRing = new THREE.Mesh(this.sharedShockwaveTorusGeo, torusMat);
 
       sparkMat = new THREE.MeshBasicMaterial({
-        color: 0xfde047,
+        color: 0xffd166,
         transparent: true,
-        opacity: 1.0
+        opacity: 1.0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false
       });
       particles = [];
+      smokeClouds = [];
     }
 
     coreSphere.position.set(ex, ey + 0.18, ez);
@@ -778,31 +796,33 @@ export class GrenadeMethods {
     const flashLight = this.explosionLight;
     if (flashLight) {
       flashLight.position.set(ex, ey + 0.6, ez);
-      flashLight.intensity = this.quality.dynamicLights >= 2 ? 8.5 : 0;
+      flashLight.intensity = this.quality.dynamicLights >= 2 ? 10.5 : 0;
     }
 
     if (!this.sparkMeshPool) this.sparkMeshPool = [];
     if (!this.tracerParticlePool) this.tracerParticlePool = [];
-    const pCount = Math.max(4, Math.round(18 * this.quality.particleScale));
+    const pScale = this.quality?.particleScale ?? 1;
+    const pCount = Math.max(12, Math.round(22 * pScale));
     for (let i = 0; i < pCount; i++) {
       const pMesh = this.sparkMeshPool.pop() || new THREE.Mesh(this.sharedSparkGeo, sparkMat);
       pMesh.geometry = this.sharedSparkGeo;
       pMesh.material = sparkMat;
-      pMesh.scale.setScalar(1.6 + Math.random() * 1.4);
+      pMesh.scale.setScalar(1.4 + Math.random() * 1.5);
       pMesh.position.set(ex, ey + 0.2, ez);
+      pMesh.visible = true;
       const angle = (i / pCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.35;
       const hSpeed = 4.5 + Math.random() * 9.5;
       let pt = this.tracerParticlePool.pop();
       if (pt) {
         pt.mesh = pMesh;
         pt.vx = Math.cos(angle) * hSpeed;
-        pt.vy = 3.8 + Math.random() * 8.5;
+        pt.vy = 4.2 + Math.random() * 8.5;
         pt.vz = Math.sin(angle) * hSpeed;
       } else {
         pt = {
           mesh: pMesh,
           vx: Math.cos(angle) * hSpeed,
-          vy: 3.8 + Math.random() * 8.5,
+          vy: 4.2 + Math.random() * 8.5,
           vz: Math.sin(angle) * hSpeed
         };
       }
@@ -810,15 +830,81 @@ export class GrenadeMethods {
       this.scene.add(pMesh);
     }
 
+    // Pooled billowing dark smoke cloud sprites rising & expanding from blast core
+    const smokeTex = getSharedSmokeTex();
+    const smokeCount = Math.max(4, Math.round(10 * pScale));
+    if (smokeCount > 0 && smokeTex) {
+      if (!this.smokeSpritePool) this.smokeSpritePool = [];
+      if (!this.smokeMatPool) this.smokeMatPool = [];
+      if (!this.smokeCloudPool) this.smokeCloudPool = [];
+      const smokePalette = [0x1f242c, 0x2a2f38, 0x38322d];
+      for (let s = 0; s < smokeCount; s++) {
+        const sColor = smokePalette[s % smokePalette.length];
+        let sMat = this.smokeMatPool.pop();
+        if (sMat) {
+          sMat.map = smokeTex;
+          sMat.color.setHex(sColor);
+          sMat.opacity = 0;
+        } else {
+          sMat = new THREE.SpriteMaterial({
+            map: smokeTex,
+            color: sColor,
+            transparent: true,
+            opacity: 0,
+            depthWrite: false
+          });
+        }
+        sMat.rotation = Math.random() * Math.PI * 2;
+        const sprite = this.smokeSpritePool.pop() || new THREE.Sprite(sMat);
+        sprite.material = sMat;
+        const startScale = 0.85 + Math.random() * 0.50;
+        sprite.scale.setScalar(startScale);
+        const sAng = (s / smokeCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.45;
+        const sOff = 0.25 + Math.random() * 0.55;
+        sprite.position.set(
+          ex + Math.cos(sAng) * sOff,
+          ey + 0.25 + Math.random() * 0.45,
+          ez + Math.sin(sAng) * sOff
+        );
+        sprite.visible = true;
+        this.scene.add(sprite);
+
+        const hVel = 1.8 + Math.random() * 3.4;
+        const sc = this.smokeCloudPool.pop() || {
+          sprite: null,
+          mat: null,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          drag: 2.6,
+          startScale: 1.0,
+          endScale: 3.6,
+          maxOpacity: 0.64,
+          rotSpeed: 0
+        };
+        sc.sprite = sprite;
+        sc.mat = sMat;
+        sc.vx = Math.cos(sAng) * hVel;
+        sc.vy = 1.6 + Math.random() * 2.4;
+        sc.vz = Math.sin(sAng) * hVel;
+        sc.drag = 2.6;
+        sc.startScale = startScale;
+        sc.endScale = 3.1 + Math.random() * 1.6;
+        sc.maxOpacity = 0.56 + Math.random() * 0.18;
+        sc.rotSpeed = (Math.random() - 0.5) * 1.4;
+        smokeClouds.push(sc);
+      }
+    }
+
     if (ey <= 1.2) {
-      this.spawnBulletDecal({ x: ex, y: 0.01, z: ez }, { x: 0, y: 1, z: 0 });
+      this.spawnBulletDecal({ x: ex, y: 0.01, z: ez }, { x: 0, y: 1, z: 0 }, 3.4);
     }
 
     if (fxObj) {
       fxObj.flashLight = flashLight;
       fxObj.maxRadius = radius;
       fxObj.createdAt = now;
-      fxObj.duration = 540;
+      fxObj.duration = 720;
       this.activeEffects.push(fxObj);
     } else {
       this.activeEffects.push({
@@ -835,10 +921,11 @@ export class GrenadeMethods {
         torusMat,
         flashLight,
         particles,
+        smokeClouds,
         sparkMat,
         maxRadius: radius,
         createdAt: now,
-        duration: 540
+        duration: 720
       });
     }
   }

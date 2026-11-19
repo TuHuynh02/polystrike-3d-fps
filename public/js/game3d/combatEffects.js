@@ -57,7 +57,148 @@ export function shadowTypeFor(kind) {
 
 export const DEATH_BODY_MAX_MS = 1500;
 
+let _sharedBulletDecalTex = null;
+let _sharedSmokeTex = null;
+let _sharedTracerBoltGeo = null;
+
+function getSharedBulletDecalTex() {
+  if (!_sharedBulletDecalTex && typeof document !== 'undefined') {
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+
+    ctx.clearRect(0, 0, 128, 128);
+
+    // Outer scorched soot & concrete powder halo
+    const outerGrad = ctx.createRadialGradient(64, 64, 8, 64, 64, 60);
+    outerGrad.addColorStop(0.0, 'rgba(6, 7, 10, 0.92)');
+    outerGrad.addColorStop(0.28, 'rgba(18, 16, 14, 0.68)');
+    outerGrad.addColorStop(0.62, 'rgba(28, 25, 22, 0.28)');
+    outerGrad.addColorStop(1.0, 'rgba(0, 0, 0, 0.0)');
+    ctx.fillStyle = outerGrad;
+    ctx.beginPath();
+    ctx.arc(64, 64, 60, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Jagged radial concrete/metal fracture cracks
+    const crackAngles = [0.22, 1.08, 1.96, 2.84, 3.71, 4.62, 5.48];
+    for (let i = 0; i < crackAngles.length; i++) {
+      const baseAng = crackAngles[i];
+      const len1 = 16 + (i % 3) * 5;
+      const len2 = 30 + ((i * 7) % 18);
+      const jitter1 = (i % 2 === 0 ? 0.16 : -0.15);
+      const jitter2 = (i % 2 === 0 ? -0.14 : 0.18);
+      const x1 = 64 + Math.cos(baseAng) * 9;
+      const y1 = 64 + Math.sin(baseAng) * 9;
+      const x2 = 64 + Math.cos(baseAng + jitter1) * len1;
+      const y2 = 64 + Math.sin(baseAng + jitter1) * len1;
+      const x3 = 64 + Math.cos(baseAng + jitter2) * len2;
+      const y3 = 64 + Math.sin(baseAng + jitter2) * len2;
+
+      ctx.strokeStyle = 'rgba(205, 198, 186, 0.34)';
+      ctx.lineWidth = 2.6;
+      ctx.beginPath();
+      ctx.moveTo(x1 + 1, y1 + 1);
+      ctx.lineTo(x2 + 1, y2 + 1);
+      ctx.lineTo(x3 + 1, y3 + 1);
+      ctx.stroke();
+
+      ctx.strokeStyle = 'rgba(8, 10, 14, 0.88)';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.lineTo(x3, y3);
+      ctx.stroke();
+    }
+
+    // Chipped concrete inner ring
+    ctx.strokeStyle = 'rgba(175, 168, 155, 0.42)';
+    ctx.lineWidth = 2.0;
+    ctx.beginPath();
+    ctx.arc(64, 64, 15, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Deep charred core impact crater
+    const coreGrad = ctx.createRadialGradient(64, 64, 2, 64, 64, 14);
+    coreGrad.addColorStop(0.0, 'rgba(2, 3, 5, 0.99)');
+    coreGrad.addColorStop(0.65, 'rgba(10, 11, 14, 0.94)');
+    coreGrad.addColorStop(1.0, 'rgba(20, 18, 16, 0.0)');
+    ctx.fillStyle = coreGrad;
+    ctx.beginPath();
+    ctx.arc(64, 64, 14, 0, Math.PI * 2);
+    ctx.fill();
+
+    _sharedBulletDecalTex = new THREE.CanvasTexture(canvas);
+    if (THREE.SRGBColorSpace) _sharedBulletDecalTex.colorSpace = THREE.SRGBColorSpace;
+    _sharedBulletDecalTex.userData = { shared: true };
+  }
+  return _sharedBulletDecalTex;
+}
+
+export function getSharedSmokeTex() {
+  if (!_sharedSmokeTex && typeof document !== 'undefined') {
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, 128, 128);
+
+    const lobes = [
+      { x: 64, y: 64, r: 54, a0: 0.56, a1: 0.24 },
+      { x: 50, y: 54, r: 36, a0: 0.44, a1: 0.16 },
+      { x: 78, y: 56, r: 34, a0: 0.40, a1: 0.14 },
+      { x: 56, y: 76, r: 35, a0: 0.40, a1: 0.14 },
+      { x: 74, y: 74, r: 32, a0: 0.36, a1: 0.12 }
+    ];
+    for (let i = 0; i < lobes.length; i++) {
+      const l = lobes[i];
+      const grad = ctx.createRadialGradient(l.x, l.y, 4, l.x, l.y, l.r);
+      grad.addColorStop(0.0, `rgba(255, 255, 255, ${l.a0})`);
+      grad.addColorStop(0.55, `rgba(232, 232, 232, ${l.a1})`);
+      grad.addColorStop(1.0, 'rgba(210, 210, 210, 0.0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(l.x, l.y, l.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    _sharedSmokeTex = new THREE.CanvasTexture(canvas);
+    if (THREE.SRGBColorSpace) _sharedSmokeTex.colorSpace = THREE.SRGBColorSpace;
+    _sharedSmokeTex.userData = { shared: true };
+  }
+  return _sharedSmokeTex;
+}
+
+function getSharedTracerBoltGeo() {
+  if (!_sharedTracerBoltGeo) {
+    _sharedTracerBoltGeo = new THREE.CylinderGeometry(0.013, 0.0045, 1.0, 6);
+    _sharedTracerBoltGeo.rotateX(Math.PI * 0.5);
+    _sharedTracerBoltGeo.computeBoundingSphere();
+    _sharedTracerBoltGeo.userData = { shared: true };
+  }
+  return _sharedTracerBoltGeo;
+}
+
 export class CombatEffectsMethods {
+  _resolveShellFloorY(x, y, z) {
+    let highest = 0;
+    const obsList = this.currentObstacles;
+    if (Array.isArray(obsList)) {
+      for (let i = 0; i < obsList.length; i++) {
+        const obs = obsList[i];
+        const topY = obs.y + obs.h * 0.5;
+        if (topY > highest && topY <= y + 0.05) {
+          if (Math.abs(x - obs.x) <= obs.w * 0.5 && Math.abs(z - obs.z) <= obs.d * 0.5) {
+            highest = topY;
+          }
+        }
+      }
+    }
+    return highest + 0.025;
+  }
+
   spawnShellCasing() {
     if (!this.shellPool) this.shellPool = [];
     const entry = this.shellPool.pop();
@@ -65,6 +206,7 @@ export class CombatEffectsMethods {
     this.tmpVec3A.set(0.24, -0.14, -0.35);
     this.tmpVec3A.applyQuaternion(this.camera.quaternion);
     shell.position.copy(this.camera.position).add(this.tmpVec3A);
+    const floorY = this._resolveShellFloorY(shell.position.x, shell.position.y, shell.position.z);
 
     this.tmpVec3B.set(
       1.6 + Math.random() * 1.1,
@@ -82,6 +224,7 @@ export class CombatEffectsMethods {
       entry.rx = (Math.random() - 0.5) * 22;
       entry.ry = (Math.random() - 0.5) * 22;
       entry.rz = (Math.random() - 0.5) * 22;
+      entry.floorY = floorY;
       entry.createdAt = performance.now();
       entry.duration = 650;
       this.activeShells.push(entry);
@@ -94,19 +237,41 @@ export class CombatEffectsMethods {
         rx: (Math.random() - 0.5) * 22,
         ry: (Math.random() - 0.5) * 22,
         rz: (Math.random() - 0.5) * 22,
+        floorY,
         createdAt: performance.now(),
         duration: 650
       });
     }
   }
 
-  spawnBulletDecal(point, normal) {
-    if (!normal) return;
+  _ensureBulletDecalMaterial() {
+    if (this._decalTexApplied) return;
+    this._decalTexApplied = true;
+    const mat = this.sharedDecalMat;
+    if (!mat) return;
+    const tex = getSharedBulletDecalTex();
+    if (tex) {
+      mat.map = tex;
+      mat.color.setHex(0xffffff);
+      mat.opacity = 0.94;
+      mat.transparent = true;
+      mat.depthWrite = false;
+      mat.polygonOffset = true;
+      mat.polygonOffsetFactor = -2;
+      mat.polygonOffsetUnits = -3;
+      mat.needsUpdate = true;
+    }
+  }
+
+  spawnBulletDecal(point, normal, scale = 1) {
+    if (!normal || typeof normal !== 'object' || typeof normal.x !== 'number') return;
+    this._ensureBulletDecalMaterial();
     let decalMesh;
     if (this.bulletDecals.length >= this.maxBulletDecals) {
       decalMesh = this.bulletDecals.shift();
     } else {
       decalMesh = new THREE.Mesh(this.sharedDecalGeo, this.sharedDecalMat);
+      decalMesh.renderOrder = 2;
       this.scene.add(decalMesh);
     }
 
@@ -115,9 +280,88 @@ export class CombatEffectsMethods {
       point.y + normal.y * 0.015,
       point.z + normal.z * 0.015
     );
-    this.tmpQuat.setFromUnitVectors(this.upVec, normal);
+    this.tmpVec3C.set(normal.x, normal.y, normal.z);
+    if (this.tmpVec3C.lengthSq() > 1e-6) {
+      this.tmpVec3C.normalize();
+    } else {
+      this.tmpVec3C.set(0, 1, 0);
+    }
+    this.tmpQuat.setFromUnitVectors(this.upVec, this.tmpVec3C);
     decalMesh.quaternion.copy(this.tmpQuat);
+    decalMesh.rotateZ(Math.random() * Math.PI * 2);
+    decalMesh.scale.setScalar(scale * (0.88 + Math.random() * 0.36));
     this.bulletDecals.push(decalMesh);
+  }
+
+  _recycleExplosionEffect(fx) {
+    if (!fx) return;
+    this.scene.remove(fx.coreSphere);
+    this.scene.remove(fx.fireballSphere);
+    this.scene.remove(fx.blastWaveSphere);
+    this.scene.remove(fx.shockwaveRing);
+    this.scene.remove(fx.torusRing);
+    if (fx.flashLight && fx.flashLight === this.explosionLight) {
+      fx.flashLight.intensity = 0;
+    } else if (fx.flashLight) {
+      this.scene.remove(fx.flashLight);
+    }
+    if (fx.particles) {
+      if (!this.sparkMeshPool) this.sparkMeshPool = [];
+      if (!this.tracerParticlePool) this.tracerParticlePool = [];
+      for (let p = 0; p < fx.particles.length; p++) {
+        const pt = fx.particles[p];
+        const pm = pt.mesh;
+        if (pm) {
+          this.scene.remove(pm);
+          if (this.sparkMeshPool.length < 192) {
+            this.sparkMeshPool.push(pm);
+          }
+          pt.mesh = null;
+        }
+        if (this.tracerParticlePool.length < 192) {
+          this.tracerParticlePool.push(pt);
+        }
+      }
+      fx.particles.length = 0;
+    }
+    if (Array.isArray(fx.smokeClouds)) {
+      if (!this.smokeSpritePool) this.smokeSpritePool = [];
+      if (!this.smokeMatPool) this.smokeMatPool = [];
+      if (!this.smokeCloudPool) this.smokeCloudPool = [];
+      for (let s = 0; s < fx.smokeClouds.length; s++) {
+        const sc = fx.smokeClouds[s];
+        if (sc.sprite) {
+          this.scene.remove(sc.sprite);
+          if (this.smokeSpritePool.length < 96) {
+            this.smokeSpritePool.push(sc.sprite);
+          }
+          sc.sprite = null;
+        }
+        if (sc.mat) {
+          if (this.smokeMatPool.length < 96) {
+            this.smokeMatPool.push(sc.mat);
+          } else {
+            sc.mat.dispose();
+          }
+          sc.mat = null;
+        }
+        if (this.smokeCloudPool.length < 96) {
+          this.smokeCloudPool.push(sc);
+        }
+      }
+      fx.smokeClouds.length = 0;
+    }
+    if (!this.explosionPool) this.explosionPool = [];
+    if (this.explosionPool.length < 8) {
+      this.explosionPool.push(fx);
+    } else {
+      fx.coreMat?.dispose();
+      fx.fireballMat?.dispose();
+      fx.blastWaveMat?.dispose();
+      fx.shockwaveMat?.dispose();
+      fx.torusMat?.dispose();
+      fx.sparkMat?.dispose();
+    }
   }
 
   _recycleTracerEffect(fx) {
@@ -132,9 +376,24 @@ export class CombatEffectsMethods {
         fx.mat?.dispose();
       }
     }
+    if (fx.boltMesh) {
+      this.scene.remove(fx.boltMesh);
+      if (!this.tracerBoltPool) this.tracerBoltPool = [];
+      if (this.tracerBoltPool.length < 32) {
+        this.tracerBoltPool.push(fx.boltMesh);
+      }
+    }
+    if (fx.boltMat) {
+      if (!this.tracerBoltMatPool) this.tracerBoltMatPool = [];
+      if (this.tracerBoltMatPool.length < 32) {
+        this.tracerBoltMatPool.push(fx.boltMat);
+      } else {
+        fx.boltMat.dispose();
+      }
+    }
     if (fx.spark) {
       this.scene.remove(fx.spark);
-      if (this.sparkMeshPool && this.sparkMeshPool.length < 64) {
+      if (this.sparkMeshPool && this.sparkMeshPool.length < 192) {
         this.sparkMeshPool.push(fx.spark);
       }
     }
@@ -145,30 +404,68 @@ export class CombatEffectsMethods {
         const pm = pt.mesh;
         if (pm) {
           this.scene.remove(pm);
-          if (this.sparkMeshPool && this.sparkMeshPool.length < 64) {
+          if (this.sparkMeshPool && this.sparkMeshPool.length < 192) {
             this.sparkMeshPool.push(pm);
           }
           pt.mesh = null;
         }
-        if (this.tracerParticlePool.length < 160) {
+        if (this.tracerParticlePool.length < 192) {
           this.tracerParticlePool.push(pt);
         }
       }
       fx.particles.length = 0;
     }
+    if (Array.isArray(fx.smokePuffs)) {
+      if (!this.smokeSpritePool) this.smokeSpritePool = [];
+      if (!this.smokeMatPool) this.smokeMatPool = [];
+      if (!this.smokePuffPool) this.smokePuffPool = [];
+      for (let s = 0; s < fx.smokePuffs.length; s++) {
+        const sp = fx.smokePuffs[s];
+        if (sp.sprite) {
+          this.scene.remove(sp.sprite);
+          if (this.smokeSpritePool.length < 96) {
+            this.smokeSpritePool.push(sp.sprite);
+          }
+          sp.sprite = null;
+        }
+        if (sp.mat) {
+          if (this.smokeMatPool.length < 96) {
+            this.smokeMatPool.push(sp.mat);
+          } else {
+            sp.mat.dispose();
+          }
+          sp.mat = null;
+        }
+        if (this.smokePuffPool.length < 96) {
+          this.smokePuffPool.push(sp);
+        }
+      }
+      fx.smokePuffs.length = 0;
+    }
     if (fx.sparkMat) {
       if (!this.sparkMatPool) this.sparkMatPool = [];
-      if (this.sparkMatPool.length < 32) {
+      if (this.sparkMatPool.length < 64) {
         this.sparkMatPool.push(fx.sparkMat);
       } else {
         fx.sparkMat.dispose();
       }
     }
+    if (fx.armorSparkMat) {
+      if (!this.sparkMatPool) this.sparkMatPool = [];
+      if (this.sparkMatPool.length < 64) {
+        this.sparkMatPool.push(fx.armorSparkMat);
+      } else {
+        fx.armorSparkMat.dispose();
+      }
+    }
     fx.line = null;
+    fx.boltMesh = null;
+    fx.boltMat = null;
     fx.spark = null;
     fx.geo = null;
     fx.mat = null;
     fx.sparkMat = null;
+    fx.armorSparkMat = null;
     if (!this.tracerEffectPool) this.tracerEffectPool = [];
     if (this.tracerEffectPool.length < 32) {
       this.tracerEffectPool.push(fx);
@@ -238,28 +535,77 @@ export class CombatEffectsMethods {
       mat = new THREE.LineBasicMaterial({
         color: colorHex,
         transparent: true,
-        opacity: 0.98
+        opacity: 0.98,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false
       });
       line = new THREE.Line(geo, mat);
       line.frustumCulled = false;
     }
     this.scene.add(line);
 
-    const sparkColor = isPlayerHit ? 0xef4444 : colorHex;
+    // 3D Volumetric HDR glowing tracer bolt (aligned with line segment, updated smoothly in loopAndInput)
+    if (!this.tracerBoltPool) this.tracerBoltPool = [];
+    if (!this.tracerBoltMatPool) this.tracerBoltMatPool = [];
+    const boltColor = isPlayerHit ? 0xffd166 : (colorHex || 0xffe08a);
+    let boltMat = this.tracerBoltMatPool.pop();
+    if (boltMat) {
+      boltMat.color.setHex(boltColor);
+      boltMat.opacity = 0.95;
+    } else {
+      boltMat = new THREE.MeshBasicMaterial({
+        color: boltColor,
+        transparent: true,
+        opacity: 0.95,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false
+      });
+    }
+    const boltGeo = getSharedTracerBoltGeo();
+    let boltMesh = this.tracerBoltPool.pop();
+    if (boltMesh) {
+      boltMesh.geometry = boltGeo;
+      boltMesh.material = boltMat;
+    } else {
+      boltMesh = new THREE.Mesh(boltGeo, boltMat);
+      boltMesh.frustumCulled = false;
+    }
+    boltMesh.position.set(
+      (this.tmpVec3A.x + headInitX) * 0.5,
+      (this.tmpVec3A.y + headInitY) * 0.5,
+      (this.tmpVec3A.z + headInitZ) * 0.5
+    );
+    this.tmpVec3C.set(ux, uy, uz);
+    boltMesh.quaternion.setFromUnitVectors(this.upVec, this.tmpVec3C);
+    boltMesh.scale.set(1, 1, Math.max(0.01, boltLen));
+    boltMesh.visible = boltLen > 0.015;
+    this.scene.add(boltMesh);
+
+    const sparkColor = isPlayerHit ? 0xef4444 : 0xffe08a;
     if (!this.sparkMatPool) this.sparkMatPool = [];
     const sparkMat = this.sparkMatPool.pop() || new THREE.MeshBasicMaterial({
       color: sparkColor,
       transparent: true,
-      opacity: 1
+      opacity: 1,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false
     });
     sparkMat.color.setHex(sparkColor);
     sparkMat.opacity = 1;
+    sparkMat.blending = THREE.AdditiveBlending;
+    sparkMat.depthWrite = false;
+    sparkMat.toneMapped = false;
+
     if (!this.sparkMeshPool) this.sparkMeshPool = [];
     const spark = this.sparkMeshPool.pop() || new THREE.Mesh(this.sharedHitOrbGeo, sparkMat);
     spark.geometry = this.sharedHitOrbGeo;
     spark.material = sparkMat;
     spark.position.copy(this.tmpVec3B);
-    spark.scale.setScalar(isPlayerHit ? 1.45 : 0.95);
+    spark.scale.setScalar(isPlayerHit ? 1.35 : 0.90);
+    spark.visible = true;
     this.scene.add(spark);
 
     if (!this.tracerEffectPool) this.tracerEffectPool = [];
@@ -268,11 +614,15 @@ export class CombatEffectsMethods {
       type: 'tracer',
       ss: 0,
       line: null,
+      boltMesh: null,
+      boltMat: null,
       spark: null,
       particles: [],
+      smokePuffs: [],
       geo: null,
       mat: null,
       sparkMat: null,
+      armorSparkMat: null,
       ox: 0,
       oy: 0,
       oz: 0,
@@ -285,46 +635,136 @@ export class CombatEffectsMethods {
       totalDist: 0,
       boltLen: 0.8,
       travelMs: 55,
+      lineDuration: 145,
       isPlayerHit: false,
       createdAt: 0,
       duration: 145
     };
     const particles = fx.particles;
     particles.length = 0;
+    const smokePuffs = fx.smokePuffs || (fx.smokePuffs = []);
+    smokePuffs.length = 0;
 
-    const pCount = isPlayerHit ? 5 : 3;
-    const nx = hitNormal ? hitNormal.x : -ux * 0.6;
-    const ny = hitNormal ? hitNormal.y : Math.max(0.35, -uy * 0.6);
-    const nz = hitNormal ? hitNormal.z : -uz * 0.6;
+    const hasNormal = Boolean(hitNormal && typeof hitNormal === 'object' && typeof hitNormal.x === 'number');
+    const nx = hasNormal ? hitNormal.x : -ux * 0.6;
+    const ny = hasNormal ? hitNormal.y : Math.max(0.35, -uy * 0.6);
+    const nz = hasNormal ? hitNormal.z : -uz * 0.6;
+
+    const pScale = this.quality?.particleScale ?? 1;
+    const pCount = isPlayerHit ? Math.max(3, Math.round(5 * pScale)) : Math.max(2, Math.round(5 * pScale));
+    let armorSparkMat = null;
+    if (isPlayerHit) {
+      armorSparkMat = this.sparkMatPool.pop() || new THREE.MeshBasicMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 1,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false
+      });
+      armorSparkMat.color.setHex(0x38bdf8);
+      armorSparkMat.opacity = 1;
+      armorSparkMat.blending = THREE.AdditiveBlending;
+      armorSparkMat.depthWrite = false;
+      armorSparkMat.toneMapped = false;
+    }
+
     for (let i = 0; i < pCount; i++) {
-      const pMesh = this.sparkMeshPool.pop() || new THREE.Mesh(this.sharedSparkGeo, sparkMat);
+      const useArmorMat = isPlayerHit && i >= pCount - 2;
+      const pMat = useArmorMat ? armorSparkMat : sparkMat;
+      const pMesh = this.sparkMeshPool.pop() || new THREE.Mesh(this.sharedSparkGeo, pMat);
       pMesh.geometry = this.sharedSparkGeo;
-      pMesh.material = sparkMat;
-      pMesh.scale.setScalar(isPlayerHit ? 1.25 : 0.95);
+      pMesh.material = pMat;
+      pMesh.scale.setScalar(useArmorMat ? 1.15 : isPlayerHit ? 1.2 : 0.85 + Math.random() * 0.35);
       pMesh.position.copy(this.tmpVec3B);
+      pMesh.visible = true;
       const pt = this.tracerParticlePool.pop() || { mesh: null, vx: 0, vy: 0, vz: 0 };
       pt.mesh = pMesh;
-      pt.vx = nx * 3.2 + (Math.random() - 0.5) * 5.0;
-      pt.vy = ny * 3.2 + Math.random() * 3.8;
-      pt.vz = nz * 3.2 + (Math.random() - 0.5) * 5.0;
+      pt.vx = nx * 3.6 + (Math.random() - 0.5) * 5.2;
+      pt.vy = ny * 3.6 + Math.random() * 4.2;
+      pt.vz = nz * 3.6 + (Math.random() - 0.5) * 5.2;
       particles.push(pt);
       this.scene.add(pMesh);
     }
 
-    if (!isPlayerHit && hitNormal) {
+    if (!isPlayerHit && hasNormal) {
       this.spawnBulletDecal(hitPoint, hitNormal);
+    }
+
+    // Pooled soft radial concrete dust / crimson mist puff sprites on surface or player impacts
+    const smokeTex = getSharedSmokeTex();
+    const smokeCount = (hasNormal || isPlayerHit) ? Math.max(1, Math.round((isPlayerHit ? 2 : 3) * pScale)) : 0;
+    if (smokeCount > 0 && smokeTex) {
+      if (!this.smokeSpritePool) this.smokeSpritePool = [];
+      if (!this.smokeMatPool) this.smokeMatPool = [];
+      if (!this.smokePuffPool) this.smokePuffPool = [];
+      const smokeHex = isPlayerHit ? 0x991b1b : 0xbcb5aa;
+      for (let s = 0; s < smokeCount; s++) {
+        let sMat = this.smokeMatPool.pop();
+        if (sMat) {
+          sMat.map = smokeTex;
+          sMat.color.setHex(smokeHex);
+          sMat.opacity = 0;
+        } else {
+          sMat = new THREE.SpriteMaterial({
+            map: smokeTex,
+            color: smokeHex,
+            transparent: true,
+            opacity: 0,
+            depthWrite: false
+          });
+        }
+        sMat.rotation = Math.random() * Math.PI * 2;
+        const sprite = this.smokeSpritePool.pop() || new THREE.Sprite(sMat);
+        sprite.material = sMat;
+        const startScale = isPlayerHit ? 0.24 : 0.22 + Math.random() * 0.08;
+        sprite.scale.setScalar(startScale);
+        sprite.position.set(
+          this.tmpVec3B.x + nx * 0.06 + (Math.random() - 0.5) * 0.08,
+          this.tmpVec3B.y + ny * 0.06 + (Math.random() - 0.5) * 0.06,
+          this.tmpVec3B.z + nz * 0.06 + (Math.random() - 0.5) * 0.08
+        );
+        sprite.visible = true;
+        this.scene.add(sprite);
+
+        const sp = this.smokePuffPool.pop() || {
+          sprite: null,
+          mat: null,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          drag: 4.2,
+          startScale: 0.22,
+          endScale: 0.85,
+          maxOpacity: 0.36
+        };
+        sp.sprite = sprite;
+        sp.mat = sMat;
+        sp.vx = nx * 1.45 + (Math.random() - 0.5) * 1.1;
+        sp.vy = ny * 1.15 + 0.35 + Math.random() * 0.55;
+        sp.vz = nz * 1.45 + (Math.random() - 0.5) * 1.1;
+        sp.drag = 4.4;
+        sp.startScale = startScale;
+        sp.endScale = isPlayerHit ? 0.68 : 0.78 + Math.random() * 0.24;
+        sp.maxOpacity = isPlayerHit ? 0.42 : 0.38;
+        smokePuffs.push(sp);
+      }
     }
 
     const bulletSpeed = 195; // m/s fast visual tracer bolt velocity
     const travelMs = Math.max(26, Math.min(115, (totalDist / bulletSpeed) * 1000));
+    const lineDuration = Math.max(120, Math.round(travelMs + 55));
 
     fx.type = 'tracer';
     fx.ss = ss;
     fx.line = line;
+    fx.boltMesh = boltMesh;
+    fx.boltMat = boltMat;
     fx.spark = spark;
     fx.geo = geo;
     fx.mat = mat;
     fx.sparkMat = sparkMat;
+    fx.armorSparkMat = armorSparkMat;
     fx.ox = this.tmpVec3A.x;
     fx.oy = this.tmpVec3A.y;
     fx.oz = this.tmpVec3A.z;
@@ -337,9 +777,10 @@ export class CombatEffectsMethods {
     fx.totalDist = totalDist;
     fx.boltLen = boltLen;
     fx.travelMs = travelMs;
+    fx.lineDuration = lineDuration;
     fx.isPlayerHit = Boolean(isPlayerHit);
     fx.createdAt = performance.now();
-    fx.duration = Math.max(120, Math.round(travelMs + 55));
+    fx.duration = smokeCount > 0 ? 450 : lineDuration;
     this.activeEffects.push(fx);
   }
 
@@ -449,13 +890,13 @@ export class CombatEffectsMethods {
         ctx.strokeStyle = 'rgba(0, 0, 0, 0.92)';
         ctx.lineWidth = 5;
         const text = armorBroken
-          ? `🛡️ VỠ -${roundedDamage}`
+          ? `BRK -${roundedDamage}`
           : isHeadshot
-            ? `🎯 -${roundedDamage}`
+            ? `HS -${roundedDamage}`
             : armorHit
-              ? `🛡️ -${roundedDamage}`
+              ? `ARM -${roundedDamage}`
               : isKill
-                ? `💀 -${roundedDamage}`
+                ? `KIA -${roundedDamage}`
                 : `-${roundedDamage}`;
         ctx.strokeText(text, 96, 44);
         ctx.fillStyle = armorBroken
@@ -612,6 +1053,9 @@ export class CombatEffectsMethods {
     if (!isMelee && currentAmmo <= 0) {
       if (reserveAmmo > 0) {
         this.startReload();
+      } else if (now - (this._lastDryFireAt || 0) > 220) {
+        this._lastDryFireAt = now;
+        this.vmSpringImpulse?.('bump', 0.42);
       }
       return;
     }
@@ -698,9 +1142,18 @@ export class CombatEffectsMethods {
     this.punchPitch = Math.min(0.026, (this.punchPitch || 0) + (kickPitch > 0 ? kickPitch : rawKickPitch * 0.35) * 0.52);
     this.punchRoll = Math.sign(patDir || 1) * Math.min(0.012, Math.abs(kickYaw) * 0.85);
 
-    // 3D weapon viewmodel kickback & reciprocating bolt/pump animation
-    this.recoilOffset = Math.min(0.19, this.recoilOffset + (cfg.visualKick || 0.062));
+    // 3D weapon viewmodel kickback, Saltline second-order spring impulse & reciprocating bolt/pump animation
+    const kickScale = cfg.visualKick || 0.062;
+    this.recoilOffset = Math.min(0.19, this.recoilOffset + kickScale * 0.48);
     this.boltKickOffset = 1.0;
+    this.barrelHeat = Math.min(1, (this.barrelHeat || 0) + ((cfg.magSize || 30) >= 20 ? 0.13 : 0.24));
+    if (this.vmSpringImpulse) {
+      const heavyMult = this.currentWeapon === 'sniper' || this.currentWeapon === 'shotgun' ? 1.45 : 1.0;
+      this.vmSpringImpulse('kZ', (0.72 + kickScale * 6.5) * heavyMult);
+      this.vmSpringImpulse('kP', (0.58 + kickScale * 5.2) * heavyMult);
+      this.vmSpringImpulse('kY', (patDir || 1) * (0.22 + Math.abs(kickYaw) * 18));
+      this.vmSpringImpulse('kR', (patDir || 1) * (0.34 + kickScale * 2.8));
+    }
     if (this.currentWeapon === 'shotgun' || this.currentWeapon === 'sniper') {
       this.pumpCycleDuration = cfg.pumpActionMs || cfg.boltActionMs || 420;
       this.pumpCycleUntil = now + this.pumpCycleDuration;

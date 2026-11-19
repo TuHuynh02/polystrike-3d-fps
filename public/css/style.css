@@ -13,56 +13,13 @@
   display: none;
 }
 
-/* ======================== MINIMAL / DECLUTTERED UI OVERRIDES ======================== */
-.brand-subtitle,
-.header-meta-pills,
-.card-subtag,
-.field-hint,
-.weapon-desc,
-.map-desc,
-.showcase-tag,
-.showcase-drag-hint,
-.btn small,
-.rooms-table-head,
+/* Decluttered HUD Telemetry Overrides */
 .scope-telemetry,
 .optic-telemetry,
 .hud-goal,
 .minimap-header,
 .minimap-legend,
 .speed-badge,
-.pause-subtitle,
 #hud-grenade-state-text {
   display: none !important;
 }
-
-.lobby-header {
-  padding: 10px 18px;
-  margin-bottom: 12px;
-}
-
-.header-brand-group {
-  flex-direction: row;
-  align-items: center;
-  gap: 12px;
-}
-
-.pause-card,
-.victory-card,
-.scoreboard-card {
-  max-height: 92vh;
-  overflow-y: auto;
-}
-
-.controls-guide {
-  grid-template-columns: repeat(3, 1fr);
-  gap: 6px 8px;
-}
-
-@media (max-width: 520px) {
-  .controls-guide {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-
-
-

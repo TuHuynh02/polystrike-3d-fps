@@ -75,6 +75,8 @@ app.use('/vendor/three', express.static(path.join(ROOT_DIR, 'node_modules/three/
 // GLTFLoader & friends (examples/jsm). The import map in index.html maps `three` to /vendor/three/three.module.js
 // (same URL as the game's own import, so there is ONE three.js instance) and `three/addons/` to this folder.
 app.use('/vendor/three-examples', express.static(path.join(ROOT_DIR, 'node_modules/three/examples/jsm'), { maxAge: '7d' }));
+app.use('/vendor/postprocessing', express.static(path.join(ROOT_DIR, 'node_modules/postprocessing/build'), { maxAge: '7d' }));
+app.use('/vendor/n8ao', express.static(path.join(ROOT_DIR, 'node_modules/n8ao/dist'), { maxAge: '7d' }));
 
 const roomManager = new RoomManager(io);
 

@@ -204,6 +204,7 @@ appState.sfx = sfx;
 
 
 const game = appState.game = new Game3D(canvasContainer, {
+  initialMapId: appState.selectedMapId || 'cargo_dock',
   // Client-side prediction: input commands (never positions) go to the server; it answers with `moveAck`
   onInputBatch: (batch) => {
     // `d` = interpolation delay (ms) remote players are drawn with right now: the server rewinds exactly this much (plus
@@ -396,13 +397,13 @@ const game = appState.game = new Game3D(canvasContainer, {
     if (hudStance && appState.hudCache.stance !== stance) {
       appState.hudCache.stance = stance;
       const labels = {
-        WALK: '🏃 WALK',
-        SPRINT: '⚡ SPRINT',
-        SLIDE: '💨 SLIDE',
-        CROUCH: '🔉 CROUCH',
-        PRONE: '🐍 PRONE',
-        PEEK: '📐 PEEK',
-        AIR: '🚀 AIR'
+        WALK: 'WALK',
+        SPRINT: 'SPRINT',
+        SLIDE: 'SLIDE',
+        CROUCH: 'CROUCH',
+        PRONE: 'PRONE',
+        PEEK: 'PEEK',
+        AIR: 'AIR'
       };
       hudStance.textContent = labels[stance] || stance;
       hudStance.classList.toggle('slide', stance === 'SLIDE');
@@ -414,7 +415,7 @@ const game = appState.game = new Game3D(canvasContainer, {
   },
   onJumpPad: () => {
     appState.sfx.playJumpPad?.();
-    showCenterBanner('🚀 ĐỆM NHẢY PHẢN LỰC');
+    showCenterBanner('ĐỆM NHẢY PHẢN LỰC');
   },
   onJump: () => {
     appState.sfx.playJump();

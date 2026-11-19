@@ -32,6 +32,7 @@ import {
   disposeObject3D,
   getCachedGeo
 } from '../humanoidRig.js';
+import { disposeSoldierGlb } from '../rig/soldierGlbRig.js';
 import { TacticalMinimap } from '../minimap.js';
 import { sfx } from '../audio.js';
 import {
@@ -79,20 +80,59 @@ export class RemotePlayersMethods {
       scene: this.scene,
       defaultColor: this.lobbyOperatorColor || 0x38bdf8,
       isTeammate,
+      enableSoldierGlb: Boolean(this.assetsEnabled),
+      assets: this.assets || null,
       ...options
     });
     if (rp?.group) {
-      applyMetalnessCap(rp.group, this.quality?.envMapSize === 0 ? 0.35 : null);
+      const castShadow = !options.isShowcase && Boolean(this.quality?.dynamicShadowHz > 0 && this.quality?.shadowMapSize > 0);
+      rp._isShowcase = Boolean(options.isShowcase);
+      rp._soldierScene = this.scene || null;
+      rp._soldierAssets = this.assets || null;
+      rp._castShadowApplied = castShadow;
+      rp._metalnessCap = this.quality?.envMapSize === 0 ? 0.35 : null;
+      applyMetalnessCap(rp.group, rp._metalnessCap);
       rp.group.traverse((obj) => {
         if (obj.isMesh) {
           if (obj.geometry && !obj.geometry.boundingSphere) {
             obj.geometry.computeBoundingSphere();
           }
-          obj.frustumCulled = true;
+          obj.frustumCulled = !obj.userData?.isSoldierGlbMesh;
+          if (!obj.userData?.isOutline && !obj.userData?.isHitbox && !obj.userData?.noShadow && !obj.userData?.isContactShadow && !obj.userData?.isMuzzleFlash) {
+            obj.castShadow = castShadow;
+            if (obj.userData?.isSoldierGlbMesh) {
+              obj.receiveShadow = castShadow;
+            }
+          }
         }
       });
     }
     return rp;
+  }
+
+  syncRemotePlayerShadowCasting() {
+    const castShadow = Boolean(this.quality?.dynamicShadowHz > 0 && this.quality?.shadowMapSize > 0);
+    const metalCap = this.quality?.envMapSize === 0 ? 0.35 : null;
+    for (const rp of this.remotePlayers.values()) {
+      if (!rp?.group) continue;
+      rp._metalnessCap = metalCap;
+      if (rp._soldierRoot) {
+        applyMetalnessCap(rp._soldierRoot, metalCap);
+      }
+      if (rp._soldierCs2Weapon) {
+        applyMetalnessCap(rp._soldierCs2Weapon, metalCap);
+      }
+      if (rp._isShowcase || rp._castShadowApplied === castShadow) continue;
+      rp._castShadowApplied = castShadow;
+      rp.group.traverse((obj) => {
+        if (obj.isMesh && !obj.userData?.isOutline && !obj.userData?.isHitbox && !obj.userData?.noShadow && !obj.userData?.isContactShadow && !obj.userData?.isMuzzleFlash) {
+          obj.castShadow = castShadow;
+          if (obj.userData?.isSoldierGlbMesh) {
+            obj.receiveShadow = castShadow;
+          }
+        }
+      });
+    }
   }
 
   rebuildHitboxList() {
@@ -128,6 +168,8 @@ export class RemotePlayersMethods {
   }
 
   disposeRemotePlayer(rp) {
+    if (!rp) return;
+    disposeSoldierGlb(rp);
     this.scene.remove(rp.group);
     disposeObject3D(rp.group);
   }
@@ -252,7 +294,14 @@ export class RemotePlayersMethods {
       if (!rp.velocity) rp.velocity = new THREE.Vector3(0, 0, 0);
 
       if (p.team !== undefined) {
-        rp.team = p.team || null;
+        const nextTeam = p.team || null;
+        if (rp.team !== nextTeam) {
+          rp.team = nextTeam;
+          rp._updateSoldierTint?.();
+        }
+      }
+      if (p.color !== undefined && p.color !== rp._soldierColorHex) {
+        rp.setOperatorColor?.(p.color);
       }
       const isTeammate = Boolean(this.gameMode === 'tdm' && this.localTeam && rp.team && rp.team === this.localTeam);
       if (rp.isTeammate !== isTeammate) {
@@ -311,10 +360,17 @@ export class RemotePlayersMethods {
             }
             if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
             o.frustumCulled = true;
+            if (!o.userData?.isOutline && !o.userData?.isHitbox) {
+              o.castShadow = Boolean(rp._castShadowApplied);
+            }
           }
         });
         rp.gunHolder.add(rp.gunMesh);
-        rp.poseForWeapon?.(p.weapon);
+        if (rp.setWeapon) {
+          rp.setWeapon(p.weapon, rp.gunMesh);
+        } else {
+          rp.poseForWeapon?.(p.weapon);
+        }
       }
 
       if (rp.hp !== p.hp) {
@@ -409,8 +465,10 @@ export class RemotePlayersMethods {
       const recentlyFired =
         Boolean(flashMesh?.visible) ||
         (rp.lastShotFlashAt > 0 && now - rp.lastShotFlashAt <= 120);
+      const deathAnimating = Boolean(rp._soldierAttached && !rp.alive && (rp._soldierState?.deathBlend || 0) < 0.99);
       const postureSettled =
         !recentlyFired &&
+        !deathAnimating &&
         Math.abs((rp.proneBlend || 0) - targetProne) < 0.01 &&
         Math.abs((rp.slideBlend || 0) - targetSlide) < 0.01 &&
         Math.abs((rp.crouchBlend || 0) - targetCrouch) < 0.01 &&
@@ -445,8 +503,13 @@ export class RemotePlayersMethods {
         this.animateHumanoidRig(rp, animDt, now, isMoving, rigMoveSpeed);
       } else {
         rp._skippedAnimDt = (rp._skippedAnimDt || 0) + dt;
-        if (flashMesh && flashMesh.visible && now - (rp.lastShotFlashAt || 0) > 55) {
-          flashMesh.visible = false;
+        if (now - (rp.lastShotFlashAt || 0) > 55) {
+          if (flashMesh && flashMesh.visible) {
+            flashMesh.visible = false;
+          }
+          if (rp._soldierCs2FlashMesh && rp._soldierCs2FlashMesh.visible) {
+            rp._soldierCs2FlashMesh.visible = false;
+          }
         }
       }
 

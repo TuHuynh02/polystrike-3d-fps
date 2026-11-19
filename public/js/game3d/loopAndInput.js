@@ -25,6 +25,7 @@ import {
 import { ClientPrediction, INPUT_BATCH_INTERVAL_MS } from '../prediction.js';
 import { SnapshotInterpolator } from '../snapshotBuffer.js';
 import { buildSkyAndAtmosphere, buildArena } from '../arenaBuilder.js';
+import { updateSkySwifts } from '../arena/skyAtmosphere.js';
 import { createWeaponMesh, setWeaponAdsCulling } from '../weaponModels.js';
 import {
   createRemotePlayerMesh,
@@ -62,8 +63,51 @@ export class LoopAndInputMethods {
   animate(now) {
     requestAnimationFrame(this.animate);
 
-    const dt = Math.min(0.1, (now - this.lastFrameTime) / 1000);
+    const dt = Math.max(0, Math.min(0.1, (now - this.lastFrameTime) / 1000));
     this.lastFrameTime = now;
+
+    // Progressive smoothness watchdog (1s rolling windows):
+    // 1) Shed half-res N8AO (<52 FPS x2s), 2) Shed SMAA (<48 FPS x2s), 3) Bypass PostFX (<30 FPS x2s)
+    // BEFORE degrading pixelRatio.
+    const aoWatchActive = Boolean(this.inMatch && this.quality?.aoEnabled && this.postProcess?.aoEnabled);
+    const smaaWatchActive = Boolean(this.inMatch && this.postProcess?.enabled && this.postProcess?.smaaEnabled);
+    const postBypassWatchActive = Boolean(this.inMatch && this.postProcess?.enabled);
+    if (aoWatchActive || smaaWatchActive || postBypassWatchActive) {
+      if (typeof this._aoWatchdogLastAt !== 'number' || now - this._aoWatchdogLastAt > 15000) {
+        this._aoWatchdogLastAt = now;
+        this._aoWatchdogFrames = 1;
+      } else {
+        this._aoWatchdogFrames = (this._aoWatchdogFrames || 0) + 1;
+        const aoElapsed = now - this._aoWatchdogLastAt;
+        if (aoElapsed >= 1000) {
+          const aoFps = Math.round((this._aoWatchdogFrames * 1000) / aoElapsed);
+          this._aoWatchdogFrames = 0;
+          this._aoWatchdogLastAt = now;
+          const threshold = aoWatchActive ? 52 : smaaWatchActive ? 48 : 30;
+          if (aoFps < threshold) {
+            this._aoWatchdogLowStreak = (this._aoWatchdogLowStreak || 0) + 1;
+            if (this._aoWatchdogLowStreak >= 2) {
+              this._aoWatchdogLowStreak = 0;
+              if (aoWatchActive) {
+                this.postProcess?.setAOEnabled?.(false, { fromWatchdog: true });
+              } else if (smaaWatchActive) {
+                this.postProcess?.setSMAAEnabled?.(false, { fromWatchdog: true });
+              } else if (postBypassWatchActive) {
+                this.postProcess?.setPostEnabled?.(false, { fromWatchdog: true });
+              }
+              this.lowFpsStreak = 0;
+              this.lastPixelRatioChangeAt = now;
+            }
+          } else {
+            this._aoWatchdogLowStreak = 0;
+          }
+        }
+      }
+    } else {
+      this._aoWatchdogFrames = 0;
+      this._aoWatchdogLastAt = null;
+      this._aoWatchdogLowStreak = 0;
+    }
 
     this.frameCount++;
     if (now - this.lastFpsUpdate >= 500) {
@@ -73,8 +117,13 @@ export class LoopAndInputMethods {
       this.callbacks.onFpsUpdate?.(this.currentFps);
 
       // Avoid up/down WebGL backbuffer reallocation oscillation during gameplay (which stalls the GPU for 100-300ms):
-      // only step down after sustained low FPS (>= 2s streak) with a cooldown, and never step back up mid-match.
-      if (this.inMatch && this.currentFps < 38 && this.currentPixelRatio > this.quality.minPixelRatio) {
+      // only step down after sustained low FPS (>= 2s streak) with a cooldown, and only after AO/SMAA/severe-PostFX shedding.
+      const holdPixelRatioForWatchdog = Boolean(
+        (this.quality?.aoEnabled && this.postProcess?.aoEnabled) ||
+          (this.postProcess?.enabled && this.postProcess?.smaaEnabled) ||
+          (this.postProcess?.enabled && this.currentFps < 30)
+      );
+      if (this.inMatch && !holdPixelRatioForWatchdog && this.currentFps < 38 && this.currentPixelRatio > this.quality.minPixelRatio) {
         this.lowFpsStreak = (this.lowFpsStreak || 0) + 1;
         const lastChangeAt = this.lastPixelRatioChangeAt ?? -10000;
         if (this.lowFpsStreak >= 4 && now - lastChangeAt >= 2000) {
@@ -82,6 +131,7 @@ export class LoopAndInputMethods {
           this.lastPixelRatioChangeAt = now;
           this.currentPixelRatio = Math.max(this.quality.minPixelRatio, Number((this.currentPixelRatio - 0.15).toFixed(2)));
           this.renderer.setPixelRatio(this.currentPixelRatio);
+          this.postProcess?.setSize?.(window.innerWidth, window.innerHeight, this.currentPixelRatio);
         }
       } else {
         this.lowFpsStreak = 0;
@@ -89,49 +139,200 @@ export class LoopAndInputMethods {
     }
 
     if (!this.inMatch) {
-      const angle = now * 0.00022;
-      const orbitR = (this.arenaHalfSize || 60) * 0.56;
-      this.camera.position.set(Math.cos(angle) * orbitR, 16.5, Math.sin(angle) * orbitR);
-      this.camera.lookAt(0, 3.2, 0);
+      const tSec = now * 0.001;
+      const half = this.arenaHalfSize || 60;
+      const camMode = this.lobbyCameraMode || 'harbor';
+      const mapId = this.currentMapConfig?.id || this.currentMapId;
+      const isHarborMap = mapId === 'cargo_dock';
+      const isDustMap = mapId === 'desert_outpost';
+
+      if (!this._lobbyCamPos) {
+        this._lobbyCamPos = isDustMap
+          ? new THREE.Vector3(-22, 10.5, 28)
+          : new THREE.Vector3(-25, 12.4, 34);
+        this._lobbyLookTarget = isDustMap
+          ? new THREE.Vector3(4, 4.0, -6)
+          : new THREE.Vector3(18, 7.4, -6);
+        this._lobbyDesiredPos = new THREE.Vector3();
+        this._lobbyDesiredLook = new THREE.Vector3();
+      }
+
+      if (isDustMap) {
+        if (camMode === 'harbor') {
+          this._lobbyDesiredPos.set(
+            -22.0 + Math.sin(tSec * 0.12) * 4.8,
+            10.5 + Math.sin(tSec * 0.19) * 0.65,
+            28.0 + Math.cos(tSec * 0.10) * 3.8
+          );
+          this._lobbyDesiredLook.set(
+            4.0 + Math.sin(tSec * 0.08) * 3.0,
+            4.0 + Math.sin(tSec * 0.15) * 0.35,
+            -6.0 + Math.cos(tSec * 0.11) * 2.5
+          );
+        } else if (camMode === 'weapon') {
+          this._lobbyDesiredPos.set(
+            -14.5 + Math.sin(tSec * 0.15) * 0.85,
+            4.9 + Math.sin(tSec * 0.22) * 0.14,
+            21.5 + Math.cos(tSec * 0.13) * 0.75
+          );
+          this._lobbyDesiredLook.set(10.0, 4.2, -8.0);
+        } else {
+          this._lobbyDesiredPos.set(
+            -15.5 + Math.sin(tSec * 0.14) * 1.0,
+            3.65 + Math.sin(tSec * 0.20) * 0.12,
+            23.0 + Math.cos(tSec * 0.12) * 0.9
+          );
+          this._lobbyDesiredLook.set(12.0, 3.2, -9.0);
+        }
+      } else if (isHarborMap) {
+        if (camMode === 'harbor') {
+          this._lobbyDesiredPos.set(
+            -25.0 + Math.sin(tSec * 0.13) * 7.5,
+            12.2 + Math.sin(tSec * 0.21) * 0.9,
+            34.0 + Math.cos(tSec * 0.11) * 5.5
+          );
+          this._lobbyDesiredLook.set(
+            18.0 + Math.sin(tSec * 0.09) * 4.0,
+            7.2 + Math.sin(tSec * 0.16) * 0.45,
+            -6.0 + Math.cos(tSec * 0.12) * 3.5
+          );
+        } else if (camMode === 'weapon') {
+          this._lobbyDesiredPos.set(
+            -15.0 + Math.sin(tSec * 0.16) * 1.1,
+            5.2 + Math.sin(tSec * 0.23) * 0.16,
+            22.0 + Math.cos(tSec * 0.14) * 0.95
+          );
+          this._lobbyDesiredLook.set(12.0, 4.5, -6.0);
+        } else {
+          this._lobbyDesiredPos.set(
+            -17.0 + Math.sin(tSec * 0.15) * 1.3,
+            3.85 + Math.sin(tSec * 0.22) * 0.14,
+            25.0 + Math.cos(tSec * 0.13) * 1.1
+          );
+          this._lobbyDesiredLook.set(14.0, 3.4, -7.0);
+        }
+      } else {
+        const angle = tSec * (camMode === 'harbor' ? 0.11 : 0.045);
+        const orbitR = half * (camMode === 'harbor' ? 0.54 : 0.42);
+        const camY = camMode === 'harbor' ? 14.2 + Math.sin(tSec * 0.2) * 0.8 : camMode === 'weapon' ? 5.2 : 3.9;
+        this._lobbyDesiredPos.set(Math.cos(angle) * orbitR, camY, Math.sin(angle) * orbitR);
+        this._lobbyDesiredLook.set(0, camMode === 'harbor' ? 3.5 : 3.0, 0);
+      }
+
+      const dampAlpha = !this._lobbyCamInitialized || dt <= 0 ? 1 : 1 - Math.exp(-dt * 4.6);
+      this._lobbyCamInitialized = true;
+      this._lobbyCamPos.lerp(this._lobbyDesiredPos, dampAlpha);
+      this._lobbyLookTarget.lerp(this._lobbyDesiredLook, dampAlpha);
+
+      this.camera.position.copy(this._lobbyCamPos);
+      this.camera.lookAt(this._lobbyLookTarget);
+      if (camMode === 'harbor') {
+        this.camera.rotation.z += Math.sin(tSec * 0.21) * 0.004;
+      }
       this.viewmodelRig.visible = false;
 
       if (this.lobbyShowcaseGroup && this.lobbyOperator) {
-        this.lobbyShowcaseGroup.visible = true;
-        if (this.lobbyAutoRotate) {
-          this.lobbyOperatorYaw += dt * 0.38;
-        }
-        this.lobbyOperator.group.rotation.y = Math.PI + this.lobbyOperatorYaw;
-        this.lobbyOperator.crouching = Boolean(this.lobbyCrouching);
-        const isTestFiring = (now - (this.lobbyTestShotAt || 0)) <= 450;
-        if (this.lobbyPosterPose && !this.lobbyWalkDemo && !this.lobbyCrouching && !isTestFiring) {
-          poseOperatorCryzenPoster(this.lobbyOperator, this.lobbyOperator.currentWeapon || 'rifle', now);
-        } else {
-          if (this.lobbyOperator._wasPosterPosed) {
-            this.lobbyOperator._posedWeapon = null;
-            this.lobbyOperator._wasPosterPosed = false;
+        const vw = Math.max(1, window.innerWidth || 1280);
+        const vh = Math.max(1, window.innerHeight || 720);
+        const aspect = this.camera.aspect || vw / vh;
+        const railRight = Math.min(vw * 0.42, 384);
+        const ndcCenterX = (((railRight + vw) * 0.5) / vw) * 2 - 1;
+        const halfTan = Math.tan(THREE.MathUtils.degToRad((this.camera.fov || 68) * 0.5));
+
+        if (camMode === 'harbor') {
+          this.lobbyShowcaseGroup.visible = false;
+        } else if (camMode === 'weapon') {
+          const d = aspect < 1.35 ? 1.45 : 1.28;
+          const worldX = ndcCenterX * halfTan * aspect * d;
+          this.lobbyShowcaseGroup.visible = true;
+          this.lobbyShowcaseGroup.position.set(worldX, -0.02, -d);
+          this.lobbyOperator.group.visible = false;
+          if (this.lobbyPedestalGroup) this.lobbyPedestalGroup.visible = false;
+          if (this.lobbyWeaponInspectGroup) this.lobbyWeaponInspectGroup.visible = true;
+
+          if (this.lobbyAutoRotate) {
+            this.lobbyOperatorYaw += dt * 0.34;
           }
-          this.animateHumanoidRig(
-            this.lobbyOperator,
-            dt,
-            now,
-            Boolean(this.lobbyWalkDemo),
-            this.lobbyWalkDemo ? 0.18 : 0
-          );
+          if (this.lobbyWeaponInspectSpin) {
+            const shotElapsed = now - (this.lobbyTestShotAt || 0);
+            const kick = shotElapsed >= 0 && shotElapsed <= 160 ? (1 - shotElapsed / 160) : 0;
+            this.lobbyWeaponInspectSpin.rotation.y = Math.PI * 0.5 + this.lobbyOperatorYaw;
+            this.lobbyWeaponInspectSpin.rotation.z = kick * 0.075;
+            this.lobbyWeaponInspectSpin.position.x = -kick * 0.022;
+            const inspectWep = this.lobbyWeaponInspectMesh?.userData?.weaponMesh;
+            if (inspectWep?.userData?.flashMesh) {
+              inspectWep.userData.flashMesh.visible = shotElapsed >= 0 && shotElapsed <= 65;
+            }
+          }
+        } else {
+          const d = aspect < 1.35 ? 3.15 : 2.88;
+          const worldX = ndcCenterX * halfTan * aspect * d;
+          this.lobbyShowcaseGroup.visible = true;
+          this.lobbyShowcaseGroup.position.set(worldX, -0.94, -d);
+          this.lobbyOperator.group.visible = true;
+          if (this.lobbyPedestalGroup) this.lobbyPedestalGroup.visible = true;
+          if (this.lobbyWeaponInspectGroup) this.lobbyWeaponInspectGroup.visible = false;
+
+          if (this.lobbyAutoRotate) {
+            this.lobbyOperatorYaw += dt * 0.14;
+          }
+          this.lobbyOperator.group.rotation.y = Math.PI + this.lobbyOperatorYaw;
+          this.lobbyOperator.crouching = Boolean(this.lobbyCrouching);
+          const isTestFiring = (now - (this.lobbyTestShotAt || 0)) <= 450;
+          const prevSoldierTime = this.lobbyOperator._soldierMixer ? this.lobbyOperator._soldierMixer.time : null;
+          if (this.lobbyPosterPose && !this.lobbyWalkDemo && !this.lobbyCrouching && !isTestFiring) {
+            poseOperatorCryzenPoster(this.lobbyOperator, this.lobbyOperator.currentWeapon || 'rifle', now);
+          } else {
+            if (this.lobbyOperator._wasPosterPosed) {
+              this.lobbyOperator._posedWeapon = null;
+              this.lobbyOperator._wasPosterPosed = false;
+            }
+            this.animateHumanoidRig(
+              this.lobbyOperator,
+              dt,
+              now,
+              Boolean(this.lobbyWalkDemo),
+              this.lobbyWalkDemo ? 0.18 : 0
+            );
+          }
+          if (this.lobbyOperator._soldierMixer && dt > 0 && this.lobbyOperator._soldierMixer.time === prevSoldierTime) {
+            if (typeof this.lobbyOperator.updateSoldierGlbAnimation === 'function') {
+              this.lobbyOperator.updateSoldierGlbAnimation(
+                dt,
+                Boolean(this.lobbyWalkDemo),
+                this.lobbyWalkDemo ? 0.18 : 0,
+                Boolean(this.lobbyCrouching),
+                false
+              );
+            } else {
+              const acts = this.lobbyOperator._soldierActions;
+              if (acts?.Idle && acts?.Walk && this.lobbyWalkDemo) {
+                acts.Walk.enabled = true;
+                acts.Walk.setEffectiveWeight?.(1);
+                acts.Idle.setEffectiveWeight?.(0);
+              } else if (acts?.Idle) {
+                acts.Idle.enabled = true;
+                acts.Idle.setEffectiveWeight?.(1);
+                acts.Walk?.setEffectiveWeight?.(0);
+                acts.Run?.setEffectiveWeight?.(0);
+              }
+              this.lobbyOperator._soldierMixer.update(dt);
+            }
+          }
+          if (this.lobbyPosterPose && !this.lobbyWalkDemo && !this.lobbyCrouching && !isTestFiring) {
+            this.lobbyOperator._wasPosterPosed = true;
+          }
+          if (this.lobbyWalkDemo && now >= (this.nextLobbyFootstepAt || 0)) {
+            this.nextLobbyFootstepAt = now + (this.lobbyCrouching ? 560 : 460);
+            this.callbacks?.onFootstep?.(false, Boolean(this.lobbyCrouching));
+          }
         }
-        if (this.lobbyPosterPose && !this.lobbyWalkDemo && !this.lobbyCrouching && !isTestFiring) {
-          this.lobbyOperator._wasPosterPosed = true;
-        }
-        if (this.lobbyWalkDemo && now >= (this.nextLobbyFootstepAt || 0)) {
-          this.nextLobbyFootstepAt = now + (this.lobbyCrouching ? 560 : 460);
-          this.callbacks?.onFootstep?.(false, Boolean(this.lobbyCrouching));
-        }
-        if (this.lobbyHoloRingOuter) this.lobbyHoloRingOuter.rotation.z = now * 0.0012;
-        if (this.lobbyHoloRingInner) this.lobbyHoloRingInner.rotation.z = -now * 0.0018;
       }
     } else {
       if (this.lobbyShowcaseGroup) {
         this.lobbyShowcaseGroup.visible = false;
       }
+      this._lobbyCamInitialized = false;
       this.advanceFixedPhysics(dt);
       this.updateLocalPhysics(dt);
     }
@@ -146,8 +347,46 @@ export class LoopAndInputMethods {
     if (this.ambientParticles) {
       this.ambientParticles.rotation.y = now * 0.00008;
     }
+    if (this.harborWaterUniform) {
+      this.harborWaterUniform.value = now * 0.001;
+    }
+    if (this.skyTimeUniform) {
+      this.skyTimeUniform.value = now * 0.001;
+    }
+    if (this.skySwifts) {
+      updateSkySwifts(this, now * 0.001);
+    }
 
     this.updateRemotePlayers(dt, now);
+
+    // Texel-snapped directional shadow camera following the player (in-match) or lobby focus (in-lobby)
+    if (this.renderer.shadowMap.enabled && this.dirLight) {
+      const focusX = this.inMatch ? (this.position?.x || 0) : (this._lobbyLookTarget?.x || 0);
+      const focusZ = this.inMatch ? (this.position?.z || 0) : (this._lobbyLookTarget?.z || 0);
+      this.updateDirectionalShadowAnchor?.(focusX, focusZ);
+    }
+
+    // Saltline High-Tier Throttled Dynamic Shadows (30Hz exclusively on Cao / high; 0Hz static/off on Thấp & Vừa)
+    if (this.inMatch && this.quality.dynamicShadowHz > 0 && this.renderer.shadowMap.enabled) {
+      let hasVisibleCasters = false;
+      for (const rp of this.remotePlayers.values()) {
+        if (rp.group?.visible) {
+          hasVisibleCasters = true;
+          break;
+        }
+      }
+      if (hasVisibleCasters) {
+        const shadowIntervalMs = 1000 / this.quality.dynamicShadowHz;
+        if (now - (this._lastDynamicShadowAt ?? -1000) >= shadowIntervalMs || now < (this._lastDynamicShadowAt ?? -1000)) {
+          this._lastDynamicShadowAt = now;
+          this._hadDynamicShadowCasters = true;
+          this.renderer.shadowMap.needsUpdate = true;
+        }
+      } else if (this._hadDynamicShadowCasters) {
+        this._hadDynamicShadowCasters = false;
+        this.renderer.shadowMap.needsUpdate = true;
+      }
+    }
 
     // Update top-left Tactical Mini Map / Radar when in match (~30Hz throttle, zero wrapper allocation)
     if (this.inMatch && this.minimap && (now - this.minimap.lastRenderAt >= 33 || now < this.minimap.lastRenderAt)) {
@@ -279,6 +518,15 @@ export class LoopAndInputMethods {
         sh.mesh.position.x += sh.vx * dt;
         sh.mesh.position.y += sh.vy * dt;
         sh.mesh.position.z += sh.vz * dt;
+        const floorY = typeof sh.floorY === 'number' ? sh.floorY : 0.025;
+        if (sh.mesh.position.y <= floorY && sh.vy < 0) {
+          sh.mesh.position.y = floorY;
+          sh.vy = Math.abs(sh.vy) * 0.36;
+          sh.vx *= 0.62;
+          sh.vz *= 0.62;
+          sh.rx *= 0.55;
+          sh.rz *= 0.55;
+        }
         sh.mesh.rotation.x += sh.rx * dt;
         sh.mesh.rotation.y += sh.ry * dt;
         sh.mesh.rotation.z += sh.rz * dt;
@@ -340,7 +588,34 @@ export class LoopAndInputMethods {
               }
             }
           }
+
+          if (Array.isArray(fx.smokeClouds)) {
+            const cloudGrow = 1 - Math.pow(1 - progress, 2);
+            const cloudAlpha = Math.min(1, progress * 6) * Math.pow(Math.max(0, 1 - progress), 1.35);
+            for (let s = 0; s < fx.smokeClouds.length; s++) {
+              const sc = fx.smokeClouds[s];
+              const dragF = Math.max(0, 1 - (sc.drag || 2.6) * dt);
+              sc.vx *= dragF;
+              sc.vz *= dragF;
+              sc.vy *= Math.max(0, 1 - 1.5 * dt);
+              if (sc.sprite) {
+                sc.sprite.position.x += sc.vx * dt;
+                sc.sprite.position.y += (sc.vy + 0.9) * dt;
+                sc.sprite.position.z += sc.vz * dt;
+                const scl = sc.startScale + (sc.endScale - sc.startScale) * cloudGrow;
+                sc.sprite.scale.setScalar(scl);
+              }
+              if (sc.mat) {
+                sc.mat.rotation += (sc.rotSpeed || 0) * dt;
+                sc.mat.opacity = sc.maxOpacity * cloudAlpha;
+              }
+            }
+          }
         } else {
+          const lineDur = fx.lineDuration || fx.duration;
+          const lineAlive = elapsed < lineDur;
+          const lineAlpha = lineAlive ? Math.max(0, 1 - elapsed / lineDur) : 0;
+
           if (fx.geo && fx.totalDist > 0) {
             const travelProg = fx.travelMs > 0 ? Math.min(1, elapsed / fx.travelMs) : 1;
             const headDist = Math.min(fx.totalDist, fx.boltLen + travelProg * fx.totalDist);
@@ -354,26 +629,139 @@ export class LoopAndInputMethods {
             arr[4] = fx.oy + fx.uy * headDist;
             arr[5] = fx.oz + fx.uz * headDist;
             posAttr.needsUpdate = true;
+            const segLen = headDist - tailDist;
+            const segVisible = lineAlive && segLen > 0.015;
             if (fx.line) {
-              fx.line.visible = (headDist - tailDist) > 0.015;
+              fx.line.visible = segVisible;
             }
+            if (fx.boltMesh) {
+              fx.boltMesh.visible = segVisible;
+              if (segVisible) {
+                fx.boltMesh.position.set(
+                  (arr[0] + arr[3]) * 0.5,
+                  (arr[1] + arr[4]) * 0.5,
+                  (arr[2] + arr[5]) * 0.5
+                );
+                fx.boltMesh.scale.set(1, 1, Math.max(0.01, segLen));
+              }
+            }
+          } else {
+            if (fx.line) fx.line.visible = lineAlive;
+            if (fx.boltMesh) fx.boltMesh.visible = lineAlive;
           }
-          fx.mat.opacity = Math.min(1, alpha * 1.25);
-          fx.sparkMat.opacity = alpha;
+
+          if (fx.mat) fx.mat.opacity = Math.min(1, lineAlpha * 1.25);
+          if (fx.boltMat) fx.boltMat.opacity = Math.min(1, lineAlpha * 1.35);
+          if (fx.sparkMat) fx.sparkMat.opacity = lineAlpha;
+          if (fx.spark) fx.spark.visible = lineAlive;
+          if (fx.armorSparkMat) fx.armorSparkMat.opacity = lineAlpha;
+
           if (fx.particles) {
             for (let p = 0; p < fx.particles.length; p++) {
               const pt = fx.particles[p];
+              if (!pt.mesh) continue;
+              pt.mesh.visible = lineAlive;
+              if (!lineAlive) continue;
               pt.vy -= 14.0 * dt;
               pt.mesh.position.x += pt.vx * dt;
               pt.mesh.position.y += pt.vy * dt;
               pt.mesh.position.z += pt.vz * dt;
             }
           }
+
+          if (Array.isArray(fx.smokePuffs)) {
+            const puffGrow = 1 - Math.pow(1 - progress, 2);
+            const puffAlpha = Math.min(1, progress * 5) * (1 - progress);
+            for (let s = 0; s < fx.smokePuffs.length; s++) {
+              const sp = fx.smokePuffs[s];
+              const dragF = Math.max(0, 1 - (sp.drag || 4.2) * dt);
+              sp.vx *= dragF;
+              sp.vz *= dragF;
+              sp.vy *= Math.max(0, 1 - 2.2 * dt);
+              if (sp.sprite) {
+                sp.sprite.position.x += sp.vx * dt;
+                sp.sprite.position.y += (sp.vy + 0.35) * dt;
+                sp.sprite.position.z += sp.vz * dt;
+                const sc = sp.startScale + (sp.endScale - sp.startScale) * puffGrow;
+                sp.sprite.scale.setScalar(sc);
+              }
+              if (sp.mat) {
+                sp.mat.opacity = sp.maxOpacity * puffAlpha;
+              }
+            }
+          }
         }
       }
     }
 
-    this.renderer.render(this.scene, this.camera);
+    const isRealWebGL = Boolean(
+      this.renderer?.isWebGLRenderer &&
+        !this.renderer.__fakeGL &&
+        typeof window !== 'undefined'
+    );
+
+    if (!isRealWebGL) {
+      this.renderer.render(this.scene, this.camera);
+    } else {
+      if (this.camera.layers.mask !== 1) this.camera.layers.set(0);
+      if (
+        this.viewmodelRig &&
+        (this.viewmodelRig.layers.mask !== 2 ||
+          (this.viewmodelRimLight && this.viewmodelRimLight.layers.mask !== 2) ||
+          (this.viewmodelFillLight && this.viewmodelFillLight.layers.mask !== 2))
+      ) {
+        this.syncViewmodelLayers?.();
+      }
+
+      const usedPost = Boolean(this.postProcess?.render?.());
+      if (!usedPost) {
+        this.renderer.autoClear = true;
+        this.renderer.render(this.scene, this.camera);
+      }
+
+      if (this.inMatch && this.viewmodelRig?.visible && this.vmCamera) {
+        this.scene.updateMatrixWorld();
+        this.camera.updateMatrixWorld();
+
+        const activeVm =
+          this.viewmodelWeapons?.[this.currentWeapon] ||
+          this.viewmodelMeshes?.[this.currentWeapon];
+        const isCs2Vm = Boolean(
+          activeVm?.userData?.isCs2Glb ||
+            activeVm?.userData?.cs2GlbActive ||
+            this.cs2Viewmodels?.[this.currentWeapon]?.visible
+        );
+        const targetVmFov = isCs2Vm
+          ? (this.isAiming ? 54 : 66)
+          : (this.isAiming ? 46 : 54);
+        if (Math.abs(this.vmCamera.fov - targetVmFov) > 0.05) {
+          this.vmCamera.fov = dt > 0
+            ? this.vmCamera.fov + (targetVmFov - this.vmCamera.fov) * Math.min(1, dt * 22)
+            : targetVmFov;
+          this.vmCamera.updateProjectionMatrix();
+        } else if (this.vmCamera.fov !== targetVmFov) {
+          this.vmCamera.fov = targetVmFov;
+          this.vmCamera.updateProjectionMatrix();
+        }
+
+        this.camera.matrixWorld.decompose(this.vmCamera.position, this.vmCamera.quaternion, this.tmpVec3A);
+        this.vmCamera.layers.set(1);
+
+        const prevFog = this.scene.fog;
+        const prevBackground = this.scene.background;
+        this.scene.fog = null;
+        this.scene.background = null;
+        this.renderer.autoClear = false;
+        try {
+          this.renderer.clearDepth();
+          this.renderer.render(this.scene, this.vmCamera);
+        } finally {
+          this.renderer.autoClear = true;
+          this.scene.fog = prevFog;
+          this.scene.background = prevBackground;
+        }
+      }
+    }
     this.perfOverlay?.update(now, this.renderer, { tier: this.tier, pixelRatio: this.currentPixelRatio, net: this.getNetOverlayText() });
   }
 
@@ -393,11 +781,19 @@ export class LoopAndInputMethods {
       const lockPromise = this.renderer.domElement.requestPointerLock?.({ unadjustedMovement: true });
       if (lockPromise && typeof lockPromise.catch === 'function') {
         lockPromise.catch(() => {
-          this.renderer.domElement.requestPointerLock?.();
+          try {
+            this.renderer.domElement.requestPointerLock?.()?.catch?.(() => {});
+          } catch {
+            // Ignore pointer lock rejection outside user activation
+          }
         });
       }
     } catch {
-      this.renderer.domElement.requestPointerLock?.();
+      try {
+        this.renderer.domElement.requestPointerLock?.()?.catch?.(() => {});
+      } catch {
+        // Ignore pointer lock errors
+      }
     }
     if (typeof navigator !== 'undefined' && navigator.keyboard && typeof navigator.keyboard.lock === 'function') {
       try {
@@ -432,9 +828,17 @@ export class LoopAndInputMethods {
 
   bindEvents() {
     window.addEventListener('resize', () => {
-      this.camera.aspect = window.innerWidth / window.innerHeight;
+      const w = Math.max(1, window.innerWidth);
+      const h = Math.max(1, window.innerHeight);
+      const aspect = w / h;
+      this.camera.aspect = aspect;
       this.camera.updateProjectionMatrix();
-      this.renderer.setSize(window.innerWidth, window.innerHeight);
+      if (this.vmCamera) {
+        this.vmCamera.aspect = aspect;
+        this.vmCamera.updateProjectionMatrix();
+      }
+      this.renderer.setSize(w, h);
+      this.postProcess?.setSize?.(w, h, this.currentPixelRatio);
     }, { passive: true });
 
     document.addEventListener('pointerlockchange', () => {
@@ -541,6 +945,10 @@ export class LoopAndInputMethods {
       }
       this.swayRotY = Math.max(-0.085, Math.min(0.085, (this.swayRotY || 0) - mx * 0.00075));
       this.swayRotX = Math.max(-0.065, Math.min(0.065, (this.swayRotX || 0) - my * 0.00065));
+      if (this.vmSprings) {
+        this.vmSprings.swX.v = Math.max(-2.5, Math.min(2.5, this.vmSprings.swX.v - mx * 0.0042));
+        this.vmSprings.swY.v = Math.max(-2.5, Math.min(2.5, this.vmSprings.swY.v + my * 0.0038));
+      }
     }, { passive: true });
 
     window.addEventListener('mousedown', (e) => {
@@ -708,8 +1116,12 @@ export class LoopAndInputMethods {
           this.crouching = false;
         }
       }
-      else if (e.code === 'KeyF' && this.alive && this.nearbyDrop) {
-        this.callbacks.onPickupWeapon?.(this.nearbyDrop.id);
+      else if (e.code === 'KeyF' && this.alive) {
+        if (this.nearbyDrop) {
+          this.callbacks.onPickupWeapon?.(this.nearbyDrop.id);
+        } else {
+          this.triggerWeaponInspect?.();
+        }
       }
       else if (e.code === 'KeyR') this.startReload();
       else if (e.code === 'KeyL') this.callbacks.onCopyLinkShortcut?.();

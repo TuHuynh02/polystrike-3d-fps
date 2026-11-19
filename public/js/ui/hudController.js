@@ -73,6 +73,9 @@ import {
   hudWeaponRole,
   hudAmmoCurrent,
   hudAmmoMag,
+  hudAmmoBlock,
+  hudAmmoPips,
+  hudAmmoAlert,
   hudWeaponHotbar,
   hotbarSlot1,
   hotbarSlot2,
@@ -208,15 +211,15 @@ export function triggerHitmarkerFeedback({
     }
     comboLastHitAt = now;
 
-    const comboSuffix = comboHitCount >= 2 ? ` (${comboHitCount}x • ${comboTotalDamage})` : '';
-    const wbTag = isWallbang ? '🧱 ' : '';
+    const comboSuffix = comboHitCount >= 2 ? ` (${comboHitCount}x · ${comboTotalDamage})` : '';
+    const wbTag = isWallbang ? 'WB ' : '';
     let label = `${wbTag}-${cleanDmg}${comboSuffix}`;
     if (armorBroken) {
-      label = `${wbTag}🛡️ VỠ GIÁP -${cleanDmg}${comboSuffix}`;
+      label = `${wbTag}VỠ GIÁP -${cleanDmg}${comboSuffix}`;
     } else if (isHeadshot) {
-      label = `${wbTag}🎯 -${cleanDmg} HS!${comboSuffix}`;
+      label = `${wbTag}-${cleanDmg} HS${comboSuffix}`;
     } else if (isArmorHit) {
-      label = `${wbTag}🛡️ -${cleanDmg}${comboSuffix}`;
+      label = `${wbTag}GIÁP -${cleanDmg}${comboSuffix}`;
     }
 
     hudFloatingDmg.textContent = label;
@@ -251,7 +254,7 @@ export function triggerAdrenalineHealFeedback(healAmount = 25, serverHp = null) 
 
   const label = `+${ cleanHeal } HP`;
   if (hudAdrenalinePop) {
-    hudAdrenalinePop.textContent = `⚡ ${ label }`;
+    hudAdrenalinePop.textContent = label;
     hudAdrenalinePop.classList.remove('hidden');
   }
   if (hudHpAdrenalineTag) {
@@ -267,18 +270,18 @@ export function triggerAdrenalineHealFeedback(healAmount = 25, serverHp = null) 
 }
 
 const MULTI_KILL_TIERS = {
-  1: { title: 'FIRST BLOOD', medal: '🩸', tierClass: 'mk-tier-1' },
-  2: { title: 'DOUBLE KILL', medal: '⚡', tierClass: 'mk-tier-2' },
-  3: { title: 'TRIPLE KILL', medal: '🔥', tierClass: 'mk-tier-3' },
-  4: { title: 'QUADRA KILL', medal: '💀', tierClass: 'mk-tier-4' },
-  5: { title: 'ACE / RAMPAGE', medal: '👑', tierClass: 'mk-tier-5' }
+  1: { title: 'FIRST BLOOD', medal: '01', tierClass: 'mk-tier-1' },
+  2: { title: 'DOUBLE KILL', medal: '02', tierClass: 'mk-tier-2' },
+  3: { title: 'TRIPLE KILL', medal: '03', tierClass: 'mk-tier-3' },
+  4: { title: 'QUADRA KILL', medal: '04', tierClass: 'mk-tier-4' },
+  5: { title: 'ACE // RAMPAGE', medal: 'ACE', tierClass: 'mk-tier-5' }
 };
 
 export function showMultiKillBanner(multiKillCount = 1, victimName = 'Enemy', isHeadshot = false, healAmount = 25) {
   const clampedTier = Math.max(1, Math.min(5, Math.floor(Number(multiKillCount) || 1)));
   const tier = MULTI_KILL_TIERS[clampedTier] || MULTI_KILL_TIERS[1];
   const cleanVictim = (victimName || 'ENEMY').toUpperCase();
-  const hsPrefix = isHeadshot ? '🎯 HS • ' : '';
+  const hsPrefix = isHeadshot ? 'HS // ' : '';
 
   if (multikillBanner) {
     multikillBanner.classList.remove('hidden', 'mk-tier-1', 'mk-tier-2', 'mk-tier-3', 'mk-tier-4', 'mk-tier-5');
@@ -333,7 +336,7 @@ export function handleThrowGrenadeRequest(customPayload = null) {
     if (now - appState.lastGrenadeThrowAt < 250) return;
     appState.lastGrenadeThrowAt = now;
     appState.sfx.playDryFire?.();
-    showCenterBanner('💣 HẾT LỰU ĐẠN');
+    showCenterBanner('HẾT LỰU ĐẠN [G]');
     return;
   }
 
@@ -378,11 +381,11 @@ export async function copyInviteLinkToClipboard() {
   const shareUrl = getShareableRoomUrl(appState.activeRoomCode);
   try {
     await navigator.clipboard.writeText(shareUrl);
-    showToast(`🔗 Đã copy link #${ appState.activeRoomCode }`);
+    showToast(`ĐÃ SAO CHÉP LINK #${ appState.activeRoomCode }`);
   } catch {
     pauseInviteUrl.select();
     document.execCommand('copy');
-    showToast(`🔗 Đã copy link #${ appState.activeRoomCode }`);
+    showToast(`ĐÃ SAO CHÉP LINK #${ appState.activeRoomCode }`);
   }
 }
 
@@ -422,10 +425,10 @@ export function updateActiveBuffsHud() {
   hudActiveBuffs.classList.remove('hidden');
   let html = '';
   if (speedRemSec > 0) {
-    html += `<div class="buff-badge buff-speed"><span>⚡ TỐC ĐỘ X1.3</span><strong>${speedRemSec.toFixed(1)}s</strong></div>`;
+    html += `<div class="buff-badge buff-speed"><span>TỐC ĐỘ X1.3</span><strong>${speedRemSec.toFixed(1)}s</strong></div>`;
   }
   if (dmgRemSec > 0) {
-    html += `<div class="buff-badge buff-damage"><span>🔥 SÁT THƯƠNG X1.35</span><strong>${dmgRemSec.toFixed(1)}s</strong></div>`;
+    html += `<div class="buff-badge buff-damage"><span>SÁT THƯƠNG X1.35</span><strong>${dmgRemSec.toFixed(1)}s</strong></div>`;
   }
   hudActiveBuffs.innerHTML = html;
 }
@@ -448,6 +451,7 @@ export function updateHpHud(hp) {
     hudHpValue.style.color = '#ef4444';
     hudHpBar.style.background = 'linear-gradient(90deg, #ef4444, #f87171)';
   }
+  hudHpCard?.classList.toggle('critical-hp', cleanHp > 0 && cleanHp <= 25);
 }
 
 export function clearSpawnProtectionHud() {
@@ -491,10 +495,33 @@ export function triggerSpawnProtectionHud(durationMs = MATCH_CONFIG.SPAWN_PROTEC
   }, cleanDuration + 30);
 }
 
+const MAX_AMMO_PIPS = 20;
+let ammoPipNodes = null;
+
+function ensureAmmoPipNodes() {
+  if (!hudAmmoPips) return null;
+  if (ammoPipNodes && ammoPipNodes.length === MAX_AMMO_PIPS && ammoPipNodes[0]?.parentNode === hudAmmoPips) {
+    return ammoPipNodes;
+  }
+  hudAmmoPips.textContent = '';
+  ammoPipNodes = [];
+  for (let i = 0; i < MAX_AMMO_PIPS; i++) {
+    const pip = document.createElement('span');
+    pip.className = 'ammo-pip';
+    hudAmmoPips.appendChild(pip);
+    ammoPipNodes.push(pip);
+  }
+  return ammoPipNodes;
+}
+
 export function syncHotbarSlotsHud() {
   const pCfg = WEAPONS[appState.selectedLoadout.primary] || WEAPONS.rifle;
   const sCfg = WEAPONS[appState.selectedLoadout.secondary] || WEAPONS.pistol;
   const mCfg = WEAPONS[appState.selectedLoadout.melee] || WEAPONS.knife;
+
+  const hotbarSig = `${pCfg.id}|${sCfg.id}|${mCfg.id}`;
+  if (appState.hudCache.hotbarSig === hotbarSig) return;
+  appState.hudCache.hotbarSig = hotbarSig;
 
   if (hotbarSlot1?.dataset) hotbarSlot1.dataset.slot = pCfg.id;
   if (hotbarSlot2?.dataset) hotbarSlot2.dataset.slot = sCfg.id;
@@ -505,34 +532,86 @@ export function syncHotbarSlotsHud() {
 }
 
 export function updateWeaponHud(weaponId, currentAmmo, reserveAmmo) {
+  syncHotbarSlotsHud();
   const cfg = WEAPONS[weaponId] || WEAPONS.rifle;
+  const isInfinite = Boolean(cfg.isMelee || cfg.infiniteAmmo);
+  const cleanCur = isInfinite ? -1 : Math.max(0, Number(currentAmmo ?? cfg.magSize));
+  const cleanRes = isInfinite ? -1 : Math.max(0, Number(reserveAmmo ?? cfg.reserveAmmo ?? cfg.magSize));
+  const sig = `${weaponId}|${cfg.id}|${isInfinite ? 'inf' : `${cleanCur}/${cleanRes}`}|${appState.hudCache.hotbarSig || ''}`;
+  if (appState.hudCache.weaponHudSig === sig) return;
+  appState.hudCache.weaponHudSig = sig;
+
   hudWeaponName.textContent = cfg.name;
   hudWeaponRole.textContent = cfg.category || cfg.categoryLabel || '';
 
-  const ammoBlock = hudAmmoCurrent.closest('.weapon-ammo-block');
-  if (cfg.isMelee || cfg.infiniteAmmo) {
+  const ammoBlock = hudAmmoBlock || hudAmmoCurrent.closest('.weapon-ammo-block');
+  if (isInfinite) {
     hudAmmoCurrent.textContent = '∞';
     hudAmmoMag.textContent = '∞';
     hudAmmoCurrent.classList.remove('low-ammo', 'ammo-empty');
     hudAmmoMag.classList.remove('ammo-empty');
     ammoBlock?.classList.remove('ammo-empty-box');
+    hudAmmoPips?.classList.add('hidden');
+    if (hudAmmoAlert) {
+      hudAmmoAlert.classList.add('hidden');
+      hudAmmoAlert.classList.remove('low', 'empty');
+    }
   } else {
-    const cleanCur = Math.max(0, Number(currentAmmo ?? cfg.magSize));
-    const cleanRes = Math.max(0, Number(reserveAmmo ?? cfg.reserveAmmo ?? cfg.magSize));
+    const magSize = Math.max(1, Number(cfg.magSize) || 1);
     const isTotalEmpty = cleanCur === 0 && cleanRes === 0;
+    const isLowMag = !isTotalEmpty && cleanCur > 0 && cleanCur <= Math.max(1, Math.ceil(magSize * 0.25));
     hudAmmoCurrent.textContent = String(cleanCur);
     hudAmmoMag.textContent = String(cleanRes);
-    hudAmmoCurrent.classList.toggle('low-ammo', !isTotalEmpty && cleanCur <= Math.max(1, Math.ceil(cfg.magSize * 0.25)));
+    hudAmmoCurrent.classList.toggle('low-ammo', isLowMag || (cleanCur === 0 && !isTotalEmpty));
     hudAmmoCurrent.classList.toggle('ammo-empty', isTotalEmpty);
     hudAmmoMag.classList.toggle('ammo-empty', isTotalEmpty);
     ammoBlock?.classList.toggle('ammo-empty-box', isTotalEmpty);
+
+    const pips = ensureAmmoPipNodes();
+    if (pips && hudAmmoPips) {
+      hudAmmoPips.classList.remove('hidden');
+      const pipTotal = Math.min(MAX_AMMO_PIPS, magSize);
+      const filledPips = cleanCur <= 0 ? 0 : Math.min(pipTotal, Math.max(1, Math.round((cleanCur / magSize) * pipTotal)));
+      for (let i = 0; i < MAX_AMMO_PIPS; i++) {
+        const pip = pips[i];
+        const inRange = i < pipTotal;
+        const isFilled = inRange && i < filledPips;
+        pip.classList.toggle('hidden', !inRange);
+        pip.classList.toggle('filled', isFilled);
+        pip.classList.toggle('low', isFilled && isLowMag);
+      }
+    }
+
+    if (hudAmmoAlert) {
+      if (isTotalEmpty) {
+        hudAmmoAlert.textContent = 'HẾT ĐẠN';
+        hudAmmoAlert.classList.remove('hidden', 'low');
+        hudAmmoAlert.classList.add('empty');
+      } else if (cleanCur === 0 && cleanRes > 0) {
+        hudAmmoAlert.textContent = '[R] NẠP ĐẠN';
+        hudAmmoAlert.classList.remove('hidden', 'low');
+        hudAmmoAlert.classList.add('empty');
+      } else if (isLowMag) {
+        hudAmmoAlert.textContent = 'SẮP HẾT ĐẠN';
+        hudAmmoAlert.classList.remove('hidden', 'empty');
+        hudAmmoAlert.classList.add('low');
+      } else {
+        hudAmmoAlert.classList.add('hidden');
+        hudAmmoAlert.classList.remove('low', 'empty');
+      }
+    }
   }
 
-  syncHotbarSlotsHud();
-  const slots = hudWeaponHotbar.querySelectorAll('.hotbar-slot[data-slot-num]');
-  slots.forEach((slot) => {
-    slot.classList.toggle('active', slot.dataset.slot === weaponId);
-  });
+  if (hotbarSlot1 && hotbarSlot2 && hotbarSlot3) {
+    hotbarSlot1.classList.toggle('active', hotbarSlot1.dataset.slot === weaponId);
+    hotbarSlot2.classList.toggle('active', hotbarSlot2.dataset.slot === weaponId);
+    hotbarSlot3.classList.toggle('active', hotbarSlot3.dataset.slot === weaponId);
+  } else if (hudWeaponHotbar) {
+    const slots = hudWeaponHotbar.querySelectorAll('.hotbar-slot[data-slot-num]');
+    slots.forEach((slot) => {
+      slot.classList.toggle('active', slot.dataset.slot === weaponId);
+    });
+  }
 }
 
 export function updateMapHud(mapId) {
@@ -572,11 +651,11 @@ export function updateTeamScoreHud(teamScores = appState.currentTeamScores) {
 
   if (isTdm && hudLeader) {
     const killLimitText = hudKillLimit ? hudKillLimit.textContent : '30';
-    let nextLeaderText = `⚖️ HÒA: ${ alphaKills } - ${ bravoKills } (${ killLimitText })`;
+    let nextLeaderText = `HÒA: ${ alphaKills } - ${ bravoKills } (${ killLimitText })`;
     if (alphaKills > bravoKills) {
-      nextLeaderText = `🔵 PHE XANH DẪN ĐẦU (${ alphaKills }/${ killLimitText })`;
+      nextLeaderText = `ALPHA DẪN ĐẦU (${ alphaKills }/${ killLimitText })`;
     } else if (bravoKills > alphaKills) {
-      nextLeaderText = `🔴 PHE ĐỎ DẪN ĐẦU (${ bravoKills }/${ killLimitText })`;
+      nextLeaderText = `BRAVO DẪN ĐẦU (${ bravoKills }/${ killLimitText })`;
     }
     cache.leaderId = null;
     if (cache.leaderText !== nextLeaderText) {
@@ -618,7 +697,7 @@ export function renderScoreboard(players) {
           <td>${ kills }</td>
           <td>${ deaths }</td>
           <td>${ kd }</td>
-          <td>${ streak }🔥</td>
+          <td>${ streak }</td>
           <td style="color:${ pingColor };font-weight:600;">${ pingText }</td>
         </tr>
       `;
@@ -638,7 +717,7 @@ export function addKillFeedItem({ killerId, killerName, victimId, victimName, we
 
   const weaponSpan = document.createElement('span');
   weaponSpan.className = 'kill-weapon-tag';
-  const weaponLabel = weaponName || (weapon === 'grenade' ? '💣 FRAG GRENADE' : weapon === 'barrel' ? '🛢️ THÙNG NỔ' : weapon);
+  const weaponLabel = weaponName || (weapon === 'grenade' ? 'FRAG GRENADE' : weapon === 'barrel' ? 'THÙNG NỔ' : weapon);
   weaponSpan.textContent = `[${ weaponLabel }]`;
 
   item.appendChild(killerSpan);
@@ -646,14 +725,14 @@ export function addKillFeedItem({ killerId, killerName, victimId, victimName, we
   if (isWallbang) {
     const wbSpan = document.createElement('span');
     wbSpan.className = 'kill-hs-tag';
-    wbSpan.textContent = '🧱 WB';
+    wbSpan.textContent = 'WB';
     item.appendChild(wbSpan);
   }
 
   if (isHeadshot) {
     const hsSpan = document.createElement('span');
     hsSpan.className = 'kill-hs-tag';
-    hsSpan.textContent = '🎯 HS';
+    hsSpan.textContent = 'HS';
     item.appendChild(hsSpan);
   }
 

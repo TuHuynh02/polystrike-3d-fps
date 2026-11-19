@@ -4,6 +4,30 @@
 
 import { DEFAULT_MAP_ID, getMapConfig } from '../shared/constants.js';
 
+function formatCalloutLabel(callout) {
+  if (!callout) return '';
+  if (callout.shortName && String(callout.shortName).trim()) {
+    return String(callout.shortName).trim().toUpperCase();
+  }
+  const raw = String(callout.name || '')
+    .replace(/\([^)]*\)/g, '')
+    .replace(/\s*&\s*/g, '/')
+    .replace(/\bCONTAINER\b/gi, 'CARGO')
+    .replace(/\bOVERWATCH\b/gi, 'OVW')
+    .replace(/\bSANCTUARY\b/gi, 'SANC')
+    .replace(/\bGENERATOR\b/gi, 'GEN')
+    .replace(/\bCROSSROADS\b/gi, 'CROSS')
+    .replace(/\bWATCHTOWER\b/gi, 'TOWER')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase();
+  return raw.length > 10 ? raw.slice(0, 10).trim() : raw;
+}
+
+function boxesOverlap(a, b) {
+  return !(a[2] <= b[0] || a[0] >= b[2] || a[3] <= b[1] || a[1] >= b[3]);
+}
+
 export class TacticalMinimap {
   constructor(options = {}) {
     this.canvasId = options.canvasId || 'minimap-canvas';
@@ -111,18 +135,20 @@ export class TacticalMinimap {
     ctx.clearRect(0, 0, s, s);
 
     // 1. Tactical Dark Radar Background
-    const bgGrad = ctx.createRadialGradient(s / 2, s / 2, 12, s / 2, s / 2, s * 0.72);
-    bgGrad.addColorStop(0, 'rgba(15, 23, 42, 0.94)');
-    bgGrad.addColorStop(1, 'rgba(4, 9, 20, 0.97)');
+    const bgGrad = ctx.createRadialGradient(s / 2, s / 2, s * 0.06, s / 2, s / 2, s * 0.74);
+    bgGrad.addColorStop(0, 'rgba(18, 25, 36, 0.96)');
+    bgGrad.addColorStop(0.65, 'rgba(11, 16, 24, 0.97)');
+    bgGrad.addColorStop(1, 'rgba(5, 8, 13, 0.99)');
     ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, s, s);
 
     // 2. Subtle Sector Grid & Radar Range Rings
-    ctx.strokeStyle = 'rgba(56, 189, 248, 0.11)';
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.08)';
     ctx.lineWidth = 1;
     const gridStep = s / 6;
     for (let i = 1; i < 6; i++) {
       const p = Math.round(i * gridStep) + 0.5;
+      ctx.strokeStyle = i === 3 ? 'rgba(56, 189, 248, 0.13)' : 'rgba(148, 163, 184, 0.08)';
       ctx.beginPath();
       ctx.moveTo(p, 0);
       ctx.lineTo(p, s);
@@ -133,7 +159,7 @@ export class TacticalMinimap {
       ctx.stroke();
     }
 
-    ctx.strokeStyle = 'rgba(56, 189, 248, 0.14)';
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.11)';
     for (const rRatio of [0.24, 0.44]) {
       ctx.beginPath();
       ctx.arc(s / 2, s / 2, s * rRatio, 0, Math.PI * 2);
@@ -158,49 +184,123 @@ export class TacticalMinimap {
       const y = this.worldToCanvasY(obs.z) - d / 2;
 
       if (obs.type === 'platform') {
-        ctx.fillStyle = 'rgba(51, 65, 85, 0.65)';
-        ctx.strokeStyle = 'rgba(56, 189, 248, 0.38)';
+        ctx.fillStyle = 'rgba(43, 55, 72, 0.74)';
+        ctx.strokeStyle = 'rgba(148, 163, 184, 0.42)';
         ctx.lineWidth = 1;
         ctx.fillRect(x, y, w, d);
         ctx.strokeRect(x, y, w, d);
       } else if (obs.type === 'step') {
-        ctx.fillStyle = 'rgba(100, 116, 139, 0.55)';
+        ctx.fillStyle = 'rgba(100, 116, 139, 0.60)';
         ctx.fillRect(x, y, w, d);
       } else if (obs.type === 'barricade') {
-        ctx.fillStyle = 'rgba(56, 189, 248, 0.48)';
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.42)';
+        ctx.strokeStyle = 'rgba(125, 211, 252, 0.45)';
+        ctx.lineWidth = 0.8;
         ctx.fillRect(x, y, w, d);
+        ctx.strokeRect(x, y, w, d);
       } else if (obs.type === 'container') {
-        ctx.fillStyle = 'rgba(14, 165, 233, 0.42)';
-        ctx.strokeStyle = 'rgba(56, 189, 248, 0.72)';
+        ctx.fillStyle = 'rgba(14, 116, 168, 0.56)';
+        ctx.strokeStyle = 'rgba(56, 189, 248, 0.80)';
         ctx.lineWidth = 1;
         ctx.fillRect(x, y, w, d);
         ctx.strokeRect(x, y, w, d);
       } else if (obs.type === 'crate') {
-        ctx.fillStyle = 'rgba(245, 158, 11, 0.62)';
+        ctx.fillStyle = 'rgba(217, 119, 6, 0.64)';
+        ctx.strokeStyle = 'rgba(251, 191, 36, 0.72)';
+        ctx.lineWidth = 0.8;
         ctx.fillRect(x, y, w, d);
+        ctx.strokeRect(x, y, w, d);
       } else if (obs.type === 'pillar') {
         ctx.fillStyle = '#e2e8f0';
-        ctx.fillRect(x, y, Math.max(2.5, w), Math.max(2.5, d));
+        ctx.strokeStyle = 'rgba(15, 23, 42, 0.85)';
+        ctx.lineWidth = 1;
+        const pw = Math.max(2.5, w);
+        const pd = Math.max(2.5, d);
+        ctx.fillRect(x, y, pw, pd);
+        ctx.strokeRect(x, y, pw, pd);
       } else {
         // Wall
-        ctx.fillStyle = 'rgba(148, 163, 184, 0.82)';
+        ctx.fillStyle = 'rgba(186, 199, 214, 0.88)';
+        ctx.strokeStyle = 'rgba(15, 23, 42, 0.72)';
+        ctx.lineWidth = 0.8;
         ctx.fillRect(x, y, w, d);
+        ctx.strokeRect(x, y, w, d);
       }
     }
 
-    // 4. Pre-render Tactical Callout Zone Labels onto the static radar canvas
+    // 4. Pre-render Tactical Callout Zone Labels onto the static radar canvas (with 2D AABB collision guard)
     const callouts = this.mapConfig?.callouts || [];
     if (callouts.length > 0 && typeof ctx.fillText === 'function') {
       ctx.save?.();
-      ctx.font = '600 6.5px "Orbitron", "Rajdhani", monospace';
+      ctx.font = '700 6.8px "JetBrains Mono", "Rajdhani", monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillStyle = 'rgba(226, 232, 240, 0.52)';
+      ctx.lineJoin = 'round';
+      ctx.miterLimit = 2;
+
+      const pad = 4;
+      const mid = s * 0.5;
+      const cardHalfW = Math.max(12, s * 0.075);
+      const cardDepth = Math.max(17, s * 0.095);
+      const placedBoxes = [
+        [mid - cardHalfW, 0, mid + cardHalfW, cardDepth], // N cardinal zone
+        [mid - cardHalfW, s - cardDepth, mid + cardHalfW, s], // S cardinal zone
+        [0, mid - 9, cardDepth, mid + 9], // W cardinal zone
+        [s - cardDepth, mid - 9, s, mid + 9] // E cardinal zone
+      ];
+
+      const labelH = 8;
+      const nudgeOffsets = [
+        [0, 0],
+        [0, 10],
+        [0, -10],
+        [12, 0],
+        [-12, 0],
+        [0, 18],
+        [0, -18]
+      ];
+
       for (let i = 0; i < callouts.length; i++) {
-        const c = callouts[i];
-        const cx = this.clampBlipCoord(this.worldToCanvasX(c.x), 14);
-        const cy = this.clampBlipCoord(this.worldToCanvasY(c.z), 8);
-        ctx.fillText(c.name, cx, cy);
+        const label = formatCalloutLabel(callouts[i]);
+        if (!label) continue;
+
+        const rawW = typeof ctx.measureText === 'function' ? ctx.measureText(label).width : label.length * 4.5;
+        const labelW = Math.max(10, rawW);
+        const halfW = labelW * 0.5;
+        const halfH = labelH * 0.5;
+        const marginX = halfW + 4;
+        const marginY = halfH + 4;
+        if (marginX * 2 >= s || marginY * 2 >= s) continue;
+
+        const baseX = Math.max(marginX, Math.min(s - marginX, this.worldToCanvasX(callouts[i].x)));
+        const baseY = Math.max(marginY, Math.min(s - marginY, this.worldToCanvasY(callouts[i].z)));
+
+        let chosen = null;
+        for (let k = 0; k < nudgeOffsets.length; k++) {
+          const cx = baseX + nudgeOffsets[k][0];
+          const cy = baseY + nudgeOffsets[k][1];
+          if (cx < marginX || cx > s - marginX || cy < marginY || cy > s - marginY) continue;
+          const box = [cx - halfW - pad, cy - halfH - pad, cx + halfW + pad, cy + halfH + pad];
+          let hits = false;
+          for (let j = 0; j < placedBoxes.length; j++) {
+            if (boxesOverlap(box, placedBoxes[j])) {
+              hits = true;
+              break;
+            }
+          }
+          if (!hits) {
+            chosen = { cx, cy, box };
+            break;
+          }
+        }
+
+        if (!chosen) continue;
+        placedBoxes.push(chosen.box);
+        ctx.strokeStyle = 'rgba(4, 8, 14, 0.92)';
+        ctx.lineWidth = 2.5;
+        ctx.strokeText?.(label, chosen.cx, chosen.cy);
+        ctx.fillStyle = 'rgba(226, 232, 240, 0.80)';
+        ctx.fillText(label, chosen.cx, chosen.cy);
       }
       ctx.restore?.();
     }
@@ -342,8 +442,9 @@ export class TacticalMinimap {
       const halfFov = 0.52; // ~60 deg radar cone
 
       if (!this._fovConeGrad || this._fovConeGradCtx !== ctx) {
-        const coneGrad = ctx.createRadialGradient(0, 0, 2, 0, 0, 34);
-        coneGrad.addColorStop(0, 'rgba(56, 189, 248, 0.42)');
+        const coneGrad = ctx.createRadialGradient(0, 0, 2, 0, 0, 38);
+        coneGrad.addColorStop(0, 'rgba(56, 189, 248, 0.50)');
+        coneGrad.addColorStop(0.55, 'rgba(56, 189, 248, 0.16)');
         coneGrad.addColorStop(1, 'rgba(56, 189, 248, 0.0)');
         this._fovConeGrad = coneGrad;
         this._fovConeGradCtx = ctx;
@@ -357,19 +458,21 @@ export class TacticalMinimap {
       ctx.fillStyle = this._fovConeGrad;
       ctx.beginPath();
       ctx.moveTo(0, 0);
-      ctx.arc(0, 0, 34, -halfFov, halfFov);
+      ctx.arc(0, 0, 38, -halfFov, halfFov);
       ctx.closePath();
       ctx.fill();
 
-      // Player directional arrow / chevron
+      // Player directional arrow / chevron with crisp cyan glow
+      ctx.shadowColor = 'rgba(56, 189, 248, 0.9)';
+      ctx.shadowBlur = 7;
       ctx.fillStyle = '#38bdf8';
-      ctx.strokeStyle = '#ffffff';
+      ctx.strokeStyle = '#f8fafc';
       ctx.lineWidth = 1.3;
       ctx.beginPath();
-      ctx.moveTo(5.8, 0);
-      ctx.lineTo(-4.2, -3.8);
+      ctx.moveTo(6.2, 0);
+      ctx.lineTo(-4.4, -4.0);
       ctx.lineTo(-2.2, 0);
-      ctx.lineTo(-4.2, 3.8);
+      ctx.lineTo(-4.4, 4.0);
       ctx.closePath();
       ctx.fill();
       ctx.stroke();

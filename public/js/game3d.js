@@ -57,6 +57,7 @@ import { RemotePlayersMethods } from './game3d/remotePlayers.js';
 import { CombatEffectsMethods } from './game3d/combatEffects.js';
 import { PhysicsAndNetcodeMethods } from './game3d/physicsAndNetcode.js';
 import { LoopAndInputMethods } from './game3d/loopAndInput.js';
+import { PostProcessPipeline } from './game3d/postProcess.js';
 
 export class Game3D {
   constructor(container, callbacks) {
@@ -91,6 +92,14 @@ export class Game3D {
     );
     this.scene.add(this.camera);
 
+    // Dedicated depth-cleared viewmodel camera (Layer 1) to eliminate wall clipping & perspective distortion
+    this.vmCamera = new THREE.PerspectiveCamera(
+      54,
+      window.innerWidth / window.innerHeight,
+      0.01,
+      10
+    );
+
     this.renderer = new THREE.WebGLRenderer({
       // MSAA follows the tier on every screen: the render scale is capped by maxPixelRatio (<= 1.35), so a 175 % / 200 %
       // display no longer loses anti-aliasing (it used to fall back to jagged, upscaled edges)
@@ -109,9 +118,10 @@ export class Game3D {
     this.assets.setMaxAnisotropy?.(this.renderer.capabilities?.getMaxAnisotropy?.() || 1);
     this.perfOverlay = isPerfOverlayRequested() ? new PerfOverlay() : null;
     if (this.perfOverlay) globalThis.__game3d = this; // ?perf=1 only: handle for console measurements
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.18;
+    this.renderer.toneMapping = THREE.AgXToneMapping ?? THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.08;
     this.container.appendChild(this.renderer.domElement);
+    this.postProcess = new PostProcessPipeline(this);
 
     // Pre-allocated math objects to avoid GC allocations in requestAnimationFrame
     this.raycaster = new THREE.Raycaster();
@@ -144,7 +154,8 @@ export class Game3D {
       opacity: 0.85,
       depthWrite: false,
       polygonOffset: true,
-      polygonOffsetFactor: -2
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -3
     });
     this.sharedGrenadeBodyGeo = new THREE.SphereGeometry(0.11, 16, 14);
     this.sharedGrenadeBandGeo = new THREE.CylinderGeometry(0.116, 0.116, 0.044, 16);
@@ -336,6 +347,21 @@ export class Game3D {
     this.weaponBobTime = 0;
     this.swayX = 0;
     this.swayY = 0;
+    this.barrelHeat = 0;
+    this._lastDynamicShadowAt = -1000;
+    this._hadDynamicShadowCasters = false;
+    // Saltline-style sub-stepped second-order spring-damper bank for crisp mechanical viewmodel feel
+    this.vmSprings = {
+      kZ: { x: 0, v: 0, k: 290, d: 22 },
+      kP: { x: 0, v: 0, k: 260, d: 20 },
+      kY: { x: 0, v: 0, k: 210, d: 18 },
+      kR: { x: 0, v: 0, k: 240, d: 19 },
+      swX: { x: 0, v: 0, k: 135, d: 17 },
+      swY: { x: 0, v: 0, k: 135, d: 17 },
+      jY: { x: 0, v: 0, k: 165, d: 15 },
+      jP: { x: 0, v: 0, k: 165, d: 15 },
+      bump: { x: 0, v: 0, k: 310, d: 24 }
+    };
 
     // Input keys
     this.keys = {
@@ -365,11 +391,16 @@ export class Game3D {
 
     // Build 3D environment, weapon viewmodels, grenade trajectory preview & lobby 3D humanoid operator showcase
     this.setupLights();
-    this.loadMap(DEFAULT_MAP_ID);
+    const initialMapId = callbacks?.initialMapId || DEFAULT_MAP_ID;
+    this.loadMap(initialMapId);
     this.setupViewmodelWeapons();
+    this.syncViewmodelLayers?.();
     this.setupGrenadePreview();
     this.setupLobbyShowcase();
     this.bindEvents();
+    if ((this.quality?.postFx ?? (this.tier !== 'low' ? 1 : 0)) > 0) {
+      this.postProcess?.init?.();
+    }
 
     // Start render loop
     this.animate = this.animate.bind(this);

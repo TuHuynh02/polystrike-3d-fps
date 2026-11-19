@@ -63,6 +63,18 @@ const filesToCheck = [
   'public/js/assets.js',
   'public/js/surfaceMaterials.js',
   'public/js/arenaProps.js',
+  'public/js/arena/arenaGeometry.js',
+  'public/js/arena/proceduralTextures.js',
+  'public/js/arena/skyAtmosphere.js',
+  'public/js/arena/saltlinePropsAndBackdrops.js',
+  'public/js/rig/operatorMeshBuilder.js',
+  'public/js/rig/rigMaterialsAndBatching.js',
+  'public/js/rig/rigAnimator.js',
+  'public/js/weapons/weaponMaterials.js',
+  'public/js/weapons/viewmodelRig.js',
+  'public/js/weapons/assaultRifleModels.js',
+  'public/js/weapons/heavyTacticalModels.js',
+  'public/js/weapons/sidearmMeleeModels.js',
   'public/js/weaponAssetOverrides.js'
 ];
 

@@ -1,30 +1,61 @@
 :root {
-  --bg-dark: #0b0e12;
-  --bg-panel-solid: #12171e;
-  --bg-panel: rgba(18, 23, 30, 0.92);
-  --bg-panel-elevated: rgba(22, 28, 37, 0.95);
-  --card-bg: #12171e;
-  --card-border: rgba(148, 163, 184, 0.22);
-  --border-strong: rgba(229, 160, 36, 0.55);
-  --accent: #e5a024;
-  --accent-hover: #f5b335;
-  --accent-dim: rgba(229, 160, 36, 0.16);
+  color-scheme: dark;
+  /* Saltline Berth-4 Port-Authority Editorial Tokens */
+  --ink: #0b0d0f;
+  --ink-2: #12161a;
+  --bone: #e8e4da;
+  --bone-dim: rgba(232, 228, 218, 0.66);
+  --bone-faint: rgba(232, 228, 218, 0.24);
+  --signal: #ffb347;
+  --signal-hot: #ffc977;
+  --rust: #d2622a;
+  --steel: #8d9aa3;
+  --alarm: #ff5a40;
+  --line: rgba(232, 228, 218, 0.20);
+  --line-strong: rgba(232, 228, 218, 0.38);
+  --plate: rgba(8, 12, 18, 0.56);
+  --plate-solid: rgba(9, 13, 18, 0.84);
+  --hud-glass: rgba(8, 12, 18, 0.56);
+  --hud-glass-border: rgba(255, 255, 255, 0.13);
+  --hud-text-shadow: 0 1px 3px rgba(0, 0, 0, 0.86);
+  --hud-crosshair: #00ff55;
+  --lobby-glass: rgba(9, 13, 18, 0.78);
+  --lobby-glass-border: rgba(255, 255, 255, 0.13);
+
+  /* Shared HUD & App Semantic Aliases */
+  --bg-dark: #0b0d0f;
+  --bg-panel-solid: #12161a;
+  --bg-panel: rgba(11, 13, 15, 0.92);
+  --bg-panel-elevated: rgba(16, 20, 25, 0.95);
+  --card-bg: #12161a;
+  --card-border: rgba(232, 228, 218, 0.20);
+  --border-strong: rgba(255, 179, 71, 0.58);
+  --accent: #ffb347;
+  --accent-hover: #ffc977;
+  --accent-dim: rgba(255, 179, 71, 0.14);
   --primary: #38bdf8;
   --primary-hover: #0ea5e9;
   --olive: #4b5320;
   --olive-bright: #657c3a;
   --success: #22c55e;
-  --danger: #ef4444;
-  --text-main: #f1f5f9;
-  --text-muted: #94a3b8;
-  --font-display: 'Chakra Petch', 'Rajdhani', sans-serif;
+  --danger: #ff5a40;
+  --text-main: #e8e4da;
+  --text-muted: #8d9aa3;
+
+  --font-display: 'Big Shoulders Display', 'Barlow Condensed', 'Impact', sans-serif;
+  --font-label: 'Barlow Condensed', 'Inter', system-ui, sans-serif;
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-mono: 'JetBrains Mono', 'Consolas', monospace;
-  --chamfer-md: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
-  --chamfer-sm: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px));
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Consolas, monospace;
+
+  --chamfer-md: none;
+  --chamfer-sm: none;
+  --sl-bone: #e8e4da;
+  --sl-signal: #ffb347;
+  --sl-alarm: #ff5a40;
+  --sl-plate: rgba(11, 13, 15, 0.94);
 }
 
-* {
+*, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
@@ -35,10 +66,11 @@ html, body {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: var(--bg-dark);
-  color: var(--text-main);
+  background: var(--ink);
+  color: var(--bone);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
 }
 
 #canvas-container {
@@ -53,31 +85,199 @@ html, body {
   display: none !important;
 }
 
+/* ======================== SALTLINE BUTTONS & INPUT PRIMITIVES ======================== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 2px 16px 0;
+  background: rgba(11, 13, 15, 0.72);
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  color: var(--bone);
+  font-family: var(--font-label);
+  font-size: 0.88rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  cursor: pointer;
+  appearance: none;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--bone);
+  background: rgba(232, 228, 218, 0.12);
+}
+
+.btn:active:not(:disabled) {
+  background: rgba(232, 228, 218, 0.20);
+}
+
+.btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.btn-primary,
+.btn-accent {
+  background: var(--signal);
+  border-color: var(--signal);
+  color: var(--ink);
+  font-weight: 700;
+  letter-spacing: 0.22em;
+}
+
+.btn-primary:hover:not(:disabled),
+.btn-accent:hover:not(:disabled) {
+  background: var(--signal-hot);
+  border-color: var(--signal-hot);
+  color: var(--ink);
+}
+
+.btn-secondary,
+.btn-outline {
+  background: rgba(11, 13, 15, 0.78);
+  border-color: rgba(232, 228, 218, 0.34);
+  color: var(--bone);
+}
+
+.btn-secondary:hover:not(:disabled),
+.btn-outline:hover:not(:disabled) {
+  border-color: var(--signal);
+  color: var(--signal);
+  background: rgba(255, 179, 71, 0.08);
+}
+
+.btn-danger {
+  background: rgba(36, 10, 8, 0.84);
+  border-color: rgba(255, 90, 64, 0.62);
+  color: #ffb4a8;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--alarm);
+  border-color: var(--alarm);
+  color: var(--ink);
+}
+
+.btn-large {
+  width: 100%;
+  min-height: 42px;
+  font-size: 0.94rem;
+}
+
+.btn-compact {
+  min-height: 30px;
+  padding: 1px 12px 0;
+  font-size: 0.78rem;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+
+.text-input,
+.select-input {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  background: rgba(11, 13, 15, 0.88);
+  border: 1px solid rgba(232, 228, 218, 0.28);
+  border-radius: 0;
+  color: var(--bone);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  outline: none;
+  user-select: text;
+  transition: border-color 0.12s ease;
+}
+
+.text-input:focus,
+.select-input:focus {
+  border-color: var(--signal);
+}
+
+.select-input {
+  cursor: pointer;
+}
+
+.select-input option {
+  background: #12161a;
+  color: var(--bone);
+}
+
+kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 2px 5px 1px;
+  background: rgba(11, 13, 15, 0.72);
+  border: 1px solid rgba(232, 228, 218, 0.42);
+  border-radius: 0;
+  color: var(--bone);
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  font-weight: 600;
+  line-height: 1.1;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.sl-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 7px 2px;
+  background: var(--signal);
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.sl-tag-outline {
+  background: transparent;
+  border: 1px solid var(--signal);
+  color: var(--signal);
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+}
+
 /* ======================== TOAST NOTIFICATION ======================== */
 .toast {
   position: fixed;
-  top: 20px;
+  top: 16px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 9999;
-  background: rgba(13, 19, 26, 0.96);
-  color: var(--text-main);
-  padding: 10px 22px;
-  border-radius: 2px;
-  border: 1px solid var(--accent);
-  border-left: 4px solid var(--accent);
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 0.92rem;
-  letter-spacing: 0.6px;
+  background: rgba(9, 13, 18, 0.84);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: var(--bone);
+  padding: 8px 18px;
+  border-radius: 0;
+  border: 1px solid var(--lobby-glass-border);
+  border-left: 3px solid var(--signal);
+  font-family: var(--font-label);
+  font-weight: 600;
+  font-size: 0.86rem;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.78);
-  clip-path: var(--chamfer-sm);
-  animation: fadeSlideDown 0.18s ease-out;
+  text-shadow: var(--hud-text-shadow);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.56);
+  animation: fadeSlideDown 0.16s ease-out;
 }
 
 @keyframes fadeSlideDown {
-  from { opacity: 0; transform: translate(-50%, -10px); }
+  from { opacity: 0; transform: translate(-50%, -8px); }
   to { opacity: 1; transform: translate(-50%, 0); }
 }
-

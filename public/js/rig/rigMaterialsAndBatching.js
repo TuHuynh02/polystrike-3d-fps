@@ -19,7 +19,7 @@ export function getCachedGeo(key, factoryFn) {
 const _identMat4 = new THREE.Matrix4();
 
 export const ENEMY_OUTLINE_MAT = new THREE.MeshBasicMaterial({
-  color: 0xff2a3a,
+  color: 0xff2d3d,
   side: THREE.BackSide,
   depthTest: true,
   depthWrite: true,
@@ -44,7 +44,7 @@ export const TEAMMATE_OUTLINE_MAT = new THREE.MeshBasicMaterial({
 });
 TEAMMATE_OUTLINE_MAT.userData = { shared: true, matSlotKey: 'teammateOutline' };
 
-function createInflatedOutlineGeo(entries, inflate = 0.011) {
+function createInflatedOutlineGeo(entries, inflate = 0.0085) {
   const merged = mergeTransformedGeometries(entries);
   const pos = merged.attributes?.position;
   if (!pos) return merged;
@@ -100,20 +100,232 @@ function createInflatedOutlineGeo(entries, inflate = 0.011) {
 }
 
 
+function getRigSharedTacticalMaps() {
+  const key = 'rig_shared_tactical_v2';
+  let pair = PROCEDURAL_TEX_CACHE.get(key);
+  if (!pair && typeof document !== 'undefined') {
+    const size = 512;
+    const diffCanvas = document.createElement('canvas');
+    diffCanvas.width = size;
+    diffCanvas.height = size;
+    const ctx = diffCanvas.getContext('2d');
+
+    const bumpCanvas = document.createElement('canvas');
+    bumpCanvas.width = size;
+    bumpCanvas.height = size;
+    const bCtx = bumpCanvas.getContext('2d');
+
+    // High-value neutral tactical weave base (#e9e9e9, range #d4d4d4 .. #ffffff) so vertexColors multiply cleanly
+    ctx.fillStyle = '#e9e9e9';
+    ctx.fillRect(0, 0, size, size);
+    bCtx.fillStyle = '#808080';
+    bCtx.fillRect(0, 0, size, size);
+
+    // Seamless wrapped multi-scale tactical cloth mottle & charcoal weave breakup
+    const blotches = [
+      { count: 32, rxMin: 34, rxVar: 26, ryMin: 18, ryVar: 14, color: '#dcdcdc' },
+      { count: 28, rxMin: 26, rxVar: 20, ryMin: 14, ryVar: 10, color: '#e2e2e2' },
+      { count: 26, rxMin: 22, rxVar: 18, ryMin: 12, ryVar: 10, color: '#f6f6f6' }
+    ];
+    for (let b = 0; b < blotches.length; b++) {
+      const cfg = blotches[b];
+      ctx.fillStyle = cfg.color;
+      for (let i = 0; i < cfg.count; i++) {
+        const cx = ((i * 137 + b * 97 + 43) % size);
+        const cy = ((i * 193 + b * 61 + 29) % size);
+        const rx = cfg.rxMin + ((i * 17 + b * 7) % cfg.rxVar);
+        const ry = cfg.ryMin + ((i * 23 + b * 11) % cfg.ryVar);
+        const ang = ((i * 31 + b * 13) % 10) * 0.31;
+        for (const ox of [-size, 0, size]) {
+          for (const oy of [-size, 0, size]) {
+            const x = cx + ox;
+            const y = cy + oy;
+            if (x + rx < 0 || x - rx > size || y + ry < 0 || y - ry > size) continue;
+            ctx.beginPath();
+            ctx.ellipse(x, y, rx, ry, ang, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
+    }
+
+    // Fine 4px micro-twill weave threads
+    ctx.fillStyle = '#e1e1e1';
+    bCtx.fillStyle = '#737373';
+    for (let p = 0; p < size; p += 4) {
+      ctx.fillRect(0, p, size, 1);
+      ctx.fillRect(p, 0, 1, size);
+      bCtx.fillRect(0, p, size, 1);
+      bCtx.fillRect(p, 0, 1, size);
+    }
+    ctx.fillStyle = '#f5f5f5';
+    bCtx.fillStyle = '#8e8e8e';
+    for (let p = 2; p < size; p += 4) {
+      ctx.fillRect(0, p, size, 1);
+      bCtx.fillRect(0, p, size, 1);
+    }
+
+    // Crisp 32px ripstop crosshatch reinforcement threads
+    for (let p = 0; p < size; p += 32) {
+      ctx.fillStyle = '#d4d4d4';
+      ctx.fillRect(0, p, size, 2);
+      ctx.fillRect(p, 0, 2, size);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, (p + 2) % size, size, 1);
+      ctx.fillRect((p + 2) % size, 0, 1, size);
+
+      bCtx.fillStyle = '#5a5a5a';
+      bCtx.fillRect(0, p, size, 2);
+      bCtx.fillRect(p, 0, 2, size);
+      bCtx.fillStyle = '#aeaeae';
+      bCtx.fillRect(0, (p + 2) % size, size, 2);
+      bCtx.fillRect((p + 2) % size, 0, 2, size);
+    }
+
+    // Subtle double-needle tactical seam stitch lines at 256px intervals
+    for (const seam of [64, 320]) {
+      for (let d = 0; d < size; d += 12) {
+        ctx.fillStyle = '#d5d5d5';
+        ctx.fillRect(d, seam, 6, 2);
+        ctx.fillRect(seam, d, 2, 6);
+        ctx.fillStyle = '#fcfcfc';
+        ctx.fillRect(d + 1, seam + 3, 5, 1);
+        ctx.fillRect(seam + 3, d + 1, 1, 5);
+
+        bCtx.fillStyle = '#4c4c4c';
+        bCtx.fillRect(d, seam, 6, 2);
+        bCtx.fillRect(seam, d, 2, 6);
+        bCtx.fillStyle = '#b4b4b4';
+        bCtx.fillRect(d, seam + 2, 6, 2);
+        bCtx.fillRect(seam + 2, d, 2, 6);
+      }
+    }
+
+    const map = new THREE.CanvasTexture(diffCanvas);
+    map.wrapS = THREE.RepeatWrapping;
+    map.wrapT = THREE.RepeatWrapping;
+    map.repeat.set(6, 6);
+    if (THREE.SRGBColorSpace) map.colorSpace = THREE.SRGBColorSpace;
+    map.userData = { shared: true };
+
+    const bumpMap = new THREE.CanvasTexture(bumpCanvas);
+    bumpMap.wrapS = THREE.RepeatWrapping;
+    bumpMap.wrapT = THREE.RepeatWrapping;
+    bumpMap.repeat.set(6, 6);
+    if (THREE.NoColorSpace) bumpMap.colorSpace = THREE.NoColorSpace;
+    bumpMap.userData = { shared: true };
+
+    pair = { map, bumpMap };
+    PROCEDURAL_TEX_CACHE.set(key, pair);
+  }
+  return pair || { map: null, bumpMap: null };
+}
+
+function getRigSharedBumpMap(kind = 'fabric') {
+  if (kind === 'fabric') {
+    return getRigSharedTacticalMaps().bumpMap;
+  }
+  const key = `rig_shared_bump_${kind}`;
+  let tex = PROCEDURAL_TEX_CACHE.get(key);
+  if (!tex && typeof document !== 'undefined') {
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#808080';
+    ctx.fillRect(0, 0, 128, 128);
+    for (let y = 0; y < 128; y += 2) {
+      for (let x = 0; x < 128; x += 2) {
+        ctx.fillStyle = (x * 17 + y * 31) % 7 > 3 ? '#9a9a9a' : '#686868';
+        ctx.fillRect(x, y, 2, 2);
+      }
+    }
+    tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(6, 6);
+    tex.userData = { shared: true };
+    PROCEDURAL_TEX_CACHE.set(key, tex);
+  }
+  return tex || null;
+}
+
 export function getStaticRigVColorMaterial() {
   return getCachedMat('rig_static_vcolor', () => {
-    const bdu = RIG_MAT_CACHE.get('bdu_0x262e36') || RIG_MAT_CACHE.get('rig_bdu');
+    const maps = getRigSharedTacticalMaps();
     const mat = new THREE.MeshStandardMaterial({
       color: 0xffffff,
       vertexColors: true,
-      roughness: 0.58,
-      metalness: 0.16,
-      bumpMap: bdu?.bumpMap || null,
-      bumpScale: 0.015
+      map: maps.map,
+      roughness: 0.78,
+      metalness: 0.88,
+      envMapIntensity: 1.16,
+      bumpMap: maps.bumpMap,
+      bumpScale: 0.016
     });
+    mat.customProgramCacheKey = () => 'saltline_rig_static_vcolor_pbr_v2';
+    mat.onBeforeCompile = (shader) => {
+      shader.vertexShader = shader.vertexShader
+        .replace(
+          '#include <common>',
+          `#include <common>
+attribute vec2 aRigSurface;
+varying vec2 vRigSurface;`
+        )
+        .replace(
+          '#include <begin_vertex>',
+          `#include <begin_vertex>
+vRigSurface = aRigSurface;`
+        );
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          '#include <common>',
+          `#include <common>
+varying vec2 vRigSurface;`
+        )
+        .replace(
+          '#include <roughnessmap_fragment>',
+          `#include <roughnessmap_fragment>
+float slSurfRough = vRigSurface.x > 0.001 ? vRigSurface.x : roughnessFactor;
+roughnessFactor = clamp(slSurfRough, 0.06, 1.0);`
+        )
+        .replace(
+          '#include <metalnessmap_fragment>',
+          `#include <metalnessmap_fragment>
+float slSurfMetal = vRigSurface.x > 0.001 ? vRigSurface.y : 0.14;
+metalnessFactor = min(slSurfMetal, metalness);`
+        )
+        .replace(
+          '#include <lights_fragment_end>',
+          `#include <lights_fragment_end>
+float slFabricMask = smoothstep(0.60, 0.76, slSurfRough) * (1.0 - smoothstep(0.06, 0.24, slSurfMetal));
+float slRimTerm = pow(1.0 - saturate(dot(geometryNormal, geometryViewDir)), 2.8) * slFabricMask;
+reflectedLight.indirectDiffuse += (material.diffuseColor * 0.40 + vec3(0.10, 0.13, 0.17)) * slRimTerm * (0.35 + min(1.2, length(reflectedLight.directDiffuse + reflectedLight.indirectDiffuse)));`
+        );
+    };
     mat.userData = { shared: true, matSlotKey: 'rig_static_vcolor' };
     return mat;
   });
+}
+
+function resolveRigPartSurfaceParams(rawMat) {
+  const cls = rawMat?.userData?.rigBatchClass;
+  if (cls === 'metal') {
+    return [
+      typeof rawMat.roughness === 'number' ? rawMat.roughness : 0.22,
+      typeof rawMat.metalness === 'number' ? rawMat.metalness : 0.86
+    ];
+  }
+  if (cls === 'armor') {
+    return [
+      typeof rawMat.roughness === 'number' ? rawMat.roughness : 0.42,
+      typeof rawMat.metalness === 'number' ? rawMat.metalness : 0.24
+    ];
+  }
+  return [
+    typeof rawMat?.roughness === 'number' ? rawMat.roughness : 0.84,
+    typeof rawMat?.metalness === 'number' ? rawMat.metalness : 0.05
+  ];
 }
 
 export function batchBoneScope(scopeRoot, boneScopeId, stopNodes, primaryMesh = null, withOutline = false, outlineMat = ENEMY_OUTLINE_MAT) {
@@ -121,9 +333,7 @@ export function batchBoneScope(scopeRoot, boneScopeId, stopNodes, primaryMesh = 
   const meshesToRemove = [];
   const groupsToCheck = [];
   const baseScopeId = boneScopeId.replace(/_(v[1234]_[a-z]+)$/, '');
-  const sharesBaseOutline =
-    baseScopeId !== 'chest' &&
-    (baseScopeId !== 'head' || boneScopeId.endsWith('_v4_recon'));
+  const sharesBaseOutline = baseScopeId !== 'chest' && baseScopeId !== 'head';
   const outlineKey = `outline_rig_v2_${sharesBaseOutline ? baseScopeId : boneScopeId}`;
   const needOutlineGeo = withOutline || !RIG_GEO_CACHE.has(outlineKey);
   const allOutlineEntries = needOutlineGeo ? [] : null;
@@ -134,13 +344,21 @@ export function batchBoneScope(scopeRoot, boneScopeId, stopNodes, primaryMesh = 
     return slot === 'main' || slot === 'visor';
   };
 
+  const resolveBatchMat = (rawMat) => (isDynamicSlot(rawMat) ? rawMat : staticBatchMat);
+
   const isOutlineEligible = (mesh) => {
     if (!mesh || !mesh.geometry || mesh.userData?.noOutline) return false;
     const g = mesh.geometry;
     if (g.type === 'CircleGeometry' || g.type === 'RingGeometry' || g.type === 'PlaneGeometry') return false;
     const params = g.parameters;
-    if (params && typeof params.thetaLength === 'number' && params.thetaLength < Math.PI * 2 - 0.01) {
-      return false;
+    if (params) {
+      if (params.openEnded === true) return false;
+      if (g.type === 'SphereGeometry') {
+        if (typeof params.phiLength === 'number' && params.phiLength < Math.PI * 2 - 0.01) return false;
+        if (typeof params.thetaLength === 'number' && params.thetaLength < Math.PI - 0.01) return false;
+      } else if (typeof params.thetaLength === 'number' && params.thetaLength < Math.PI * 2 - 0.01) {
+        return false;
+      }
     }
     return true;
   };
@@ -149,7 +367,7 @@ export function batchBoneScope(scopeRoot, boneScopeId, stopNodes, primaryMesh = 
     const rawMat = mesh.material;
     if (!rawMat || !mesh.geometry) return;
     const dynamic = isDynamicSlot(rawMat);
-    const targetMat = dynamic ? rawMat : staticBatchMat;
+    const targetMat = resolveBatchMat(rawMat);
     let bucket = byMat.get(targetMat);
     if (!bucket) {
       bucket = {
@@ -164,7 +382,9 @@ export function batchBoneScope(scopeRoot, boneScopeId, stopNodes, primaryMesh = 
     bucket.entries.push({
       geometry: mesh.geometry,
       matrix: clonedMat,
-      color: dynamic ? null : (rawMat.color || null)
+      color: dynamic ? null : (rawMat.color || null),
+      bakeAO: !dynamic,
+      surfaceParams: dynamic ? null : resolveRigPartSurfaceParams(rawMat)
     });
     if (allOutlineEntries && isOutlineEligible(mesh)) {
       allOutlineEntries.push({ geometry: mesh.geometry, matrix: clonedMat });
@@ -209,12 +429,10 @@ export function batchBoneScope(scopeRoot, boneScopeId, stopNodes, primaryMesh = 
     }
   }
 
-  const primaryTargetMat = primaryMesh?.material
-    ? (isDynamicSlot(primaryMesh.material) ? primaryMesh.material : staticBatchMat)
-    : null;
+  const primaryTargetMat = primaryMesh?.material ? resolveBatchMat(primaryMesh.material) : null;
 
   for (const [mat, bucket] of byMat.entries()) {
-    const cacheKey = `merged_rig_${boneScopeId}_${bucket.matSlotKey}`;
+    const cacheKey = `merged_rig_v3_${boneScopeId}_${bucket.matSlotKey}`;
     const mergedGeo = getCachedGeo(cacheKey, () => mergeTransformedGeometries(bucket.entries));
     if (primaryMesh && primaryTargetMat === mat) {
       primaryMesh.geometry = mergedGeo;
@@ -236,12 +454,12 @@ export function batchBoneScope(scopeRoot, boneScopeId, stopNodes, primaryMesh = 
 
   if (needOutlineGeo && allOutlineEntries && allOutlineEntries.length > 0) {
     const outlineGeo = getCachedGeo(outlineKey, () =>
-      createInflatedOutlineGeo(allOutlineEntries, 0.011)
+      createInflatedOutlineGeo(allOutlineEntries, 0.0085)
     );
     if (withOutline) {
       const outlineMesh = new THREE.Mesh(outlineGeo, outlineMat);
       outlineMesh.name = `outline_${boneScopeId}`;
-      outlineMesh.userData = { isOutlineHull: true, boneScopeId };
+      outlineMesh.userData = { isOutlineHull: true, isOutline: true, boneScopeId };
       outlineMesh.renderOrder = 1;
       outlineMesh.castShadow = false;
       outlineMesh.receiveShadow = false;

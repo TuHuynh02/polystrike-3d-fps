@@ -19,6 +19,7 @@ export const QUALITY_CHOICES = ['auto', ...TIER_ORDER];
  *  - maxShotEffects: size of the pre-built tracer + spark pool (shots beyond it recycle the oldest tracer: no per-shot allocation)
  *  - dynamicLights: number of transient point lights that are PERMANENTLY in the scene (0 = none, 1 = local muzzle light,
  *    2 = + one shared explosion flash). The light count never changes during a match, so the shaders never recompile on a shot
+ *  - postFx (0/1) / bloomStrength / aoEnabled (0/1): post-processing pipeline enable flag, subtle bloom intensity, and SSAO toggle
  *  - cylinderSegments / capsuleSegments: tessellation of the instanced decor (triangle budget)
  *  - glbProps (0/1): glTF props (crate toppers) instead of procedural boxes
  *  - mergeWorldMeshes (boolean, a SAVING flag so it is not part of the monotonic cost knobs): Low draws the obstacles as one
@@ -33,6 +34,8 @@ export const QUALITY = {
     antialias: 0,
     shadowMapSize: 0,
     shadowType: 'basic',
+    dynamicShadowHz: 0,
+    wetFloorStrength: 0,
     anisotropy: 1,
     textureMaxSize: 512,
     pbrMapLevel: 1,
@@ -41,6 +44,9 @@ export const QUALITY = {
     maxBulletDecals: 12,
     maxShotEffects: 10,
     dynamicLights: 0,
+    postFx: 0,
+    bloomStrength: 0,
+    aoEnabled: 0,
     particleScale: 0.45,
     ambientParticles: 0,
     cylinderSegments: 8,
@@ -56,6 +62,8 @@ export const QUALITY = {
     antialias: 1,
     shadowMapSize: 1024,
     shadowType: 'pcf',
+    dynamicShadowHz: 0,
+    wetFloorStrength: 0.38,
     anisotropy: 4,
     textureMaxSize: 1024,
     pbrMapLevel: 2,
@@ -64,6 +72,9 @@ export const QUALITY = {
     maxBulletDecals: 24,
     maxShotEffects: 16,
     dynamicLights: 1,
+    postFx: 1,
+    bloomStrength: 0.18,
+    aoEnabled: 0,
     particleScale: 0.75,
     ambientParticles: 120,
     cylinderSegments: 12,
@@ -79,6 +90,8 @@ export const QUALITY = {
     antialias: 1,
     shadowMapSize: 2048,
     shadowType: 'pcfsoft',
+    dynamicShadowHz: 30,
+    wetFloorStrength: 0.65,
     anisotropy: 8,
     textureMaxSize: 2048,
     pbrMapLevel: 3,
@@ -87,6 +100,9 @@ export const QUALITY = {
     maxBulletDecals: 36,
     maxShotEffects: 24,
     dynamicLights: 2,
+    postFx: 1,
+    bloomStrength: 0.28,
+    aoEnabled: 1,
     particleScale: 1,
     ambientParticles: 220,
     cylinderSegments: 14,
@@ -237,9 +253,9 @@ export class PerfOverlay {
     el.id = 'perf-overlay';
     if (el.style) {
       el.style.cssText =
-        'position:fixed;right:8px;bottom:8px;margin:0;padding:6px 9px;z-index:99999;pointer-events:none;' +
-        'font:11px/1.35 ui-monospace,Consolas,monospace;color:#a7f3d0;background:rgba(2,6,23,0.78);' +
-        'border:1px solid rgba(167,243,208,0.35);border-radius:4px;white-space:pre';
+        'position:fixed;right:16px;top:56px;margin:0;padding:5px 8px;z-index:99999;pointer-events:none;' +
+        'font:10px/1.3 ui-monospace,Consolas,monospace;color:#a7f3d0;background:rgba(2,6,23,0.8);' +
+        'border:1px solid rgba(167,243,208,0.35);border-radius:4px;opacity:0.9;white-space:pre';
     }
     parent.appendChild?.(el);
     this.el = el;
@@ -285,6 +301,10 @@ export function applyMetalnessCap(root, cap = null) {
   };
   if (root instanceof Map) {
     for (const m of root.values()) capMat(m);
+    return;
+  }
+  if (root instanceof Set || Array.isArray(root)) {
+    for (const m of root) capMat(m);
     return;
   }
   root?.traverse?.((o) => {

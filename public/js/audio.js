@@ -21,6 +21,13 @@ export class SoundEffects {
     this._pendingCleanups = [];
     this._cleanupTickTimer = null;
     this._cleanupTickDueAt = 0;
+    this._masterBusCtx = null;
+    this._masterInput = null;
+    this._reverbSend = null;
+    this._pcmCache = new Map();
+    this._audioBufferCache = new Map();
+    this._audioBufferCacheCtx = null;
+    this._prewarmPromise = null;
     SoundEffects._instance = this;
   }
 }

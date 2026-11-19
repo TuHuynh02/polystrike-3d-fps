@@ -1,4 +1,5 @@
 import { poseOperatorForWeapon } from './operatorMeshBuilder.js';
+import { updateSoldierGlbAnimation } from './soldierGlbRig.js';
 
 export function animateHumanoidRig(rp, dt, now, isMoving, moveSpeed = 0) {
   if (!rp || !rp.pelvisGroup) return;
@@ -42,7 +43,14 @@ export function animateHumanoidRig(rp, dt, now, isMoving, moveSpeed = 0) {
   const pelvisYaw = isMoving ? -strideSin * 0.06 * gaitScale : 0;
   if (rp.pelvisGroup) {
     rp.pelvisGroup.position.y = hipY;
+    rp.pelvisGroup.rotation.x = 0;
     rp.pelvisGroup.rotation.y = pelvisYaw;
+    rp.pelvisGroup.rotation.z = 0;
+  }
+  if (rp.contactShadow) {
+    const csScaleX = 1.0 + cb * 0.08 + pb * 0.25 + activeSlide * 0.14;
+    const csScaleY = 1.0 + cb * 0.10 + pb * 0.56 + activeSlide * 0.26;
+    rp.contactShadow.scale.set(csScaleX, csScaleY, 1);
   }
   if (rp.pelvisVisualGroup) {
     rp.pelvisVisualGroup.position.x = lb * 0.06 - activeSlide * 0.035;
@@ -117,20 +125,44 @@ export function animateHumanoidRig(rp, dt, now, isMoving, moveSpeed = 0) {
     rp.headGroup.rotation.x += (targetHeadPitch - rp.headGroup.rotation.x) * 0.28;
     const targetHeadYaw = isMoving ? -strideSin * 0.05 * gaitScale : 0;
     rp.headGroup.rotation.y += (targetHeadYaw - rp.headGroup.rotation.y) * 0.25;
+    rp.headGroup.rotation.z = 0;
   }
   if (rp.armPivot) {
     // Include +cb * 0.18 crouch pitch & CoD Tac-Stance / Neon 40-degree inward canted weapon slide posture
     const targetArmPitch = cb * 0.18 + pb * 0.95 - activeSlide * 0.08 + aimPitch * 0.75 + breath + (isMoving ? Math.cos(rp.walkPhase * 2) * 0.035 * gaitScale : 0);
     rp.armPivot.rotation.x += (targetArmPitch - rp.armPivot.rotation.x) * 0.32;
     rp.armPivot.position.x = -lb * 0.015;
-    rp.armPivot.position.y = 0.48 - activeSlide * 0.04;
+    rp.armPivot.position.y = 0.456 - activeSlide * 0.04;
     rp.armPivot.rotation.y = activeSlide * 0.12;
     rp.armPivot.rotation.z = -lb * 0.12 + activeSlide * 0.42;
   }
 
   // Hide third-person muzzle flash after 55ms
-  if (rp.gunMesh?.userData?.flashMesh && now - rp.lastShotFlashAt > 55) {
-    rp.gunMesh.userData.flashMesh.visible = false;
+  if (now - rp.lastShotFlashAt > 55) {
+    if (rp.gunMesh?.userData?.flashMesh) {
+      rp.gunMesh.userData.flashMesh.visible = false;
+    }
+    if (rp._soldierCs2FlashMesh) {
+      rp._soldierCs2FlashMesh.visible = false;
+    }
+  }
+
+  if (rp._soldierAttached) {
+    if (now > 0) rp._soldierLastPosterNow = now;
+    const isSprinting = Boolean(rp.sprinting || rp.isSprinting || moveSpeed > 0.20);
+    const speedNorm = !isMoving
+      ? 0
+      : isSprinting
+        ? Math.min(1, Math.max(0.75, moveSpeed / 0.24))
+        : Math.min(0.65, Math.max(0.35, moveSpeed / 0.28));
+    updateSoldierGlbAnimation(
+      rp,
+      dt,
+      Boolean(isMoving),
+      speedNorm,
+      Boolean(rp.crouching || rp.crouch || rp.sliding),
+      !rp.alive
+    );
   }
 }
 

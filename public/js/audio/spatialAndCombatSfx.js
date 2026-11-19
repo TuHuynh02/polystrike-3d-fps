@@ -157,7 +157,7 @@ export class SpatialAndCombatSfxMethods {
     if (!ctx) return null;
     const now = ctx.currentTime;
 
-    let out = ctx.destination;
+    let out = this.getMasterInput?.(ctx) || ctx.destination;
     let chain = null;
     if (listener && sourcePos && typeof listener === 'object' && typeof sourcePos === 'object') {
       const spatial = this.computeSpatialParams(listener, sourcePos, 40);
@@ -210,6 +210,7 @@ export class SpatialAndCombatSfxMethods {
     const ctx = this.ensureContext();
     if (!ctx) return null;
     const now = ctx.currentTime;
+    const out = this.getMasterInput?.(ctx) || ctx.destination;
 
     // Metallic safety pin pull ring
     const pinOsc = ctx.createOscillator();
@@ -220,7 +221,7 @@ export class SpatialAndCombatSfxMethods {
     pinGain.gain.setValueAtTime(0.16, now);
     pinGain.gain.exponentialRampToValueAtTime(0.001, now + 0.055);
     pinOsc.connect(pinGain);
-    pinGain.connect(ctx.destination);
+    pinGain.connect(out);
     this._bindSourceCleanup(pinOsc, [pinGain], null, 0.065);
     pinOsc.start(now);
     pinOsc.stop(now + 0.06);
@@ -238,7 +239,7 @@ export class SpatialAndCombatSfxMethods {
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.17);
       noise.connect(filter);
       filter.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(out);
       this._bindSourceCleanup(noise, [filter, gain], null, 0.19);
       noise.start(now + 0.03);
       noise.stop(now + 0.18);
@@ -250,7 +251,7 @@ export class SpatialAndCombatSfxMethods {
     if (!ctx) return null;
     const now = ctx.currentTime;
 
-    let out = ctx.destination;
+    let out = this.getMasterInput?.(ctx) || ctx.destination;
     let volScale = 1.0;
     let chain = null;
 
@@ -302,7 +303,7 @@ export class SpatialAndCombatSfxMethods {
     if (!ctx) return null;
     const now = ctx.currentTime;
 
-    let out = ctx.destination;
+    let out = this.getMasterInput?.(ctx) || ctx.destination;
     let volScale = 1.0;
     let isSpatial = false;
     let spatialInfo = { pan: 0, gain: 0.85, dist: 0 };
@@ -414,6 +415,7 @@ export class SpatialAndCombatSfxMethods {
     const ctx = this.ensureContext();
     if (!ctx) return null;
     const now = ctx.currentTime;
+    const out = this.getMasterInput?.(ctx) || ctx.destination;
 
     const cleanStreak = Math.max(1, Math.min(8, Number(streakCount) || 2));
 
@@ -426,7 +428,7 @@ export class SpatialAndCombatSfxMethods {
     subGain.gain.setValueAtTime(0.38, now);
     subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
     sub.connect(subGain);
-    subGain.connect(ctx.destination);
+    subGain.connect(out);
     this._bindSourceCleanup(sub, [subGain], null, 0.3);
     sub.start(now);
     sub.stop(now + 0.3);
@@ -452,7 +454,7 @@ export class SpatialAndCombatSfxMethods {
       gain.gain.setValueAtTime(isFinalNote ? 0.28 : 0.22, startAt);
       gain.gain.exponentialRampToValueAtTime(0.001, startAt + dur);
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(out);
       this._bindSourceCleanup(osc, [gain], null, i * 0.052 + dur + 0.02);
       osc.start(startAt);
       osc.stop(startAt + dur + 0.02);
@@ -467,6 +469,7 @@ export class SpatialAndCombatSfxMethods {
     const ctx = this.ensureContext();
     if (!ctx) return null;
     const now = ctx.currentTime;
+    const out = this.getMasterInput?.(ctx) || ctx.destination;
     const clampedRatio = Math.max(0, Math.min(1, Number(ratio) || 0));
     const urgency = 1 - clampedRatio; // 0 at 25% mag -> 1 at last round
     const baseFreq = 1650 + urgency * 950;
@@ -479,7 +482,7 @@ export class SpatialAndCombatSfxMethods {
     gain.gain.setValueAtTime(0.14 + urgency * 0.14, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.042);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(out);
     this._bindSourceCleanup(osc, [gain], null, 0.05);
     osc.start(now);
     osc.stop(now + 0.045);

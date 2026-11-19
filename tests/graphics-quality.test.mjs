@@ -688,12 +688,29 @@ describe('server/index.js serves the graphics assets with correct content types'
       '/vendor/three/three.module.js',
       '/vendor/three-examples/loaders/GLTFLoader.js',
       '/vendor/three-examples/utils/BufferGeometryUtils.js',
+      '/vendor/postprocessing/index.js',
+      '/vendor/n8ao/N8AO.js',
       '/js/assets.js',
       '/js/quality.js'
     ]) {
       const { res, type } = await head(url);
       assert.equal(res.status, 200, url);
       assert.match(type, /javascript/, url);
+    }
+    for (const assetUrl of [
+      '/assets/models/characters/bot_mask_cap.glb',
+      '/assets/models/characters/bot_wrap_goggles.glb',
+      '/assets/models/cs2/ak47.glb',
+      '/assets/models/cs2/awp.glb',
+      '/assets/models/cs2/knife.glb',
+      '/assets/textures/decals/grime.png',
+      '/assets/textures/decals/posters.png',
+      '/assets/hdri/kloofendal_48d_partly_cloudy_puresky_1k.hdr',
+      '/assets/textures/beige_wall_001/beige_wall_001_diff_1k.jpg',
+      '/assets/models/polyhaven/covered_car/covered_car_1k.gltf'
+    ]) {
+      const { res } = await head(assetUrl);
+      assert.equal(res.status, 200, assetUrl);
     }
   });
 
@@ -710,6 +727,9 @@ describe('server/index.js serves the graphics assets with correct content types'
     assert.ok(mapAt > 0 && entryAt > mapAt);
     assert.match(html, /"three":\s*"\.\/vendor\/three\/three\.module\.js"/);
     assert.match(html, /"three\/addons\/":\s*"\.\/vendor\/three-examples\/"/);
+    assert.match(html, /"three\/examples\/jsm\/":\s*"\.\/vendor\/three-examples\/"/);
+    assert.match(html, /"postprocessing":\s*"\.\/vendor\/postprocessing\/index\.js"/);
+    assert.match(html, /"n8ao":\s*"\.\/vendor\/n8ao\/N8AO\.js"/);
     assert.match(html, /id="lobby-quality-select"/);
     assert.match(html, /id="pause-quality-select"/);
   });
@@ -718,4 +738,991 @@ describe('server/index.js serves the graphics assets with correct content types'
     assert.equal((await head('/assets/CREDITS.md')).res.status, 200);
     assert.equal((await head('/assets/models/kenney-blaster-kit/License.txt')).res.status, 200);
   });
+
+  it('index.html includes the 4-stage Saltline boot preload bar and tactical HUD ammo elements', async () => {
+    const { body } = await head('/');
+    const html = body.toString('utf8');
+    assert.match(html, /id="asset-loading-stage"/);
+    assert.match(html, /id="asset-loading-pct"/);
+    assert.match(html, /data-boot-step="1"/);
+    assert.match(html, /data-boot-step="4"/);
+    assert.match(html, /id="hud-ammo-alert"/);
+    assert.match(html, /id="hud-ammo-block"/);
+    assert.match(html, /id="hud-ammo-pips"/);
+  });
 });
+
+// ---------------------------------------------------------------- Saltline A1-A4 optimizations
+describe('Saltline graphics, 30Hz high-tier shadows, viewmodel springs, audio synthesis & HUD dirty-check', () => {
+  it('applies AgX tone mapping and tier-scaled wet floor shader hooks while preserving desert floor restraint', async () => {
+    assert.equal(QUALITY.low.wetFloorStrength, 0);
+    assert.ok(QUALITY.medium.wetFloorStrength > 0);
+    assert.ok(QUALITY.high.wetFloorStrength > QUALITY.medium.wetFloorStrength);
+
+    const game = await createTestGame3D({ qualityChoice: 'high' });
+    assert.equal(game.renderer.toneMapping, THREE.AgXToneMapping ?? THREE.ACESFilmicToneMapping);
+    assert.equal(game.renderer.toneMappingExposure, 1.08);
+    assert.ok(game.floorMat, 'arena exposes floorMat');
+    assert.equal(game.floorMat.userData.wetFloorStrength, QUALITY.high.wetFloorStrength);
+    assert.equal(typeof game.floorMat.onBeforeCompile, 'function');
+
+    // Verify shader injection compiles expected world-space puddle uniforms & chunks in valid GLSL declaration order
+    const fakeShader = {
+      uniforms: {},
+      vertexShader: '#include <common>\nvoid main() {\n#include <worldpos_vertex>\n}',
+      fragmentShader: '#include <common>\nvoid main() {\n#include <roughnessmap_fragment>\n#include <color_fragment>\n}'
+    };
+    const highProgramKey = game.floorMat.customProgramCacheKey();
+    game.floorMat.onBeforeCompile(fakeShader);
+    assert.equal(fakeShader.uniforms.uSaltlineWetStrength.value, QUALITY.high.wetFloorStrength);
+    assert.match(fakeShader.vertexShader, /vSaltlineWorldPos/);
+    assert.match(fakeShader.fragmentShader, /slWetMask/);
+    assert.match(fakeShader.fragmentShader, /mix\(1\.0,\s*0\.86,\s*slWetMask\)/);
+    assert.ok(
+      fakeShader.fragmentShader.indexOf('float slWetMask') < fakeShader.fragmentShader.indexOf('slWetMask * 0.88'),
+      'declares slWetMask before first use regardless of chunk order'
+    );
+
+    // Changing wet strength mid-match updates uniform in-place with identical program cache key (zero shader recompile)
+    game.inMatch = true;
+    game.applyQuality('medium', { persist: false });
+    assert.equal(game.floorMat.customProgramCacheKey(), highProgramKey, 'reuses stable wet-floor shader cache key across medium/high');
+    assert.equal(fakeShader.uniforms.uSaltlineWetStrength.value, QUALITY.medium.wetFloorStrength);
+    game.inMatch = false;
+    game.applyQuality('high', { persist: false });
+
+    // Desert map scales wet floor strength down so sand stays natural
+    game.loadMap('desert_outpost');
+    assert.ok(
+      game.floorMat.userData.wetFloorStrength > 0 &&
+        game.floorMat.userData.wetFloorStrength < QUALITY.high.wetFloorStrength,
+      'desert floor scales down wet puddle strength'
+    );
+
+    // Switching down to low in-match removes wet floor shader hook on live floorMat cleanly, and in lobby rebuilds cleanly
+    const liveFloorMat = game.floorMat;
+    game.inMatch = true;
+    game.applyQuality('low', { persist: false });
+    assert.equal(liveFloorMat.userData.wetFloorStrength, 0);
+    assert.equal(liveFloorMat.userData._hasSaltlineWetHook, false);
+    game.inMatch = false;
+    game.applyQuality('low', { persist: false });
+    assert.equal(game.floorMat.userData.wetFloorStrength, 0);
+    assert.equal(game.floorMat.userData._hasSaltlineWetHook, false);
+  });
+
+  it('throttles dynamic remote-player shadows to 30Hz exclusively on high tier and keeps medium/low at 0Hz', async () => {
+    assert.equal(QUALITY.low.dynamicShadowHz, 0);
+    assert.equal(QUALITY.medium.dynamicShadowHz, 0);
+    assert.equal(QUALITY.high.dynamicShadowHz, 30);
+
+    const game = await createTestGame3D({ qualityChoice: 'high' });
+    game.localId = 'me';
+    game.inMatch = true;
+
+    // Lobby showcase operator never casts arena shadows
+    let showcaseCasters = 0;
+    game.lobbyOperator?.group?.traverse((c) => {
+      if (c.isMesh && c.castShadow) showcaseCasters++;
+    });
+    assert.equal(showcaseCasters, 0, 'lobby showcase operator does not cast arena shadows');
+
+    // Spawn a live visible remote player on high tier
+    game.syncPlayersState([
+      { id: 'enemy-1', name: 'Bot1', x: 4, y: 0, z: -6, yaw: 0, pitch: 0, hp: 100, alive: true, weapon: 'rifle' }
+    ]);
+    const rp = game.remotePlayers.get('enemy-1');
+    assert.ok(rp, 'remote player created');
+    let remoteCastersHigh = 0;
+    rp.group.traverse((c) => {
+      if (c.isMesh && c.castShadow) remoteCastersHigh++;
+    });
+    assert.ok(remoteCastersHigh > 0, 'remote player meshes cast shadows on high tier');
+
+    // Remote weapon swap preserves shadow casting on high tier
+    game.syncPlayersState([
+      { id: 'enemy-1', name: 'Bot1', x: 4, y: 0, z: -6, yaw: 0, pitch: 0, hp: 100, alive: true, weapon: 'sniper' }
+    ]);
+    let sniperGunCasters = 0;
+    rp.gunMesh.traverse((c) => {
+      if (c.isMesh && c.castShadow) sniperGunCasters++;
+    });
+    assert.ok(sniperGunCasters > 0, 'swapped remote weapon mesh preserves shadow casting on high tier');
+
+    // Frame at t=1000ms triggers shadow update
+    game.renderer.shadowMap.needsUpdate = false;
+    game._lastDynamicShadowAt = 0;
+    game.animate(1000);
+    assert.equal(game.renderer.shadowMap.needsUpdate, true, 'initial frame updates shadow map');
+
+    // Frame 16ms later (60 FPS cadence) is throttled (< 33.3ms)
+    game.renderer.shadowMap.needsUpdate = false;
+    game.animate(1016);
+    assert.equal(game.renderer.shadowMap.needsUpdate, false, '60Hz intermediate frame skips shadow pass');
+
+    // Frame at t=1035ms (>= 33.3ms, ~30Hz cadence) triggers shadow update
+    game.animate(1035);
+    assert.equal(game.renderer.shadowMap.needsUpdate, true, '30Hz frame updates shadow map');
+
+    // When remote player dies/hides, one final shadow update clears the stale shadow, then stops updating
+    game.renderer.shadowMap.needsUpdate = false;
+    game.syncPlayersState([
+      { id: 'enemy-1', name: 'Bot1', x: 4, y: 0, z: -6, yaw: 0, pitch: 0, hp: 0, alive: false, weapon: 'rifle' }
+    ]);
+    game.animate(1080);
+    assert.equal(game.renderer.shadowMap.needsUpdate, true, 'clears stale caster shadow once on hide');
+    game.renderer.shadowMap.needsUpdate = false;
+    game.animate(1130);
+    assert.equal(game.renderer.shadowMap.needsUpdate, false, 'no shadow pass when zero remote casters are visible');
+
+    // Revive enemy, switch quality to medium -> castShadow becomes false and 0Hz dynamic updates
+    game.syncPlayersState([
+      { id: 'enemy-1', name: 'Bot1', x: 4, y: 0, z: -6, yaw: 0, pitch: 0, hp: 100, alive: true, weapon: 'rifle' }
+    ]);
+    game.applyQuality('medium', { persist: false });
+    let remoteCastersMed = 0;
+    rp.group.traverse((c) => {
+      if (c.isMesh && c.castShadow) remoteCastersMed++;
+    });
+    assert.equal(remoteCastersMed, 0, 'medium tier disables remote player shadow casting');
+    game.renderer.shadowMap.needsUpdate = false;
+    game.animate(1200);
+    game.animate(1260);
+    assert.equal(game.renderer.shadowMap.needsUpdate, false, 'medium tier never schedules dynamic shadow passes');
+  });
+
+  it('drives second-order viewmodel springs stably, cools barrel heat, and bounces ejected brass shells', async () => {
+    const game = await createTestGame3D({ qualityChoice: 'high' });
+    game.inMatch = true;
+    game.alive = true;
+    game.isPointerLocked = true;
+    game.switchWeapon('rifle');
+    game.equipUntil = 0;
+
+    game.vmSpringImpulse('kZ', 1.2);
+    game.stepVmSprings(0.016);
+    assert.ok(game.vmSprings.kZ.x > 0, 'spring impulse displaces viewmodel kick');
+
+    // Remains finite and converges smoothly even across a 100ms frame hitch
+    game.stepVmSprings(0.1);
+    assert.ok(Number.isFinite(game.vmSprings.kZ.x));
+    for (let i = 0; i < 60; i++) game.stepVmSprings(0.016);
+    assert.ok(Math.abs(game.vmSprings.kZ.x) < 1e-3, 'spring settles back to rest');
+
+    // Barrel heat rises on shots, drives glow opacity, and resets on weapon switch
+    for (let i = 0; i < 6; i++) {
+      game.pendingFire = null;
+      game.lastShotAt = -1000;
+      game.attemptShoot();
+    }
+    assert.ok(game.barrelHeat > 0.3, 'sustained fire builds barrel heat');
+    game.updateLocalPhysics(0.016, 2000);
+    const rifleVm = game.viewmodelMeshes.rifle;
+    assert.ok(rifleVm.userData.barrelHeatMat.opacity > 0, 'hot barrel glows subtly');
+    game.switchWeapon('pistol');
+    assert.equal(game.barrelHeat, 0, 'switching weapon resets active barrel heat');
+    assert.equal(rifleVm.userData.barrelHeatMesh.visible, false, 'switching weapon hides previous hot barrel mesh');
+
+    // Respawning with the same weapon resets barrel heat and spring state
+    game.equipUntil = 0;
+    game.barrelHeat = 0.75;
+    game.vmSpringImpulse('kZ', 1.1);
+    game.spawnLocalPlayer({ x: 0, y: 0.1, z: 0, yaw: 0, weapon: 'pistol', hp: 100 });
+    assert.equal(game.barrelHeat, 0, 'respawn resets barrel heat even on identical weapon');
+    assert.equal(game.vmSprings.kZ.v, 0, 'respawn zeroes viewmodel spring velocity');
+
+    // Ejected 3D brass shell bounces when hitting arena floor and never teleports upward when player jumps
+    game.position.set(0, 0, 0);
+    game.spawnShellCasing?.('rifle') || game.ejectShellCasing?.('rifle');
+    const shell = game.activeShells.at(-1);
+    shell.mesh.position.y = 0.01;
+    shell.vx = 1.0;
+    shell.vy = -2.5;
+    shell.vz = 0.5;
+    shell.createdAt = 2900;
+    game.lastFrameTime = 2984;
+    game.animate(3000);
+    assert.ok(shell.vy > 0, 'shell rebounds upward on floor impact');
+    assert.ok(shell.vx < 1.0, 'shell horizontal speed dampens on floor bounce');
+
+    shell.mesh.position.y = 0.025;
+    shell.vy = -0.2;
+    game.position.y = 1.25; // Player jumps high above floor
+    game.lastFrameTime = 3000;
+    game.animate(3016);
+    assert.ok(shell.mesh.position.y < 0.1, 'floor shell stays on world floor when player jumps');
+  });
+
+  it('prewarms Saltline physical-modeling WebAudio buffers (including 48kHz hardware hit) and Three.js shaders race-free', async () => {
+    const { installAudioMock, removeAudioMock } = await import('./helpers/perf-probe.mjs');
+    const { sfx } = await import('../public/js/audio.js');
+    installAudioMock();
+    try {
+      sfx.ctx = null;
+      sfx._pcmCache?.clear?.();
+      const audioProgress = [];
+      const count = await sfx.prewarmAudioBuffers((ratio) => audioProgress.push(ratio));
+      assert.equal(count, 15, `expected 15 canonical Saltline buffers, got ${count}`);
+      assert.equal(audioProgress.at(-1), 1);
+      for (let i = 1; i < audioProgress.length; i++) {
+        assert.ok(audioProgress[i] >= audioProgress[i - 1], 'audio prewarm progress is monotonic');
+      }
+      // Simulate 48kHz hardware AudioContext created after user gesture: must hit prewarmed PCM cache with 0 new syntheses
+      sfx.ensureContext();
+      sfx.ctx.sampleRate = 48000;
+      sfx._audioBufferCache?.clear?.();
+      sfx.playShot('rifle');
+      sfx.playShot('sniper');
+      sfx.playReload(1800, 'mag');
+      assert.equal(sfx._pcmCache.size, 15, '48kHz AudioContext reuses prewarmed canonical PCM cache without re-synthesizing');
+    } finally {
+      sfx.flushPendingCleanups(true);
+      sfx.ctx = null;
+      sfx.noiseBuffer = null;
+      removeAudioMock();
+    }
+
+    const game = await createTestGame3D({ qualityChoice: 'high' });
+    game.switchWeapon('m4a1');
+    let allVmVisibleDuringSyncCompile = false;
+    let resolveAsyncCompile;
+    game.renderer.isWebGLRenderer = true;
+    game.renderer.compileAsync = () => {
+      allVmVisibleDuringSyncCompile = Object.values(game.viewmodelMeshes).every((vm) => vm.visible === true);
+      return new Promise((r) => {
+        resolveAsyncCompile = r;
+      });
+    };
+    const shaderProgress = [];
+    const warmPromise = game.prewarmShaders((ratio) => shaderProgress.push(ratio));
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(allVmVisibleDuringSyncCompile, true, 'all viewmodels temporarily visible during synchronous compile kickoff');
+    // While async parallel compilation is still pending, hidden viewmodels are already restored and live weapon switches survive!
+    assert.equal(
+      Object.values(game.viewmodelMeshes).filter((vm) => vm.visible).length,
+      1,
+      'never leaves all 11 viewmodels stacked across async frames'
+    );
+    game.switchWeapon('deagle');
+    resolveAsyncCompile();
+    await warmPromise;
+    assert.equal(shaderProgress.at(-1), 1);
+    for (const [wId, vm] of Object.entries(game.viewmodelMeshes)) {
+      assert.equal(vm.visible, wId === 'deagle', `viewmodel ${wId} preserves mid-prewarm weapon switch to deagle`);
+    }
+  });
+
+  it('dirty-checks HUD updates, reuses fixed ammo pip DOM nodes, and toggles tactical low/empty alerts', async () => {
+    function decorateDomMock(el) {
+      if (!el || el._slDecorated) return el;
+      el._slDecorated = true;
+      const classes = new Set();
+      el.dataset = el.dataset || {};
+      el.style = el.style || {};
+      el.children = el.children || [];
+      el.classList = {
+        add: (...names) => names.forEach((n) => classes.add(n)),
+        remove: (...names) => names.forEach((n) => classes.delete(n)),
+        toggle: (n, force) => {
+          const on = force === undefined ? !classes.has(n) : Boolean(force);
+          if (on) classes.add(n);
+          else classes.delete(n);
+          return on;
+        },
+        contains: (n) => classes.has(n)
+      };
+      el.closest = () => document.getElementById('hud-ammo-block');
+      el.querySelectorAll = () => [];
+      const origAppend = el.appendChild?.bind(el);
+      el.appendChild = (child) => {
+        decorateDomMock(child);
+        child.parentNode = el;
+        return origAppend ? origAppend(child) : (el.children.push(child), child);
+      };
+      return el;
+    }
+
+    const origGetById = document.getElementById.bind(document);
+    const origCreateEl = document.createElement.bind(document);
+    document.getElementById = (id) => decorateDomMock(origGetById(id));
+    document.createElement = (tag) => decorateDomMock(origCreateEl(tag));
+    if (!window.location.href) window.location.href = 'http://127.0.0.1:3000/';
+
+    try {
+      const { updateWeaponHud, updateHpHud } = await import('../public/js/ui/hudController.js');
+      const { appState } = await import('../public/js/ui/userPrefsAndKeys.js');
+      const pipsEl = document.getElementById('hud-ammo-pips');
+      const alertEl = document.getElementById('hud-ammo-alert');
+      const hpCardEl = document.getElementById('hud-hp-card');
+      const weaponNameEl = document.getElementById('hud-weapon-name');
+
+      updateWeaponHud('rifle', 30, 90);
+      assert.equal(pipsEl.children.length, 20, 'allocates fixed 20-pip pool once');
+      const firstPoolNodes = [...pipsEl.children];
+      assert.equal(alertEl.classList.contains('hidden'), true, 'full mag hides tactical alert');
+
+      // Dirty-check: mutating weaponNameEl manually and calling with identical args must early-return
+      weaponNameEl.textContent = 'DIRTY_SENTINEL';
+      updateWeaponHud('rifle', 30, 90);
+      assert.equal(weaponNameEl.textContent, 'DIRTY_SENTINEL', 'identical HUD state skips DOM writes');
+
+      // Low ammo triggers SẮP HẾT ĐẠN and reuses exact same pip nodes (zero DOM allocations)
+      updateWeaponHud('rifle', 5, 90);
+      assert.notEqual(weaponNameEl.textContent, 'DIRTY_SENTINEL');
+      assert.equal(alertEl.classList.contains('hidden'), false);
+      assert.equal(alertEl.textContent, 'SẮP HẾT ĐẠN');
+      assert.deepEqual(pipsEl.children, firstPoolNodes, 'pip DOM nodes reused without reallocation');
+
+      // Empty mag with reserve triggers [R] NẠP ĐẠN; total empty triggers HẾT ĐẠN; knife hides pips & alert
+      updateWeaponHud('rifle', 0, 60);
+      assert.equal(alertEl.textContent, '[R] NẠP ĐẠN');
+      updateWeaponHud('rifle', 0, 0);
+      assert.equal(alertEl.textContent, 'HẾT ĐẠN');
+      updateWeaponHud('knife', 0, 0);
+      assert.equal(pipsEl.classList.contains('hidden'), true);
+      assert.equal(alertEl.classList.contains('hidden'), true);
+      assert.ok(appState.hudCache.weaponHudSig.includes('knife'));
+
+      // Critical HP class toggles at <= 25 HP and clears above 25 HP
+      updateHpHud(20);
+      assert.equal(hpCardEl.classList.contains('critical-hp'), true);
+      updateHpHud(80);
+      assert.equal(hpCardEl.classList.contains('critical-hp'), false);
+    } finally {
+      document.getElementById = origGetById;
+      document.createElement = origCreateEl;
+    }
+  });
+});
+
+// ---------------------------------------------------------------- Saltline Round 2: unified environment, props, arsenal & operator
+describe('Saltline Round 2: harbor water, wall weathering, merged decals, 3D backdrops, arsenal & unified operator model', () => {
+  it('builds harbor water, wall weathering shaders & merged decals on medium/high, omits on low/desert, and disposes 100% cleanly', async () => {
+    const { getSaltlineDecalUVRect } = await import('../public/js/arena/proceduralTextures.js');
+
+    // Boundary & negative index wrapping for 4-quadrant decal atlas UV rects
+    const q0 = getSaltlineDecalUVRect(0);
+    const q3 = getSaltlineDecalUVRect(-1);
+    const q1 = getSaltlineDecalUVRect(5);
+    assert.deepEqual(q3, getSaltlineDecalUVRect(3), 'negative quadrant wraps cleanly to Q3');
+    assert.deepEqual(q1, getSaltlineDecalUVRect(1), 'overflow quadrant wraps cleanly to Q1');
+    assert.ok(q0[0] < q0[2] && q0[1] < q0[3] && q0[2] < 0.5 && q0[1] > 0.5, 'Q0 sits in top-left UV quadrant with padding');
+
+    const game = await createTestGame3D({ qualityChoice: 'high' });
+    game.loadMap('cargo_dock');
+
+    const waterMesh = game.skyObjects.find((o) => o.name === 'saltlineHarborWater');
+    assert.ok(waterMesh, 'cargo_dock on high tier builds saltlineHarborWater');
+    assert.ok(game.harborWaterUniform, 'exposes harborWaterUniform for wave animation');
+    assert.equal(waterMesh.geometry.index.count, 24, 'hollow 4-quad harbor water ring uses exactly 8 triangles (24 indices)');
+
+    // Verify harbor water shader & wall weathering shader inject cleanly against REAL Three.js ShaderLib.standard
+    const stdLib = THREE.ShaderLib.standard;
+    const waterShader = {
+      uniforms: {},
+      vertexShader: stdLib.vertexShader,
+      fragmentShader: stdLib.fragmentShader
+    };
+    waterMesh.material.onBeforeCompile(waterShader);
+    assert.match(waterShader.vertexShader, /vSaltlineSeaWorldPos/);
+    assert.match(waterShader.fragmentShader, /uSaltlineSeaTime/);
+    assert.match(waterShader.fragmentShader, /slFoamBand/);
+
+    assert.ok(Array.isArray(game.wallWeatherMats) && game.wallWeatherMats.length > 0, 'registers vertical obstacle wallWeatherMats');
+    const wallMat = game.wallWeatherMats[0];
+    const wallKeyHigh = wallMat.customProgramCacheKey();
+    const wallShader = {
+      uniforms: {},
+      vertexShader: stdLib.vertexShader,
+      fragmentShader: stdLib.fragmentShader
+    };
+    wallMat.onBeforeCompile(wallShader);
+    assert.ok(
+      Math.abs(wallShader.uniforms.uSaltlineWallWeather.value - Math.min(1, QUALITY.high.wetFloorStrength * 1.15)) < 1e-6
+    );
+    assert.match(wallShader.vertexShader, /vSlWallWorldPos/);
+    assert.match(wallShader.fragmentShader, /slRainDrip/);
+    assert.match(wallShader.fragmentShader, /slSplashRough/);
+
+    // Animate advances harborWaterUniform
+    game.animate(2500);
+    assert.ok(Math.abs(game.harborWaterUniform.value - 2.5) < 1e-6, 'animate(now) updates harborWaterUniform in seconds');
+
+    // Merged world decals exist as a single BufferGeometry mesh on high
+    const decalMeshesHigh = game.arenaDecorMeshes.filter((m) => m.name === 'saltlineArenaDecals');
+    assert.equal(decalMeshesHigh.length, 1, 'merges all arena stencils into 1 draw call on high');
+    assert.equal(decalMeshesHigh[0].renderOrder, 1);
+
+    // Mid-match tier switch updates wallWeatherMats uniform in-place without shader key churn
+    game.inMatch = true;
+    game.applyQuality('medium', { persist: false });
+    assert.equal(wallMat.customProgramCacheKey(), wallKeyHigh);
+    assert.ok(
+      Math.abs(wallShader.uniforms.uSaltlineWallWeather.value - Math.min(1, QUALITY.medium.wetFloorStrength * 1.15)) < 1e-6
+    );
+    game.applyQuality('low', { persist: false });
+    assert.equal(wallMat.userData._hasSaltlineWallHook, false);
+    game.inMatch = false;
+
+    // Desert map omits coastal harbor water even on high tier
+    game.applyQuality('high', { persist: false });
+    game.loadMap('desert_outpost');
+    assert.equal(
+      game.skyObjects.some((o) => o.name === 'saltlineHarborWater'),
+      false,
+      'desert_outpost omits coastal harbor water'
+    );
+    assert.equal(game.harborWaterUniform, null);
+
+    // Low tier omits harbor water and merged world decals
+    game.applyQuality('low', { persist: false });
+    game.loadMap('cargo_dock');
+    assert.equal(game.skyObjects.some((o) => o.name === 'saltlineHarborWater'), false, 'low tier omits harbor water');
+    assert.equal(
+      game.arenaDecorMeshes.some((m) => m.name === 'saltlineArenaDecals'),
+      false,
+      'low tier omits world decal pass'
+    );
+
+    // Full disposal leaves zero leaked arena geometries, materials, or textures
+    game.applyQuality('high', { persist: false });
+    game.loadMap('cargo_dock');
+    assert.ok(game.arenaGeometries.size > 0 && game.arenaMaterials.size > 0 && game.arenaTextures.size > 0);
+    game.disposeMapResources();
+    assert.equal(game.arenaGeometries.size, 0, 'disposeMapResources clears all arenaGeometries');
+    assert.equal(game.arenaMaterials.size, 0, 'disposeMapResources clears all arenaMaterials');
+    assert.equal(game.arenaTextures.size, 0, 'disposeMapResources clears all arenaTextures');
+    assert.equal(game.wallWeatherMats.length, 0, 'disposeMapResources clears wallWeatherMats');
+    assert.equal(game.harborWaterUniform, null, 'disposeMapResources clears harborWaterUniform');
+  });
+
+  it('unifies all 4 operator variants with per-vertex PBR surface attributes, RIG.HIP_X alignment, zero bare skin, and strict shadow hygiene', async () => {
+    const { RIG_MAT_CACHE, createRemotePlayerMesh, disposeObject3D } = await import('../public/js/humanoidRig.js');
+    const { RIG } = await import('../shared/hitboxes.js');
+
+    const variantColors = [
+      { color: 0xe5a024, expected: 'v1_hero' },
+      { color: 0xef4444, expected: 'v2_goggles' },
+      { color: 0x94a3b8, expected: 'v3_ghost' },
+      { color: 0x4b5320, expected: 'v4_recon' }
+    ];
+
+    for (const { color, expected } of variantColors) {
+      const op = createRemotePlayerMesh({ id: `op_${expected}`, color, weapon: 'm4a1' }, { isShowcase: false });
+      assert.equal(Math.abs(op.leftLeg.position.x - -RIG.HIP_X) < 1e-6, true, `${expected} leftLeg aligns with -RIG.HIP_X`);
+      assert.equal(Math.abs(op.rightLeg.position.x - RIG.HIP_X) < 1e-6, true, `${expected} rightLeg aligns with +RIG.HIP_X`);
+
+      let hasFabricVerts = false;
+      let hasArmorVerts = false;
+      let hasMetalVerts = false;
+      let outlineCount = 0;
+
+      op.group.traverse((obj) => {
+        if (!obj.isMesh) return;
+        if (obj.userData?.isOutlineHull) {
+          outlineCount++;
+          assert.equal(obj.userData.isOutline, true, 'outline hull is tagged isOutline=true for shadow exclusion');
+          assert.equal(obj.castShadow, false);
+        }
+        if (obj.userData?.isHitboxProxy) {
+          assert.equal(obj.userData.isHitbox, true, 'hitbox proxy is tagged isHitbox=true for shadow exclusion');
+          assert.equal(obj.castShadow, false);
+        }
+        if (obj.material?.userData?.matSlotKey === 'rig_static_vcolor') {
+          const surf = obj.geometry?.attributes?.aRigSurface;
+          assert.ok(surf && surf.itemSize === 2, `${expected} batched static mesh carries vec2 aRigSurface PBR attribute`);
+          for (let i = 0; i < surf.count; i++) {
+            const r = surf.getX(i);
+            const m = surf.getY(i);
+            if (r >= 0.75 && m <= 0.12) hasFabricVerts = true;
+            if (r >= 0.34 && r <= 0.56 && m >= 0.15 && m <= 0.40) hasArmorVerts = true;
+            if (r <= 0.30 && m >= 0.70) hasMetalVerts = true;
+          }
+        }
+      });
+
+      assert.equal(outlineCount, 13, `${expected} builds all 13 bone-scope outline hulls`);
+      assert.equal(hasFabricVerts, true, `${expected} encodes matte ripstop fabric PBR vertices`);
+      assert.equal(hasArmorVerts, true, `${expected} encodes composite armor/leather PBR vertices`);
+      assert.equal(hasMetalVerts, true, `${expected} encodes brushed gunmetal/titanium PBR vertices`);
+      disposeObject3D(op.group);
+    }
+
+    // Verify rig_static_vcolor shader injects cleanly against REAL Three.js ShaderLib.standard
+    const rigVColorMat = RIG_MAT_CACHE.get('rig_static_vcolor');
+    const rigShader = {
+      uniforms: {},
+      vertexShader: THREE.ShaderLib.standard.vertexShader,
+      fragmentShader: THREE.ShaderLib.standard.fragmentShader
+    };
+    rigVColorMat.onBeforeCompile(rigShader);
+    assert.match(rigShader.vertexShader, /attribute vec2 aRigSurface;/);
+    assert.match(rigShader.fragmentShader, /slSurfRough/);
+    assert.match(rigShader.fragmentShader, /metalnessFactor = min\(slSurfMetal, metalness\);/);
+
+    // Verify High-tier remote player dynamic shadow traversal never enables castShadow on outlines or hitboxes
+    const game = await createTestGame3D({ qualityChoice: 'high' });
+    game.localId = 'me';
+    game.inMatch = true;
+    game.syncPlayersState([
+      { id: 'enemy-shadow-check', name: 'Bravo', color: 0xef4444, x: 3, y: 0, z: -7, hp: 100, alive: true, weapon: 'scar' }
+    ]);
+    const rp = game.remotePlayers.get('enemy-shadow-check');
+    let bodyShadowCasters = 0;
+    rp.group.traverse((obj) => {
+      if (!obj.isMesh) return;
+      if (obj.userData?.isOutline || obj.userData?.isHitbox) {
+        assert.equal(obj.castShadow, false, `${obj.name || 'helper'} must never cast dynamic shadows on high tier`);
+      } else if (obj !== rp.muzzleFlash && !obj.userData?.isMuzzleFlash) {
+        if (obj.castShadow) bodyShadowCasters++;
+      }
+    });
+    assert.ok(bodyShadowCasters >= 15, `expected >= 15 real operator/weapon meshes casting shadows on high, got ${bodyShadowCasters}`);
+  });
+
+  it('caches all 1P softshell/glove/arsenal materials in WEAPON_MAT_CACHE and equips WML lights, rollmarks & 6-fin muzzle flash', async () => {
+    const { WEAPON_ORDER } = await import('../shared/constants.js');
+    const { WEAPON_MAT_CACHE, createWeaponMesh } = await import('../public/js/weaponModels.js');
+    const { disposeObject3D } = await import('../public/js/humanoidRig.js');
+
+    // Warm once across all 11 first-person viewmodels, then verify zero material cache growth on subsequent builds
+    for (const wId of WEAPON_ORDER) {
+      const vm = createWeaponMesh(wId, true);
+      disposeObject3D(vm);
+    }
+    const cacheSizeAfterWarm = WEAPON_MAT_CACHE.size;
+    assert.equal(WEAPON_MAT_CACHE.has('shared_vm_cuff_amber'), true);
+    assert.equal(WEAPON_MAT_CACHE.has('shared_vm_watch_dial'), true);
+    assert.equal(WEAPON_MAT_CACHE.has('shared_saltline_rollmark'), true);
+
+    for (const wId of WEAPON_ORDER) {
+      const vm = createWeaponMesh(wId, true);
+      assert.ok(vm.userData.rightHandGroup && vm.userData.leftHandGroup, `${wId} exposes 1P gloved hand groups`);
+      assert.ok(vm.userData.flashMesh?.userData?.isMuzzleFlash, `${wId} exposes muzzle flash group`);
+      if (wId !== 'knife') {
+        assert.ok(vm.userData.flashMesh.children.length >= 6, `${wId} builds multi-fin starburst muzzle flash`);
+      }
+      disposeObject3D(vm);
+    }
+    assert.equal(WEAPON_MAT_CACHE.size, cacheSizeAfterWarm, 'rebuilding all 11 1P viewmodels allocates 0 duplicate materials');
+  });
+
+  it('includes SphereGeometry helmet crown in operator outline hulls, keeps armPivot.y=0.456 across animations, and prevents antenna head clipping', async () => {
+    const {
+      createRemotePlayerMesh,
+      animateHumanoidRig,
+      poseOperatorCryzenPoster,
+      disposeObject3D
+    } = await import('../public/js/humanoidRig.js');
+
+    for (const variant of ['v1_hero', 'v2_goggles', 'v3_ghost', 'v4_recon']) {
+      const rig = createRemotePlayerMesh({ id: `rig_${variant}`, color: '#38bdf8' }, { variant });
+      rig.group.updateMatrixWorld(true);
+
+      assert.equal(rig.armPivot.position.y, 0.456, `${variant} initial armPivot.y`);
+      animateHumanoidRig(rig, 0.016, 1200, true, 0.2);
+      assert.equal(rig.armPivot.position.y, 0.456, `${variant} animated armPivot.y matches 0.456 socket`);
+      poseOperatorCryzenPoster(rig, 'rifle');
+      assert.equal(rig.armPivot.position.y, 0.456, `${variant} poster armPivot.y matches 0.456 socket`);
+
+      rig.headGroup.rotation.set(0, 0, 0);
+      rig.group.updateMatrixWorld(true);
+      let visMaxY = -Infinity;
+      let outMaxY = -Infinity;
+      rig.headGroup.traverse((c) => {
+        if (!c.isMesh) return;
+        const b = new THREE.Box3().setFromObject(c);
+        if (c.userData?.isOutline) outMaxY = Math.max(outMaxY, b.max.y);
+        else if (!c.userData?.isHitbox && !c.material?.transparent) visMaxY = Math.max(visMaxY, b.max.y);
+      });
+      assert.ok(outMaxY >= visMaxY + 0.005, `${variant} helmet SphereGeometry crown is covered by outline hull (${outMaxY} vs ${visMaxY})`);
+
+      rig.headGroup.rotation.set(0.4, 0.55, 0);
+      rig.group.updateMatrixWorld(true);
+      const headBox = new THREE.Box3();
+      rig.headGroup.traverse((c) => {
+        if (c.isMesh && !c.userData?.isOutline && !c.userData?.isHitbox) headBox.expandByObject(c);
+      });
+      const headWorldPos = rig.headGroup.getWorldPosition(new THREE.Vector3());
+      const v3 = new THREE.Vector3();
+      let frontHeadClipVerts = 0;
+      for (const child of rig.torsoVisualGroup.children) {
+        if (child.isMesh && !child.userData?.isOutline && !child.userData?.isHitbox) {
+          const pos = child.geometry.attributes.position;
+          for (let i = 0; i < pos.count; i++) {
+            v3.fromBufferAttribute(pos, i).applyMatrix4(child.matrixWorld);
+            if (v3.y > headWorldPos.y + 0.045 && v3.z < 0.05 && headBox.containsPoint(v3)) {
+              frontHeadClipVerts++;
+            }
+          }
+        }
+      }
+      assert.equal(frontHeadClipVerts, 0, `${variant} front VHF antenna does not impale headGroup on pitch/yaw`);
+      disposeObject3D(rig.group);
+    }
+  });
+
+  it('keeps receiver rollmarks clear of solid weapon geometry with polygonOffset and batches 1P viewmodel static scopes', async () => {
+    const { WEAPONS } = await import('../shared/weapons.js');
+    const { createWeaponMesh, buildDetailedWeaponModel, setWeaponAdsCulling } = await import('../public/js/weaponModels.js');
+    const { getSaltlineRollmarkMaterial } = await import('../public/js/weapons/weaponMaterials.js');
+    const { disposeObject3D } = await import('../public/js/humanoidRig.js');
+
+    const rollMat = getSaltlineRollmarkMaterial();
+    assert.equal(rollMat.polygonOffset, true, 'rollmark decal material enables polygonOffset');
+
+    for (const wId of ['rifle', 'm4a1', 'scar', 'smg', 'shotgun', 'sniper', 'lmg']) {
+      const { group } = buildDetailedWeaponModel(wId, false);
+      group.updateMatrixWorld(true);
+      const rollMeshes = [];
+      const solidMeshes = [];
+      group.traverse((c) => {
+        if (!c.isMesh) return;
+        if (c.material === rollMat) rollMeshes.push(c);
+        else if (!c.material?.transparent) solidMeshes.push(c);
+      });
+      assert.equal(rollMeshes.length, 1, `${wId} carries receiver rollmark quad`);
+      const rBox = new THREE.Box3().setFromObject(rollMeshes[0]);
+      let minClearance = Infinity;
+      for (const sm of solidMeshes) {
+        const sBox = new THREE.Box3().setFromObject(sm);
+        if (
+          rBox.min.y < sBox.max.y - 0.0005 &&
+          rBox.max.y > sBox.min.y + 0.0005 &&
+          rBox.min.z < sBox.max.z - 0.0005 &&
+          rBox.max.z > sBox.min.z + 0.0005 &&
+          rBox.min.x < 0
+        ) {
+          minClearance = Math.min(minClearance, sBox.min.x - rBox.max.x);
+        }
+      }
+      assert.ok(minClearance >= 0.0008, `${wId} rollmark is unobstructed in front of receiver (clearance=${minClearance})`);
+      disposeObject3D(group);
+    }
+
+    const raycaster = new THREE.Raycaster();
+    for (const wId of Object.keys(WEAPONS)) {
+      const vm = createWeaponMesh(wId, true);
+      let totalMeshes = 0;
+      let hipfireVisible = 0;
+      vm.traverse((c) => {
+        if (!c.isMesh) return;
+        totalMeshes++;
+        if (c.visible && (!c.parent || c.parent.visible)) hipfireVisible++;
+      });
+      assert.ok(totalMeshes <= 52, `${wId} static-batched 1P viewmodel keeps total meshes <= 52 (got ${totalMeshes})`);
+      assert.ok(hipfireVisible <= 45, `${wId} hipfire visible 1P meshes <= 45 (got ${hipfireVisible})`);
+
+      if (vm.userData.opticLens) {
+        const adsPos = vm.userData.adsPosition || { x: 0, y: 0, z: -0.2 };
+        vm.position.set(adsPos.x, adsPos.y, adsPos.z);
+        setWeaponAdsCulling(vm, true);
+        vm.updateMatrixWorld(true);
+        const opaqueAds = [];
+        vm.traverse((c) => {
+          if (
+            c.isMesh &&
+            c.visible &&
+            c !== vm.userData.opticLens &&
+            c !== vm.userData.opticReticle &&
+            !c.userData?.isMuzzleFlash &&
+            !c.material?.transparent
+          ) {
+            opaqueAds.push(c);
+          }
+        });
+        raycaster.set(new THREE.Vector3(0, 0, 0.2), new THREE.Vector3(0, 0, -1));
+        assert.equal(raycaster.intersectObjects(opaqueAds, false).length, 0, `${wId} ADS sightline is unobstructed`);
+      }
+      disposeObject3D(vm);
+    }
+  });
+
+  it('keeps world stencil decals clear of staircases/obstacles across all 8 maps, layers bullet impacts on top, and caps Set arenaMaterials on Low', async () => {
+    const { MAPS: MAP_DEFS, MAP_ORDER } = await import('../shared/maps.js');
+    const { revertPbrSlots } = await import('../public/js/surfaceMaterials.js');
+    const game = await createTestGame3D({ qualityChoice: 'high' });
+
+    for (const mapId of MAP_ORDER) {
+      game.loadMap(mapId);
+      const decals = game.saltlineArenaDecals;
+      assert.ok(decals?.geometry, `${mapId} builds merged world decal geometry on High`);
+      game.spawnBulletDecal({ x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
+      const bDecal = game.bulletDecals[game.bulletDecals.length - 1];
+      assert.ok(
+        bDecal.renderOrder > decals.renderOrder && bDecal.position.y > 0.01,
+        `${mapId} bullet decals render above painted world stencils`
+      );
+      const pos = decals.geometry.attributes.position;
+      const obsList = MAP_DEFS[mapId].obstacles;
+      let buriedVerts = 0;
+      for (let i = 0; i < pos.count; i++) {
+        const x = pos.getX(i);
+        const y = pos.getY(i);
+        const z = pos.getZ(i);
+        for (const ob of obsList) {
+          if (ob.shape === 'cylinder') continue;
+          const hw = ob.w * 0.5 - 0.02;
+          const hd = ob.d * 0.5 - 0.02;
+          const minY = ob.y - ob.h * 0.5 + 0.001;
+          const maxY = ob.y + ob.h * 0.5 - 0.02;
+          if (x > ob.x - hw && x < ob.x + hw && z > ob.z - hd && z < ob.z + hd && y > minY && y < maxY) {
+            buriedVerts++;
+            break;
+          }
+        }
+      }
+      assert.equal(buriedVerts, 0, `${mapId} has 0 world decal vertices buried inside obstacles or staircases`);
+    }
+
+    // Mid-match quality switch High -> Low -> Medium syncs environment, water/decal visibility, and Set arenaMaterials metalness
+    game.inMatch = true;
+    game.applyQuality('high', { persist: false });
+    game.loadMap('cargo_dock');
+    assert.equal(Boolean(game.scene.environment), true);
+    assert.equal(game.saltlineHarborWater?.visible, true);
+    assert.equal(game.saltlineArenaDecals?.visible, true);
+
+    game.applyQuality('low', { persist: false });
+    assert.equal(game.scene.environment, null, 'mid-match Low switch clears scene.environment');
+    assert.equal(game.saltlineHarborWater?.visible, false, 'mid-match Low switch hides harbor water');
+    assert.equal(game.saltlineArenaDecals?.visible, false, 'mid-match Low switch hides world decals');
+    for (const m of game.arenaMaterials) {
+      if (typeof m.metalness === 'number') {
+        assert.ok(m.metalness <= 0.3501, `Low tier caps arenaMaterial metalness <= 0.35 (got ${m.metalness})`);
+      }
+    }
+    revertPbrSlots(game);
+    for (const s of game.pbrSlots) {
+      if (typeof s.mat?.metalness === 'number') {
+        assert.ok(s.mat.metalness <= 0.3501, `Low tier revertPbrSlots caps metalness <= 0.35 (got ${s.mat.metalness})`);
+      }
+    }
+
+    game.applyQuality('medium', { persist: false });
+    assert.equal(Boolean(game.scene.environment), true, 'mid-match Medium switch restores scene.environment');
+    assert.equal(game.saltlineHarborWater?.visible, true, 'mid-match Medium switch restores harbor water');
+    assert.equal(game.saltlineArenaDecals?.visible, true, 'mid-match Medium switch restores world decals');
+    let restoredHighMetalCount = 0;
+    for (const m of game.arenaMaterials) {
+      if (typeof m.metalness === 'number' && m.metalness > 0.4) restoredHighMetalCount++;
+    }
+    assert.ok(restoredHighMetalCount >= 10, 'mid-match Medium switch restores full metallic PBR response on arenaMaterials');
+  });
+});
+
+// ---------------------------------------------------------------- Saltline Full Overhaul (BR-01..BR-06)
+describe('Saltline Full Overhaul (BR-01..BR-06, AC-01..AC-05)', () => {
+  it('BR-01 / AC-01: defaults client boot & user prefs to Dust II (desert_outpost) while keeping shared DEFAULT_MAP_ID intact', async () => {
+    const { DEFAULT_MAP_ID } = await import('../shared/maps.js');
+    const { CLIENT_DEFAULT_MAP_ID, loadUserPrefs } = await import('../public/js/ui/userPrefsAndKeys.js');
+    assert.equal(DEFAULT_MAP_ID, 'cyber_citadel', 'server fallback DEFAULT_MAP_ID remains cyber_citadel');
+    assert.equal(CLIENT_DEFAULT_MAP_ID, 'desert_outpost', 'client default map ID is desert_outpost');
+
+    const prevLocalStorage = globalThis.localStorage;
+    globalThis.localStorage = memStorage();
+    try {
+      const prefs = loadUserPrefs();
+      assert.equal(prefs.selectedMap, 'desert_outpost', 'fresh userPrefs defaults selectedMap to desert_outpost');
+    } finally {
+      globalThis.localStorage = prevLocalStorage;
+    }
+
+    const { Game3D } = await loadGame3D();
+    const container = { appendChild() {}, clientWidth: 1280, clientHeight: 720 };
+    const prevStorage2 = globalThis.localStorage;
+    globalThis.localStorage = memStorage();
+    let bootGame;
+    try {
+      bootGame = new Game3D(container, { initialMapId: CLIENT_DEFAULT_MAP_ID });
+      assert.equal(bootGame.currentMapId, 'desert_outpost');
+      assert.equal(bootGame.currentMapConfig?.id, 'desert_outpost');
+    } finally {
+      globalThis.localStorage = prevStorage2;
+    }
+
+    const html = fs.readFileSync(path.join(ROOT_DIR, 'public/index.html'), 'utf8');
+    const mapGridMatch = html.match(/id="lobby-map-grid"[\s\S]*?<\/div>/);
+    assert.ok(mapGridMatch, '#lobby-map-grid exists in index.html');
+    const firstMapBtn = mapGridMatch[0].match(/<button[^>]*class="([^"]*)"[^>]*data-map="([^"]+)"/);
+    assert.ok(firstMapBtn, 'first map option found in #lobby-map-grid');
+    assert.equal(firstMapBtn[2], 'desert_outpost', 'desert_outpost is listed first in #lobby-map-grid');
+    assert.match(firstMapBtn[1], /\bactive\b/, 'desert_outpost is marked .active on boot');
+  });
+
+  it('BR-02 / AC-02: gates Kenney cartoon .glb props behind explicit opt-in and loads 0 .glb models across Low/Medium/High by default', async () => {
+    const { PROP_OVERRIDES_STORAGE_KEY, isPropOverrideEnabled } = await import('../public/js/arenaProps.js');
+    assert.equal(PROP_OVERRIDES_STORAGE_KEY, 'polystrike.glbProps');
+    assert.equal(isPropOverrideEnabled('', memStorage()), false);
+    assert.equal(isPropOverrideEnabled('?glbProps=1', memStorage()), true);
+    assert.equal(isPropOverrideEnabled('?glbProps=0', memStorage({ [PROP_OVERRIDES_STORAGE_KEY]: '1' })), false);
+    assert.equal(isPropOverrideEnabled('', memStorage({ [PROP_OVERRIDES_STORAGE_KEY]: '1' })), true);
+
+    for (const tier of TIER_ORDER) {
+      const game = await createTestGame3D({ qualityChoice: tier });
+      let loadModelCalls = 0;
+      game.assets.loadPbrSet = async () => ({});
+      game.assets.loadModel = async () => {
+        loadModelCalls++;
+        return null;
+      };
+      await game.preloadAssets();
+      assert.equal(loadModelCalls, 0, `${tier}: preloadAssets loads 0 Kenney .glb models by default`);
+      assert.equal(game.assets.loadedModels.size, 0, `${tier}: 0 .glb models cached in loadedModels`);
+    }
+  });
+
+  it('BR-03 / BR-05: hides solid monolithic obstacle proxy boxes while keeping exact AABB raycast meshes and merged Saltline architecture', async () => {
+    const game = await createTestGame3D({ qualityChoice: 'high' });
+    game.loadMap('cargo_dock');
+    const cfg = getMapConfig('cargo_dock');
+    assert.equal(game.worldMeshes.length, 1 + cfg.obstacles.length, 'floor + exact obstacle raycast proxy count');
+    assert.equal(game.worldMeshes[0].visible, true, 'floor mesh remains visible');
+    for (let i = 1; i < game.worldMeshes.length; i++) {
+      assert.equal(
+        game.worldMeshes[i].visible,
+        false,
+        `obstacle collision proxy [${i - 1}] (${cfg.obstacles[i - 1].type}) is hidden behind sculpted Saltline architecture`
+      );
+    }
+    assert.ok(game.mergedWorldMeshes.length >= 4, 'builds batched Saltline architectural meshes & InstancedMeshes');
+
+    // Verify clean disposal & rebuild on map switch (invite room edge case: cargo_dock -> desert_outpost -> cargo_dock)
+    const statsBefore = sceneStats(game);
+    game.loadMap('desert_outpost');
+    assert.equal(game.currentMapConfig?.id, 'desert_outpost');
+    game.loadMap('cargo_dock');
+    const statsAfter = sceneStats(game);
+    assert.equal(statsAfter.drawCalls, statsBefore.drawCalls, 'map switch disposes previous arena cleanly without draw-call leak');
+    assert.equal(statsAfter.triangles, statsBefore.triangles, 'map switch disposes previous arena cleanly without triangle leak');
+  });
+
+  it('BR-04 / AC-04: eliminates 100% of neon weapon accent materials across all 11 weapons (1P & 3P) and preserves sculpted 4-variant operator rig', async () => {
+    const { WEAPONS } = await import('../shared/weapons.js');
+    const { createWeaponMesh } = await import('../public/js/weaponModels.js');
+    const { createRemotePlayerMesh, disposeObject3D } = await import('../public/js/humanoidRig.js');
+
+    const bannedNeonColors = new Set(Object.values(WEAPONS).map((w) => w.color));
+    for (const wId of Object.keys(WEAPONS)) {
+      for (const isFp of [true, false]) {
+        const wGroup = createWeaponMesh(wId, isFp);
+        wGroup.traverse((child) => {
+          if (!child.isMesh || !child.material) return;
+          if (child === wGroup.userData.opticLens || child === wGroup.userData.opticReticle || child.userData?.isMuzzleFlash) {
+            return;
+          }
+          const mats = Array.isArray(child.material) ? child.material : [child.material];
+          for (const mat of mats) {
+            assert.equal(
+              String(mat.name || '').startsWith('shared_accent_'),
+              false,
+              `${wId} (${isFp ? '1P' : '3P'}) contains zero shared_accent_ neon material`
+            );
+            if (mat.color && !mat.transparent) {
+              assert.equal(
+                bannedNeonColors.has(mat.color.getHex()),
+                false,
+                `${wId} (${isFp ? '1P' : '3P'}) mesh does not use arcade weapon color 0x${mat.color.getHex().toString(16)}`
+              );
+            }
+          }
+        });
+        disposeObject3D(wGroup);
+      }
+    }
+
+    for (const swatch of [0xe5a024, 0xef4444, 0x94a3b8, 0x4b5320]) {
+      const rig = createRemotePlayerMesh({ id: `op_${swatch}`, color: swatch, weapon: 'rifle' }, { isShowcase: true });
+      let bodyMeshes = 0;
+      let vcolorMeshes = 0;
+      let shadowCasters = 0;
+      rig.group.traverse((c) => {
+        if (!c.isMesh) return;
+        if (c.castShadow) shadowCasters++;
+        let p = c;
+        let inGun = false;
+        while (p) {
+          if (p === rig.gunHolder) {
+            inGun = true;
+            break;
+          }
+          p = p.parent;
+        }
+        if (!inGun && !c.userData?.isOutlineHull && !c.userData?.isHitboxProxy) {
+          bodyMeshes++;
+          if (c.material?.userData?.matSlotKey === 'rig_static_vcolor') vcolorMeshes++;
+        }
+      });
+      assert.equal(vcolorMeshes, 13, `swatch 0x${swatch.toString(16)} keeps 13 static vcolor body parts`);
+      assert.ok(bodyMeshes <= 22, `swatch 0x${swatch.toString(16)} keeps bodyMeshes <= 22 (got ${bodyMeshes})`);
+      assert.equal(shadowCasters, 0, `showcase rig has 0 shadow casters`);
+      disposeObject3D(rig.group);
+    }
+  });
+
+  it('BR-06 / AC-05: defaults lobby camera to unobstructed harbor vista, switches weapon/operator inspection stages cleanly, and purges all UI emojis', async () => {
+    const game = await createTestGame3D({ qualityChoice: 'medium' });
+    game.loadMap('cargo_dock');
+    assert.equal(game.lobbyCameraMode, 'harbor', 'defaults to cinematic harbor vista mode');
+    assert.equal(game.lobbyShowcaseGroup.visible, false, 'harbor vista hides close-up showcase stage');
+
+    game.animate(1000);
+    assert.equal(game.lobbyShowcaseGroup.visible, false, 'animate() in harbor mode keeps showcase stage hidden');
+
+    // Switch to gunsmith weapon inspection mode
+    game.setLobbyCameraMode('weapon');
+    game.animate(1050);
+    assert.equal(game.lobbyShowcaseGroup.visible, true);
+    assert.equal(game.lobbyWeaponInspectGroup.visible, true, 'weapon mode shows 3D gunsmith turntable');
+    assert.equal(game.lobbyOperator.group.visible, false, 'weapon mode hides operator rig');
+    assert.equal(game.lobbyPedestalGroup.visible, false, 'weapon mode hides operator pedestal');
+
+    // Switch weapon while in weapon mode updates turntable cleanly with 0 shadow casters
+    game.setLobbyWeapon('sniper');
+    let inspectCasters = 0;
+    game.lobbyWeaponInspectGroup.traverse((c) => {
+      if (c.isMesh && c.castShadow) inspectCasters++;
+    });
+    assert.equal(inspectCasters, 0, 'lobby weapon inspect turntable casts 0 arena shadows');
+
+    // Switch to 3D operator inspection mode
+    game.setLobbyCameraMode('operator');
+    game.animate(1100);
+    assert.equal(game.lobbyShowcaseGroup.visible, true);
+    assert.equal(game.lobbyOperator.group.visible, true, 'operator mode shows sculpted 3D operator');
+    assert.equal(game.lobbyPedestalGroup.visible, true, 'operator mode shows industrial grate pedestal');
+    assert.equal(game.lobbyWeaponInspectGroup.visible, false, 'operator mode hides gunsmith cradle');
+
+    // Verify 0 Unicode decorative emojis across public/index.html, public/css/, and public/js/
+    const emojiRegex = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u;
+    const filesToScan = [path.join(ROOT_DIR, 'public/index.html')];
+    const walkDir = (dir) => {
+      for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, ent.name);
+        if (ent.isDirectory()) walkDir(full);
+        else if (/\.(js|css|html)$/.test(ent.name)) filesToScan.push(full);
+      }
+    };
+    walkDir(path.join(ROOT_DIR, 'public/css'));
+    walkDir(path.join(ROOT_DIR, 'public/js'));
+    for (const file of filesToScan) {
+      const content = fs.readFileSync(file, 'utf8');
+      assert.equal(
+        emojiRegex.test(content),
+        false,
+        `${path.relative(ROOT_DIR, file)} contains zero decorative Unicode emojis`
+      );
+    }
+
+    const html = fs.readFileSync(path.join(ROOT_DIR, 'public/index.html'), 'utf8');
+    assert.match(html, /id="lobby-camera-modes"/);
+    assert.match(html, /data-camera-mode="harbor"/);
+    assert.match(html, /data-camera-mode="weapon"/);
+    assert.match(html, /data-camera-mode="operator"/);
+    assert.match(html, /id="lobby-tabs"/);
+    assert.match(html, /id="btn-open-rooms-tab"/);
+  });
+});
+
+
+
