@@ -87,7 +87,7 @@ describe('shared/movement.js - fixed timestep & determinism', () => {
   });
 
   it('is deterministic: identical inputs produce bit-identical states', () => {
-    const mapCfg = getMapConfig('cyber_citadel');
+    const mapCfg = getMapConfig('de_dust2');
     const run = () => {
       const s = createMovementState({ x: 0, y: 0, z: 10, onGround: true });
       let seed = 12345;
@@ -161,7 +161,7 @@ describe('shared/movement.js - fixed timestep & determinism', () => {
   });
 
   it('client-style (copy in/out each step) and server-style (plain state) usage produce identical results', () => {
-    const mapCfg = getMapConfig('cargo_dock');
+    const mapCfg = getMapConfig('de_mirage');
     const script = (i) => makeInput({
       moveForward: 1,
       moveRight: i % 90 < 30 ? 1 : 0,
@@ -520,7 +520,7 @@ describe('shared/physics.js - stepGrenade', () => {
   const mk = (over = {}) => ({ x: 0, y: 1.5, z: 0, vx: 0, vy: 0, vz: 0, ...over });
 
   it('is deterministic', () => {
-    const mapCfg = getMapConfig('cyber_citadel');
+    const mapCfg = getMapConfig('de_dust2');
     const a = mk({ z: -16, vx: 3, vy: 6, vz: -19.5 });
     const b = { ...a };
     for (let i = 0; i < 100; i++) {

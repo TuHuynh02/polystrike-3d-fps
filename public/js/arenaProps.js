@@ -419,73 +419,226 @@ export class PolyhavenInstancedBatcher {
   }
 }
 
-const DUST2_PROP_PLACEMENTS = {
-  covered_car: [
-    // Iconic Dust II Car landmarks parked safely inside side alcoves (clear of spawns & corridors)
-    { x: 59.4, y: 0, z: 14.0, scale: 1.0, yaw: 0.08 },
-    { x: -59.4, y: 0, z: -14.0, scale: 1.0, yaw: Math.PI - 0.08 }
-  ],
-  concrete_road_barrier_02: [
-    // Jersey barriers flanking North & South Mid Sniper Shields
-    { x: -4.25, y: 0, z: -27.2, scale: 1.0, yaw: 0.08 },
-    { x: 4.25, y: 0, z: 27.2, scale: 1.0, yaw: Math.PI + 0.08 }
-  ],
-  Barrel_02: [
-    // Tucked flush against Mid & bombsite corners (clear of explosive barrels)
-    { x: -11.2, y: 0, z: -23.3, scale: 1.05, yaw: 0.4 },
-    { x: 11.2, y: 0, z: 23.3, scale: 1.05, yaw: 2.1 },
-    { x: 40.2, y: 2.4, z: -38.2, scale: 1.0, yaw: 0.3 },
-    { x: -40.2, y: 2.4, z: -38.2, scale: 1.0, yaw: 2.5 }
-  ],
-  old_military_crate_a: [
-    // Closed ordnance crates crowning tactical Dust II crates
-    { x: -12.0, y: 2.0, z: -14.0, scale: 1.25, yaw: 0.25 },
-    { x: 12.0, y: 2.0, z: 14.0, scale: 1.25, yaw: -0.35 },
-    { x: 25.0, y: 2.0, z: -20.0, scale: 1.3, yaw: 0.8 }
-  ],
-  old_military_crate_b: [
-    // Open cloth-lined military crate on Catwalk parapet
-    { x: 6.1, y: 3.7, z: 6.0, scale: 1.15, yaw: 3.05 }
-  ],
-  cement_bag: [
-    // Stacked cement bags on A-Goose, B-Site, and Catwalk terraces
-    { x: 33.8, y: 2.4, z: -37.2, scale: 1.15, yaw: 0.15 },
-    { x: -33.8, y: 2.4, z: -37.2, scale: 1.15, yaw: -0.2 },
-    { x: -5.6, y: 2.4, z: 4.4, scale: 1.1, yaw: 1.45 },
-    { x: 5.6, y: 2.4, z: -4.4, scale: 1.1, yaw: -1.45 }
-  ],
-  ammo_box: [
-    { x: -9.2, y: 1.9, z: 4.1, scale: 1.45, yaw: 0.7 },
-    { x: 9.2, y: 1.9, z: -4.1, scale: 1.45, yaw: -0.8 }
-  ]
+const PROP_MAP_ALIASES = {
+  desert_outpost: 'de_dust2',
+  arena_duel: 'aim_map'
 };
 
-const CARGO_DOCK_PROP_PLACEMENTS = {
-  concrete_road_barrier_02: [
-    { x: -44.2, y: 0, z: -11.5, scale: 1.0, yaw: 0.18 },
-    { x: 44.2, y: 0, z: 11.5, scale: 1.0, yaw: Math.PI + 0.18 }
-  ],
-  Barrel_02: [
-    { x: -59.5, y: 0, z: -14.0, scale: 1.06, yaw: 0.5 },
-    { x: -59.5, y: 0, z: 14.0, scale: 1.06, yaw: 1.9 },
-    { x: 59.5, y: 0, z: -14.0, scale: 1.06, yaw: 2.7 },
-    { x: 59.5, y: 0, z: 14.0, scale: 1.06, yaw: 0.9 },
-    { x: -24.2, y: 0, z: -44.2, scale: 1.04, yaw: 1.4 },
-    { x: 24.2, y: 0, z: 44.2, scale: 1.04, yaw: 2.2 }
-  ]
+export const MAP_POLYHAVEN_PLACEMENTS = {
+  de_dust2: {
+    covered_car: [
+      // Iconic Dust II Long-A & B-Car landmarks tucked flush against outer walls (clear of spawns & corridors)
+      { x: 36.2, y: 0, z: 6.8, scale: 0.96, yaw: 0.06 },
+      { x: -36.2, y: 0, z: -6.8, scale: 0.96, yaw: Math.PI - 0.06 }
+    ],
+    concrete_road_barrier_02: [
+      // Jersey barriers flanking North & South Mid Sniper Shields
+      { x: -3.65, y: 0, z: -23.4, scale: 0.96, yaw: 0.10 },
+      { x: 3.65, y: 0, z: 23.4, scale: 0.96, yaw: Math.PI + 0.10 }
+    ],
+    Barrel_02: [
+      // Tucked flush against Mid Door outer flanks & A-Goose / B-Site platform corners
+      { x: -10.1, y: 0, z: -17.2, scale: 1.0, yaw: 0.4 },
+      { x: 10.1, y: 0, z: 17.2, scale: 1.0, yaw: 2.1 },
+      { x: 28.4, y: 2.4, z: -26.4, scale: 0.98, yaw: 0.5 },
+      { x: -28.4, y: 2.4, z: -26.4, scale: 0.98, yaw: 2.4 }
+    ],
+    old_military_crate_a: [
+      // Closed ordnance crates crowning Mid crates & A-Goose cover crate
+      { x: -9.5, y: 2.0, z: -10.5, scale: 1.2, yaw: 0.25 },
+      { x: 9.5, y: 2.0, z: 10.5, scale: 1.2, yaw: -0.35 },
+      { x: 22.0, y: 3.7, z: -20.0, scale: 1.15, yaw: 0.12 }
+    ],
+    old_military_crate_b: [
+      // Open cloth-lined military crate on SW B-Car platform crate
+      { x: -22.0, y: 3.7, z: 20.0, scale: 1.15, yaw: 3.0 }
+    ],
+    cement_bag: [
+      // Stacked cement bags on A-Goose, B-Site, and Short A Catwalk ledges
+      { x: 20.8, y: 2.4, z: -26.2, scale: 1.15, yaw: 0.2 },
+      { x: -20.8, y: 2.4, z: -26.2, scale: 1.15, yaw: -0.25 },
+      { x: -5.2, y: 2.4, z: 0.0, scale: 1.1, yaw: 1.48 },
+      { x: 5.2, y: 2.4, z: 0.0, scale: 1.1, yaw: -1.48 }
+    ],
+    ammo_box: [
+      { x: -4.4, y: 3.6, z: 4.4, scale: 1.4, yaw: 0.15 },
+      { x: 4.4, y: 3.6, z: -4.4, scale: 1.4, yaw: -0.2 }
+    ]
+  },
+  de_mirage: {
+    concrete_road_barrier_02: [
+      // Concrete roadblocks flanking CT Spawn & T-Mid cover walls
+      { x: -7.4, y: 0, z: -23.5, scale: 0.96, yaw: 0.08 },
+      { x: -7.8, y: 0, z: 24.5, scale: 0.96, yaw: Math.PI - 0.10 }
+    ],
+    Barrel_02: [
+      // Tucked beside CT Ticket Booth, A-Ramp outer wall & Mid Box
+      { x: 16.3, y: 0, z: -24.6, scale: 1.0, yaw: 0.6 },
+      { x: 16.3, y: 0, z: -23.8, scale: 0.96, yaw: 2.1 },
+      { x: 19.6, y: 0, z: 25.8, scale: 1.0, yaw: 1.3 },
+      { x: -18.2, y: 0, z: 4.4, scale: 1.0, yaw: 2.8 }
+    ],
+    old_military_crate_a: [
+      // Ordnance crates crowning A-Site Triple Box, Firebox & Mid Box
+      { x: 14.5, y: 2.7, z: -4.5, scale: 1.2, yaw: 0.2 },
+      { x: 22.0, y: 2.2, z: -11.5, scale: 1.2, yaw: -0.4 },
+      { x: -16.5, y: 2.2, z: 3.5, scale: 1.25, yaw: 0.6 }
+    ],
+    old_military_crate_b: [
+      // Open cloth-lined military crate on A-Site Default Box
+      { x: 17.5, y: 1.8, z: 2.5, scale: 1.15, yaw: 2.5 }
+    ],
+    cement_bag: [
+      // Cement bags on Palace Balcony, A-Stairs, Mid Window & Short Catwalk corners
+      { x: 30.8, y: 2.4, z: 10.2, scale: 1.15, yaw: 0.3 },
+      { x: -3.8, y: 2.4, z: -7.5, scale: 1.15, yaw: 1.4 },
+      { x: -27.2, y: 2.4, z: -18.8, scale: 1.15, yaw: -0.2 },
+      { x: -29.8, y: 2.4, z: 10.2, scale: 1.15, yaw: 0.5 }
+    ],
+    ammo_box: [
+      { x: 11.4, y: 1.1, z: -22.5, scale: 1.4, yaw: 0.4 },
+      { x: 16.7, y: 1.5, z: -4.5, scale: 1.4, yaw: -0.6 }
+    ]
+  },
+  de_inferno: {
+    covered_car: [
+      // Iconic Inferno Banana Car parked cleanly beside Banana Car cover without overlapping chassis AABB
+      { x: -6.85, y: 0, z: 14.4, scale: 0.95, yaw: 0.05 }
+    ],
+    Barrel_02: [
+      // Tuscan utility/wine barrels flanking New Box, First Oranges, Church Archway & Half-Wall
+      { x: -13.3, y: 0, z: -8.2, scale: 1.0, yaw: 0.3 },
+      { x: -13.3, y: 0, z: -7.4, scale: 0.96, yaw: 1.9 },
+      { x: 13.7, y: 0, z: -8.0, scale: 1.0, yaw: 0.8 },
+      { x: 9.4, y: 0, z: -17.2, scale: 1.0, yaw: 2.2 },
+      { x: 5.2, y: 0, z: 12.6, scale: 0.98, yaw: 1.4 }
+    ],
+    cement_bag: [
+      // Stacked sandbag/cement sacks at Banana Sandbags & B-Site Coffins / Church Cloister
+      { x: -12.2, y: 0, z: 18.2, scale: 1.2, yaw: 0.15 },
+      { x: -12.2, y: 0.20, z: 18.2, scale: 1.15, yaw: -0.10 },
+      { x: -25.4, y: 2.2, z: -24.0, scale: 1.15, yaw: 0.25 },
+      { x: 25.4, y: 2.2, z: -24.0, scale: 1.15, yaw: -0.3 }
+    ],
+    old_military_crate_a: [
+      // Ordnance crates crowning B-Site New Box & First Oranges
+      { x: -11.5, y: 2.4, z: -7.5, scale: 1.2, yaw: 0.22 },
+      { x: 12.0, y: 2.3, z: -7.5, scale: 1.2, yaw: -0.30 }
+    ],
+    ammo_box: [
+      { x: -17.8, y: 3.4, z: -17.8, scale: 1.4, yaw: 0.5 },
+      { x: 11.5, y: 1.36, z: 19.5, scale: 1.4, yaw: -0.15 }
+    ]
+  },
+  de_nuke: {
+    concrete_road_barrier_02: [
+      // Industrial Cedar Creek security barriers in Outside Yard & CT Hell
+      { x: -17.5, y: 0, z: 7.0, scale: 1.0, yaw: 0.08 },
+      { x: -14.8, y: 0, z: -20.5, scale: 0.98, yaw: 0.05 },
+      { x: 14.8, y: 0, z: -22.0, scale: 0.98, yaw: Math.PI - 0.06 }
+    ],
+    Barrel_02: [
+      // Industrial steel facility drums beside Outside Red Container, Blue Box, Main Garage & A Reactor
+      { x: -19.8, y: 0, z: 5.4, scale: 1.04, yaw: 0.4 },
+      { x: -19.8, y: 0, z: 4.6, scale: 1.0, yaw: 2.1 },
+      { x: -9.3, y: 0, z: 15.2, scale: 1.02, yaw: 1.1 },
+      { x: -3.9, y: 0, z: -11.2, scale: 1.02, yaw: 2.7 },
+      { x: 13.3, y: 0, z: -7.2, scale: 1.02, yaw: 0.9 }
+    ],
+    old_military_crate_a: [
+      // Equipment crates atop Outside Blue Box, Secret Deck crate & Heaven Catwalk rear
+      { x: -11.5, y: 2.4, z: 14.5, scale: 1.25, yaw: 0.18 },
+      { x: -22.5, y: 3.6, z: -16.5, scale: 1.15, yaw: -0.12 },
+      { x: 29.2, y: 2.4, z: 8.5, scale: 1.2, yaw: 1.48 }
+    ],
+    old_military_crate_b: [
+      // Open supply crate on A-Site Hut rear corner
+      { x: 15.2, y: 2.4, z: 21.8, scale: 1.15, yaw: 2.6 }
+    ],
+    ammo_box: [
+      { x: 23.1, y: 3.6, z: -5.5, scale: 1.4, yaw: 1.57 },
+      { x: 23.1, y: 3.6, z: 5.5, scale: 1.4, yaw: -1.57 }
+    ]
+  },
+  fy_iceworld: {
+    old_military_crate_a: [
+      // Symmetric alpine ordnance crates atop the 4 corner supply boost boxes
+      { x: -18.5, y: 2.0, z: -18.5, scale: 1.2, yaw: 0.35 },
+      { x: 18.5, y: 2.0, z: -18.5, scale: 1.2, yaw: -0.35 },
+      { x: -18.5, y: 2.0, z: 18.5, scale: 1.2, yaw: -0.35 },
+      { x: 18.5, y: 2.0, z: 18.5, scale: 1.2, yaw: 0.35 }
+    ],
+    ammo_box: [
+      // Symmetric arctic ammo boxes crowning the 4 frost divider walls
+      { x: 0, y: 1.9, z: -14.5, scale: 1.45, yaw: 0.1 },
+      { x: 0, y: 1.9, z: 14.5, scale: 1.45, yaw: Math.PI + 0.1 },
+      { x: -14.5, y: 1.9, z: 0, scale: 1.45, yaw: Math.PI * 0.5 },
+      { x: 14.5, y: 1.9, z: 0, scale: 1.45, yaw: -Math.PI * 0.5 }
+    ],
+    Barrel_02: [
+      // Expedition fuel drums tucked into outer corners of the 4 snow-stone decks
+      { x: -4.2, y: 2.0, z: -23.8, scale: 0.96, yaw: 0.5 },
+      { x: 4.2, y: 2.0, z: 23.8, scale: 0.96, yaw: 2.1 },
+      { x: -23.8, y: 2.0, z: 4.2, scale: 0.96, yaw: 1.2 },
+      { x: 23.8, y: 2.0, z: -4.2, scale: 0.96, yaw: 2.8 }
+    ]
+  },
+  aim_map: {
+    old_military_crate_a: [
+      // Symmetric tactical rifle-range ordnance crates crowning the 4 boost pairs
+      { x: -13.5, y: 2.0, z: -8.0, scale: 1.2, yaw: 0.25 },
+      { x: 13.5, y: 2.0, z: -8.0, scale: 1.2, yaw: -0.25 },
+      { x: -13.5, y: 2.0, z: 8.0, scale: 1.2, yaw: -0.25 },
+      { x: 13.5, y: 2.0, z: 8.0, scale: 1.2, yaw: 0.25 }
+    ],
+    old_military_crate_b: [
+      // Open supply crates on outer corners of West & East AWP elevated decks
+      { x: -23.2, y: 2.0, z: -4.0, scale: 1.12, yaw: 1.55 },
+      { x: 23.2, y: 2.0, z: 4.0, scale: 1.12, yaw: -1.55 }
+    ],
+    ammo_box: [
+      // Symmetric ammo boxes tucked onto outer ends of head-glitch rifle crates
+      { x: -5.6, y: 1.32, z: -17.5, scale: 1.35, yaw: 0.15 },
+      { x: 5.6, y: 1.32, z: -17.5, scale: 1.35, yaw: -0.15 },
+      { x: -5.6, y: 1.32, z: 17.5, scale: 1.35, yaw: -0.15 },
+      { x: 5.6, y: 1.32, z: 17.5, scale: 1.35, yaw: 0.15 }
+    ],
+    Barrel_02: [
+      // Range drums tucked cleanly outside the 4 AWP flank containers
+      { x: -19.6, y: 0, z: -18.0, scale: 0.98, yaw: 0.4 },
+      { x: 19.6, y: 0, z: -18.0, scale: 0.98, yaw: 2.3 },
+      { x: -19.6, y: 0, z: 18.0, scale: 0.98, yaw: 1.5 },
+      { x: 19.6, y: 0, z: 18.0, scale: 0.98, yaw: 2.9 }
+    ]
+  }
 };
+
+function requiredPropIdsForSpec(spec) {
+  if (!spec) return [];
+  const ids = [];
+  if (spec.covered_car?.length) ids.push('covered_car');
+  if (spec.concrete_road_barrier_02?.length) ids.push('concrete_road_barrier_02');
+  if (spec.Barrel_02?.length) ids.push('Barrel_02');
+  if (spec.old_military_crate_a?.length || spec.old_military_crate_b?.length) ids.push('old_military_crate');
+  if (spec.cement_bag?.length) ids.push('cement_bag');
+  if (spec.ammo_box?.length) ids.push('ammo_box');
+  return ids;
+}
 
 /**
- * Asynchronously loads and places Poly Haven 1K glTF props for `desert_outpost` and `cargo_dock`
- * strictly in browser WebGL on Medium/High tiers, with staleness protection across map switches.
+ * Asynchronously loads and places curated Poly Haven 1K glTF props across all 6 CS:GO Wingman/Retake maps
+ * strictly in browser WebGL on Medium/High tiers, with software-WebGL 512px caps and map-switch staleness guards.
  */
 export async function placeMapPolyhavenProps(game, mapCfg, buildSeq) {
   if (!canLoadBrowserPolyhavenProps(game)) return [];
-  const mapId = mapCfg?.id;
-  if (mapId !== 'desert_outpost' && mapId !== 'cargo_dock') return [];
+  const rawMapId = mapCfg?.id;
+  const canonicalMapId = typeof rawMapId === 'string' ? (PROP_MAP_ALIASES[rawMapId] || rawMapId) : null;
+  const spec = canonicalMapId ? MAP_POLYHAVEN_PLACEMENTS[canonicalMapId] : null;
+  if (!spec) return [];
 
-  const isDust = mapId === 'desert_outpost';
-  const ids = isDust ? POLYHAVEN_PROP_IDS : ['Barrel_02', 'concrete_road_barrier_02'];
+  const ids = requiredPropIdsForSpec(spec);
+  if (!ids.length) return [];
+
   const anisotropy = game?.quality?.anisotropy || 4;
   const castShadow = (game?.quality?.shadowMapSize || 0) > 0;
   const maxTextureSize = isSoftwareWebGLRenderer(game?.renderer) ? 512 : 1024;
@@ -501,7 +654,7 @@ export async function placeMapPolyhavenProps(game, mapCfg, buildSeq) {
   // Abort cleanly if the user switched maps, changed quality, or disposed arena resources mid-fetch
   if (
     game._arenaBuildSeq !== buildSeq ||
-    game.currentMapId !== mapId ||
+    game.currentMapId !== rawMapId ||
     !game.worldMeshes?.length ||
     !canLoadBrowserPolyhavenProps(game)
   ) {
@@ -509,7 +662,6 @@ export async function placeMapPolyhavenProps(game, mapCfg, buildSeq) {
   }
 
   const placedMeshes = [];
-  const spec = isDust ? DUST2_PROP_PLACEMENTS : CARGO_DOCK_PROP_PLACEMENTS;
 
   const spawnBatch = (id, list, { filter = null, name = id, shadow = castShadow } = {}) => {
     const gltf = loaded.get(id);
@@ -522,26 +674,21 @@ export async function placeMapPolyhavenProps(game, mapCfg, buildSeq) {
     placedMeshes.push(...batch.flush(game, { castShadow: shadow, receiveShadow: true }));
   };
 
-  if (isDust) {
-    spawnBatch('covered_car', spec.covered_car, { shadow: castShadow });
-    spawnBatch('concrete_road_barrier_02', spec.concrete_road_barrier_02, { shadow: castShadow });
-    spawnBatch('Barrel_02', spec.Barrel_02, { shadow: false });
-    spawnBatch('old_military_crate', spec.old_military_crate_a, {
-      filter: (o) => o.name.endsWith('_a'),
-      name: 'old_military_crate_closed',
-      shadow: false
-    });
-    spawnBatch('old_military_crate', spec.old_military_crate_b, {
-      filter: (o) => o.name.endsWith('_b'),
-      name: 'old_military_crate_open',
-      shadow: false
-    });
-    spawnBatch('cement_bag', spec.cement_bag, { shadow: false });
-    spawnBatch('ammo_box', spec.ammo_box, { shadow: false });
-  } else {
-    spawnBatch('concrete_road_barrier_02', spec.concrete_road_barrier_02, { shadow: castShadow });
-    spawnBatch('Barrel_02', spec.Barrel_02, { shadow: false });
-  }
+  spawnBatch('covered_car', spec.covered_car, { shadow: castShadow });
+  spawnBatch('concrete_road_barrier_02', spec.concrete_road_barrier_02, { shadow: castShadow });
+  spawnBatch('Barrel_02', spec.Barrel_02, { shadow: false });
+  spawnBatch('old_military_crate', spec.old_military_crate_a, {
+    filter: (o) => o.name.endsWith('_a'),
+    name: 'old_military_crate_closed',
+    shadow: false
+  });
+  spawnBatch('old_military_crate', spec.old_military_crate_b, {
+    filter: (o) => o.name.endsWith('_b'),
+    name: 'old_military_crate_open',
+    shadow: false
+  });
+  spawnBatch('cement_bag', spec.cement_bag, { shadow: false });
+  spawnBatch('ammo_box', spec.ammo_box, { shadow: false });
 
   if (placedMeshes.length && game.renderer?.shadowMap) {
     game.renderer.shadowMap.needsUpdate = true;

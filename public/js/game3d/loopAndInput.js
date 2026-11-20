@@ -59,6 +59,42 @@ export function shadowTypeFor(kind) {
 
 export const DEATH_BODY_MAX_MS = 1500;
 
+export const LOBBY_CAMERA_PRESETS = {
+  // Compact Wingman/Retake 6-map camera framing (halfSize 30..38m).
+  // Verified clear of all obstacle AABBs and strictly inside perimeter walls (<= halfSize - 6.5m)
+  // so overview, gunsmith, and operator showcase cameras never clip outside the arena.
+  de_dust2: {
+    harbor: { pos: [-16.0, 11.4, 21.0], amp: [3.2, 0.55, 2.6], freq: [0.12, 0.19, 0.10], look: [4.5, 3.2, -3.5], lookAmp: [2.2, 0.30, 1.8], lookFreq: [0.08, 0.15, 0.11] },
+    weapon: { pos: [-10.0, 5.2, 13.0], amp: [0.65, 0.12, 0.55], freq: [0.15, 0.22, 0.13], look: [8.0, 3.6, -4.5] },
+    operator: { pos: [-10.0, 4.1, 13.5], amp: [0.70, 0.10, 0.60], freq: [0.14, 0.20, 0.12], look: [9.0, 3.0, -5.0] }
+  },
+  de_mirage: {
+    harbor: { pos: [-14.0, 11.8, 20.0], amp: [3.2, 0.55, 2.6], freq: [0.11, 0.18, 0.10], look: [12.0, 3.2, 0.5], lookAmp: [2.4, 0.30, 2.0], lookFreq: [0.08, 0.14, 0.11] },
+    weapon: { pos: [-12.5, 5.2, -3.0], amp: [0.65, 0.12, 0.55], freq: [0.15, 0.21, 0.13], look: [14.5, 3.4, 2.0] },
+    operator: { pos: [-12.5, 4.0, -2.5], amp: [0.70, 0.10, 0.60], freq: [0.14, 0.20, 0.12], look: [15.0, 3.0, 2.5] }
+  },
+  de_inferno: {
+    harbor: { pos: [-12.0, 11.2, 19.5], amp: [3.0, 0.50, 2.4], freq: [0.12, 0.19, 0.10], look: [1.0, 2.4, -3.5], lookAmp: [2.0, 0.26, 1.8], lookFreq: [0.09, 0.15, 0.11] },
+    weapon: { pos: [-9.0, 5.2, 1.5], amp: [0.60, 0.12, 0.55], freq: [0.15, 0.22, 0.13], look: [3.5, 2.4, -5.0] },
+    operator: { pos: [-9.0, 4.0, 2.0], amp: [0.65, 0.10, 0.60], freq: [0.14, 0.20, 0.12], look: [4.0, 2.2, -5.5] }
+  },
+  de_nuke: {
+    harbor: { pos: [-19.5, 12.6, 21.5], amp: [3.2, 0.60, 2.6], freq: [0.11, 0.18, 0.10], look: [6.0, 3.6, -1.0], lookAmp: [2.4, 0.32, 2.0], lookFreq: [0.08, 0.14, 0.11] },
+    weapon: { pos: [-11.5, 5.4, -2.5], amp: [0.65, 0.12, 0.55], freq: [0.15, 0.22, 0.13], look: [10.5, 3.6, 0.5] },
+    operator: { pos: [-11.5, 4.1, -2.0], amp: [0.70, 0.10, 0.60], freq: [0.14, 0.20, 0.12], look: [11.0, 3.0, 0.5] }
+  },
+  fy_iceworld: {
+    harbor: { pos: [-17.5, 11.2, 17.5], amp: [2.8, 0.50, 2.4], freq: [0.12, 0.19, 0.11], look: [0.5, 2.6, -0.5], lookAmp: [1.8, 0.25, 1.8], lookFreq: [0.09, 0.15, 0.11] },
+    weapon: { pos: [-16.0, 5.4, 16.0], amp: [0.60, 0.11, 0.55], freq: [0.15, 0.22, 0.13], look: [2.5, 2.8, -2.5] },
+    operator: { pos: [-15.8, 4.2, 16.2], amp: [0.65, 0.10, 0.60], freq: [0.14, 0.20, 0.12], look: [3.0, 2.5, -3.0] }
+  },
+  aim_map: {
+    harbor: { pos: [-14.5, 10.2, 16.5], amp: [2.8, 0.48, 2.4], freq: [0.13, 0.20, 0.11], look: [0.5, 2.4, -0.5], lookAmp: [1.8, 0.24, 1.6], lookFreq: [0.09, 0.15, 0.11] },
+    weapon: { pos: [-11.5, 5.0, 8.0], amp: [0.55, 0.11, 0.50], freq: [0.15, 0.22, 0.13], look: [4.5, 2.4, -3.5] },
+    operator: { pos: [-11.5, 3.9, 8.5], amp: [0.60, 0.10, 0.55], freq: [0.14, 0.20, 0.12], look: [5.0, 2.2, -4.0] }
+  }
+};
+
 export class LoopAndInputMethods {
   animate(now) {
     requestAnimationFrame(this.animate);
@@ -140,83 +176,37 @@ export class LoopAndInputMethods {
 
     if (!this.inMatch) {
       const tSec = now * 0.001;
-      const half = this.arenaHalfSize || 60;
+      const half = this.arenaHalfSize || 38;
+      const safeBound = Math.max(8, half - 6.5);
       const camMode = this.lobbyCameraMode || 'harbor';
-      const mapId = this.currentMapConfig?.id || this.currentMapId;
-      const isHarborMap = mapId === 'cargo_dock';
-      const isDustMap = mapId === 'desert_outpost';
+      const mapId = this.currentMapConfig?.id || this.currentMapId || DEFAULT_MAP_ID;
+      const mapPresets = LOBBY_CAMERA_PRESETS[mapId] || LOBBY_CAMERA_PRESETS.de_dust2;
+      const preset = mapPresets[camMode] || mapPresets.harbor;
 
       if (!this._lobbyCamPos) {
-        this._lobbyCamPos = isDustMap
-          ? new THREE.Vector3(-22, 10.5, 28)
-          : new THREE.Vector3(-25, 12.4, 34);
-        this._lobbyLookTarget = isDustMap
-          ? new THREE.Vector3(4, 4.0, -6)
-          : new THREE.Vector3(18, 7.4, -6);
+        this._lobbyCamPos = new THREE.Vector3(preset.pos[0], preset.pos[1], preset.pos[2]);
+        this._lobbyLookTarget = new THREE.Vector3(preset.look[0], preset.look[1], preset.look[2]);
         this._lobbyDesiredPos = new THREE.Vector3();
         this._lobbyDesiredLook = new THREE.Vector3();
       }
 
-      if (isDustMap) {
-        if (camMode === 'harbor') {
-          this._lobbyDesiredPos.set(
-            -22.0 + Math.sin(tSec * 0.12) * 4.8,
-            10.5 + Math.sin(tSec * 0.19) * 0.65,
-            28.0 + Math.cos(tSec * 0.10) * 3.8
-          );
-          this._lobbyDesiredLook.set(
-            4.0 + Math.sin(tSec * 0.08) * 3.0,
-            4.0 + Math.sin(tSec * 0.15) * 0.35,
-            -6.0 + Math.cos(tSec * 0.11) * 2.5
-          );
-        } else if (camMode === 'weapon') {
-          this._lobbyDesiredPos.set(
-            -14.5 + Math.sin(tSec * 0.15) * 0.85,
-            4.9 + Math.sin(tSec * 0.22) * 0.14,
-            21.5 + Math.cos(tSec * 0.13) * 0.75
-          );
-          this._lobbyDesiredLook.set(10.0, 4.2, -8.0);
-        } else {
-          this._lobbyDesiredPos.set(
-            -15.5 + Math.sin(tSec * 0.14) * 1.0,
-            3.65 + Math.sin(tSec * 0.20) * 0.12,
-            23.0 + Math.cos(tSec * 0.12) * 0.9
-          );
-          this._lobbyDesiredLook.set(12.0, 3.2, -9.0);
-        }
-      } else if (isHarborMap) {
-        if (camMode === 'harbor') {
-          this._lobbyDesiredPos.set(
-            -25.0 + Math.sin(tSec * 0.13) * 7.5,
-            12.2 + Math.sin(tSec * 0.21) * 0.9,
-            34.0 + Math.cos(tSec * 0.11) * 5.5
-          );
-          this._lobbyDesiredLook.set(
-            18.0 + Math.sin(tSec * 0.09) * 4.0,
-            7.2 + Math.sin(tSec * 0.16) * 0.45,
-            -6.0 + Math.cos(tSec * 0.12) * 3.5
-          );
-        } else if (camMode === 'weapon') {
-          this._lobbyDesiredPos.set(
-            -15.0 + Math.sin(tSec * 0.16) * 1.1,
-            5.2 + Math.sin(tSec * 0.23) * 0.16,
-            22.0 + Math.cos(tSec * 0.14) * 0.95
-          );
-          this._lobbyDesiredLook.set(12.0, 4.5, -6.0);
-        } else {
-          this._lobbyDesiredPos.set(
-            -17.0 + Math.sin(tSec * 0.15) * 1.3,
-            3.85 + Math.sin(tSec * 0.22) * 0.14,
-            25.0 + Math.cos(tSec * 0.13) * 1.1
-          );
-          this._lobbyDesiredLook.set(14.0, 3.4, -7.0);
-        }
+      const rawX = preset.pos[0] + Math.sin(tSec * preset.freq[0]) * preset.amp[0];
+      const rawY = preset.pos[1] + Math.sin(tSec * preset.freq[1]) * preset.amp[1];
+      const rawZ = preset.pos[2] + Math.cos(tSec * preset.freq[2]) * preset.amp[2];
+      this._lobbyDesiredPos.set(
+        Math.max(-safeBound, Math.min(safeBound, rawX)),
+        rawY,
+        Math.max(-safeBound, Math.min(safeBound, rawZ))
+      );
+
+      if (preset.lookAmp && preset.lookFreq) {
+        this._lobbyDesiredLook.set(
+          preset.look[0] + Math.sin(tSec * preset.lookFreq[0]) * preset.lookAmp[0],
+          preset.look[1] + Math.sin(tSec * preset.lookFreq[1]) * preset.lookAmp[1],
+          preset.look[2] + Math.cos(tSec * preset.lookFreq[2]) * preset.lookAmp[2]
+        );
       } else {
-        const angle = tSec * (camMode === 'harbor' ? 0.11 : 0.045);
-        const orbitR = half * (camMode === 'harbor' ? 0.54 : 0.42);
-        const camY = camMode === 'harbor' ? 14.2 + Math.sin(tSec * 0.2) * 0.8 : camMode === 'weapon' ? 5.2 : 3.9;
-        this._lobbyDesiredPos.set(Math.cos(angle) * orbitR, camY, Math.sin(angle) * orbitR);
-        this._lobbyDesiredLook.set(0, camMode === 'harbor' ? 3.5 : 3.0, 0);
+        this._lobbyDesiredLook.set(preset.look[0], preset.look[1], preset.look[2]);
       }
 
       const dampAlpha = !this._lobbyCamInitialized || dt <= 0 ? 1 : 1 - Math.exp(-dt * 4.6);
@@ -394,24 +384,24 @@ export class LoopAndInputMethods {
     }
 
     for (const item of this.pickupMeshes.values()) {
-      if (item.crossGroup.visible) {
-        item.crossGroup.rotation.y = now * 0.0024;
-        item.crossGroup.position.y = 1.12 + Math.sin(now * 0.004) * 0.15;
+      if (item.crossGroup) {
+        item.crossGroup.rotation.y = 0;
+        item.crossGroup.position.y = 0.04;
       }
     }
     for (let j = 0; j < this.jumpPadMeshes.length; j++) {
       const jp = this.jumpPadMeshes[j];
-      const phase1 = ((now * 0.0015 + j * 0.25) % 1);
-      const phase2 = ((now * 0.0015 + j * 0.25 + 0.5) % 1);
+      const phase1 = ((now * 0.0012 + j * 0.25) % 1);
+      const phase2 = ((now * 0.0012 + j * 0.25 + 0.5) % 1);
       if (jp.ring1) {
-        jp.ring1.position.y = 0.2 + phase1 * 0.85;
-        jp.ringMat1.opacity = (1 - phase1) * 0.85;
-        jp.ring1.scale.setScalar(0.85 + phase1 * 0.35);
+        jp.ring1.position.y = 0.08 + phase1 * 0.20;
+        jp.ringMat1.opacity = (1 - phase1) * 0.11;
+        jp.ring1.scale.setScalar(0.92 + phase1 * 0.14);
       }
       if (jp.ring2) {
-        jp.ring2.position.y = 0.2 + phase2 * 0.85;
-        jp.ringMat2.opacity = (1 - phase2) * 0.85;
-        jp.ring2.scale.setScalar(0.85 + phase2 * 0.35);
+        jp.ring2.position.y = 0.08 + phase2 * 0.20;
+        jp.ringMat2.opacity = (1 - phase2) * 0.11;
+        jp.ring2.scale.setScalar(0.92 + phase2 * 0.14);
       }
     }
 

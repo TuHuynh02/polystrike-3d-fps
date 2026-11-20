@@ -87,6 +87,27 @@ export class AssetManager {
   }
 
   // ---------------------------------------------------------------- models
+  _applyGltfTextureAnisotropy(scene) {
+    if (!scene?.traverse) return;
+    const target = Math.min(this.maxAnisotropy || 4, 8);
+    const slots = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap'];
+    scene.traverse((o) => {
+      if (!o?.isMesh || !o.material) return;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (let i = 0; i < mats.length; i++) {
+        const m = mats[i];
+        if (!m) continue;
+        for (let s = 0; s < slots.length; s++) {
+          const tex = m[slots[s]];
+          if (tex && (tex.anisotropy || 0) < target) {
+            tex.anisotropy = target;
+            tex.needsUpdate = true;
+          }
+        }
+      }
+    });
+  }
+
   async _getLoader() {
     if (!this._loaderPromise) {
       this._loaderPromise = this.importGltfLoader().then((Cls) => new Cls());
@@ -110,6 +131,7 @@ export class AssetManager {
         const loader = await this._getLoader();
         const gltf = await loader.loadAsync(url);
         if (!gltf?.scene) throw new Error('empty glTF scene');
+        this._applyGltfTextureAnisotropy(gltf.scene);
         this.loadedModels.set(name, gltf);
         return gltf;
       } catch (err) {
@@ -133,6 +155,7 @@ export class AssetManager {
         const loader = await this._getLoader();
         const gltf = await loader.loadAsync(url);
         if (!gltf?.scene) throw new Error('empty glTF scene');
+        this._applyGltfTextureAnisotropy(gltf.scene);
         this.loadedGltfAssets.set(cleanRel, gltf);
         return gltf;
       } catch (err) {

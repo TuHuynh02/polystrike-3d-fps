@@ -207,13 +207,13 @@ export async function runScenario(opts) {
   let room;
   let viewer;
   withClock(clock, () => {
-    const res = rm.addHumanPlayer({ id: 'viewer' }, { name: 'viewer', roomCode: 'IMPAIR', mode: 'private', mapId: 'cyber_citadel' });
+    const res = rm.addHumanPlayer({ id: 'viewer' }, { name: 'viewer', roomCode: 'IMPAIR', mode: 'private', mapId: 'de_dust2' });
     room = res.room;
     viewer = res.player;
     viewer.invulnerableUntil = 0;
     for (let i = 0; i < remotes; i++) {
       const id = `r${i}`;
-      const r = rm.addHumanPlayer({ id }, { name: id, roomCode: 'IMPAIR', mode: 'private', mapId: 'cyber_citadel' });
+      const r = rm.addHumanPlayer({ id }, { name: id, roomCode: 'IMPAIR', mode: 'private', mapId: 'de_dust2' });
       r.player.invulnerableUntil = 0;
       ids.push(id);
       players.push(r.player);

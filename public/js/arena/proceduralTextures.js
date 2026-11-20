@@ -969,3 +969,323 @@ export function createBombsiteDecalAtlasTexture(game) {
   game?.arenaTextures?.add(tex);
   return tex;
 }
+
+const _archCanvasCache = new Map();
+const _archTexCacheByGame = new WeakMap();
+const _archTexFallbackCache = new Map();
+
+function getOrCreateCachedArchTexture(game, cacheKey, size, drawFn) {
+  if (typeof document === 'undefined') return null;
+
+  const anisotropy = Math.min(8, game?.quality?.anisotropy || 4);
+  let texMap = _archTexFallbackCache;
+  if (game && typeof game === 'object') {
+    texMap = _archTexCacheByGame.get(game);
+    if (!texMap) {
+      texMap = new Map();
+      _archTexCacheByGame.set(game, texMap);
+    }
+  }
+
+  const cached = texMap.get(cacheKey);
+  if (cached) {
+    cached.anisotropy = anisotropy;
+    game?.arenaTextures?.add(cached);
+    return cached;
+  }
+
+  let canvas = _archCanvasCache.get(cacheKey);
+  if (!canvas) {
+    canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext?.('2d');
+    if (!ctx) return null;
+    drawFn(ctx, size);
+    _archCanvasCache.set(cacheKey, canvas);
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  if ('colorSpace' in tex && THREE.SRGBColorSpace) {
+    tex.colorSpace = THREE.SRGBColorSpace;
+  }
+  tex.anisotropy = anisotropy;
+  tex.needsUpdate = true;
+  tex.addEventListener?.('dispose', () => {
+    if (texMap.get(cacheKey) === tex) {
+      texMap.delete(cacheKey);
+    }
+  });
+  texMap.set(cacheKey, tex);
+  game?.arenaTextures?.add(tex);
+  return tex;
+}
+
+/**
+ * Cached 512x512 seamless scalloped Italian terracotta barrel-tile roof texture (`de_inferno` roofs).
+ * Returns null safely in headless Node environments without `document`.
+ */
+export function createTerracottaTileTexture(game) {
+  return getOrCreateCachedArchTexture(game, 'terracotta_tiles_v1', 512, (ctx, size) => {
+    ctx.fillStyle = '#8b3e26';
+    ctx.fillRect(0, 0, size, size);
+
+    const cols = 8;
+    const rows = 8;
+    const tileW = size / cols;
+    const tileH = size / rows;
+    const clayPalette = ['#b85435', '#a9492c', '#c3613e', '#9d4329', '#b05132', '#c96b45'];
+
+    for (let r = 0; r < rows; r++) {
+      const y0 = r * tileH;
+      for (let c = 0; c < cols; c++) {
+        const x0 = c * tileW;
+        const toneIdx = (r * 13 + c * 7 + (r % 2) * 3) % clayPalette.length;
+        ctx.fillStyle = clayPalette[toneIdx];
+        ctx.fillRect(x0, y0, tileW, tileH);
+
+        // Barrel ridge cylindrical highlight & side valley troughs
+        const barrelGrad = ctx.createLinearGradient(x0, 0, x0 + tileW, 0);
+        barrelGrad.addColorStop(0.0, 'rgba(24, 9, 5, 0.44)');
+        barrelGrad.addColorStop(0.22, 'rgba(255, 224, 198, 0.08)');
+        barrelGrad.addColorStop(0.46, 'rgba(255, 234, 210, 0.24)');
+        barrelGrad.addColorStop(0.76, 'rgba(0, 0, 0, 0.06)');
+        barrelGrad.addColorStop(1.0, 'rgba(24, 9, 5, 0.46)');
+        ctx.fillStyle = barrelGrad;
+        ctx.fillRect(x0, y0, tileW, tileH);
+
+        // Vertical course overlap shading (upper edge tucked under course above)
+        const courseGrad = ctx.createLinearGradient(0, y0, 0, y0 + tileH);
+        courseGrad.addColorStop(0.0, 'rgba(20, 8, 4, 0.48)');
+        courseGrad.addColorStop(0.24, 'rgba(0, 0, 0, 0.0)');
+        courseGrad.addColorStop(0.84, 'rgba(255, 214, 182, 0.14)');
+        courseGrad.addColorStop(1.0, 'rgba(255, 224, 196, 0.18)');
+        ctx.fillStyle = courseGrad;
+        ctx.fillRect(x0, y0, tileW, tileH);
+
+        // Vertical valley mortar shadow seam
+        ctx.fillStyle = 'rgba(22, 8, 4, 0.34)';
+        ctx.fillRect(x0, y0, 2, tileH);
+      }
+    }
+
+    // Scalloped curved lower barrel lips + shadow grooves (wrapped seamlessly at top/bottom)
+    for (let r = -1; r <= rows; r++) {
+      const lipY = r * tileH + tileH - 7;
+      for (let c = 0; c < cols; c++) {
+        const cx = c * tileW + tileW * 0.5;
+        ctx.strokeStyle = 'rgba(20, 7, 4, 0.58)';
+        ctx.lineWidth = 4.5;
+        ctx.beginPath();
+        ctx.arc(cx, lipY - 4, tileW * 0.45, 0.12 * Math.PI, 0.88 * Math.PI);
+        ctx.stroke();
+
+        ctx.strokeStyle = 'rgba(246, 198, 166, 0.26)';
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.arc(cx, lipY - 7, tileW * 0.44, 0.15 * Math.PI, 0.85 * Math.PI);
+        ctx.stroke();
+      }
+    }
+
+    // Kiln mineral grain & subtle lichen/soot weathering patches
+    for (let i = 0; i < 1800; i++) {
+      const gx = (i * 79 + 17) % size;
+      const gy = (i * 131 + 29) % size;
+      const sz = (i % 3) + 1;
+      ctx.fillStyle = i % 5 === 0
+        ? 'rgba(248, 220, 192, 0.09)'
+        : i % 3 === 0
+          ? 'rgba(32, 14, 8, 0.12)'
+          : 'rgba(92, 84, 54, 0.075)';
+      ctx.fillRect(gx, gy, sz, sz);
+    }
+
+    for (let w = 0; w < 14; w++) {
+      const wx = ((w * 137 + 42) % (size - 80)) + 40;
+      const wy = ((w * 193 + 36) % (size - 80)) + 40;
+      const rad = 28 + (w % 4) * 14;
+      const wg = ctx.createRadialGradient(wx, wy, 4, wx, wy, rad);
+      wg.addColorStop(0, w % 2 === 0 ? 'rgba(34, 18, 12, 0.16)' : 'rgba(110, 98, 62, 0.12)');
+      wg.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = wg;
+      ctx.fillRect(wx - rad, wy - rad, rad * 2, rad * 2);
+    }
+  });
+}
+
+/**
+ * Cached 512x512 seamless matte woven linen/canvas fabric texture with sun-faded stripes
+ * and stitched panel seams (`de_mirage` awnings). Returns null safely in headless Node.
+ */
+export function createWovenAwningTexture(game, baseHex = 0xb85838, stripeHex = null) {
+  const baseColor = new THREE.Color(baseHex ?? 0xb85838);
+  const stripeColor = stripeHex != null
+    ? new THREE.Color(stripeHex)
+    : baseColor.clone().lerp(new THREE.Color(0xf0e2ca), 0.44);
+  const key = `awning_${baseColor.getHexString()}_${stripeColor.getHexString()}_v1`;
+
+  return getOrCreateCachedArchTexture(game, key, 512, (ctx, size) => {
+    ctx.fillStyle = `#${baseColor.getHexString()}`;
+    ctx.fillRect(0, 0, size, size);
+
+    const stripeCss = `#${stripeColor.getHexString()}`;
+    // Two seamless 256px stripe pattern repeats across 512px
+    for (const ox of [0, 256]) {
+      ctx.fillStyle = stripeCss;
+      ctx.fillRect(ox + 16, 0, 88, size);
+      ctx.fillRect(ox + 124, 0, 14, size);
+      // Soft sun-bleached edge fade along stripes
+      ctx.fillStyle = 'rgba(255, 246, 228, 0.08)';
+      ctx.fillRect(ox + 16, 0, 22, size);
+      ctx.fillStyle = 'rgba(28, 16, 8, 0.07)';
+      ctx.fillRect(ox + 100, 0, 4, size);
+    }
+
+    // Subtle fabric sun-fade & sag shading gradient
+    const clothGrad = ctx.createLinearGradient(0, 0, 0, size);
+    clothGrad.addColorStop(0.0, 'rgba(255, 248, 232, 0.09)');
+    clothGrad.addColorStop(0.5, 'rgba(0, 0, 0, 0.03)');
+    clothGrad.addColorStop(1.0, 'rgba(28, 18, 10, 0.11)');
+    ctx.fillStyle = clothGrad;
+    ctx.fillRect(0, 0, size, size);
+
+    // Tight linen/canvas warp & weft weave
+    for (let y = 0; y < size; y += 4) {
+      ctx.fillStyle = y % 8 === 0 ? 'rgba(255, 248, 236, 0.07)' : 'rgba(24, 14, 8, 0.08)';
+      ctx.fillRect(0, y, size, 1.5);
+    }
+    for (let x = 0; x < size; x += 4) {
+      ctx.fillStyle = x % 8 === 0 ? 'rgba(255, 248, 236, 0.06)' : 'rgba(24, 14, 8, 0.07)';
+      ctx.fillRect(x, 0, 1.5, size);
+    }
+
+    // Slub yarn micro-fibers for natural canvas grain
+    for (let i = 0; i < 1200; i++) {
+      const fx = (i * 83 + 11) % size;
+      const fy = (i * 113 + 19) % size;
+      const len = 5 + (i % 7);
+      ctx.fillStyle = i % 2 === 0 ? 'rgba(255, 246, 230, 0.055)' : 'rgba(22, 14, 8, 0.065)';
+      if (i % 3 === 0) ctx.fillRect(fx, fy, 1.5, len);
+      else ctx.fillRect(fx, fy, len, 1.5);
+    }
+
+    // Stitched canvas panel seams (vertical at x=128/384, horizontal hem at y=256)
+    for (const sx of [128, 384]) {
+      ctx.fillStyle = 'rgba(20, 12, 6, 0.22)';
+      ctx.fillRect(sx - 2, 0, 4, size);
+      ctx.fillStyle = 'rgba(242, 230, 206, 0.45)';
+      for (let sy = 4; sy < size; sy += 10) {
+        ctx.fillRect(sx - 5, sy, 1.5, 5);
+        ctx.fillRect(sx + 4, sy + 2, 1.5, 5);
+      }
+    }
+    ctx.fillStyle = 'rgba(20, 12, 6, 0.22)';
+    ctx.fillRect(0, 254, size, 4);
+    ctx.fillStyle = 'rgba(242, 230, 206, 0.45)';
+    for (let sx = 4; sx < size; sx += 10) {
+      ctx.fillRect(sx, 249, 5, 1.5);
+      ctx.fillRect(sx + 2, 260, 5, 1.5);
+    }
+
+    // Subtle desert dust weathering blotches
+    for (let w = 0; w < 10; w++) {
+      const wx = ((w * 151 + 44) % (size - 80)) + 40;
+      const wy = ((w * 197 + 52) % (size - 80)) + 40;
+      const rad = 32 + (w % 3) * 18;
+      const wg = ctx.createRadialGradient(wx, wy, 4, wx, wy, rad);
+      wg.addColorStop(0, w % 2 === 0 ? 'rgba(222, 198, 160, 0.11)' : 'rgba(42, 26, 14, 0.09)');
+      wg.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = wg;
+      ctx.fillRect(wx - rad, wy - rad, rad * 2, rad * 2);
+    }
+  });
+}
+
+/**
+ * Cached 512x512 seamless mottled precast concrete coping texture with subtle expansion joints
+ * (`aim_map` coping slabs). Returns null safely in headless Node.
+ */
+export function createWeatheredConcreteCapTexture(game, baseHex = 0xa8a49c) {
+  const baseColor = new THREE.Color(baseHex ?? 0xa8a49c);
+  const key = `concrete_cap_${baseColor.getHexString()}_v1`;
+
+  return getOrCreateCachedArchTexture(game, key, 512, (ctx, size) => {
+    ctx.fillStyle = `#${baseColor.getHexString()}`;
+    ctx.fillRect(0, 0, size, size);
+
+    // Soft multi-scale cement mottling (wrapped seamlessly across edges)
+    const offsets = [0, -size, size];
+    for (let w = 0; w < 18; w++) {
+      const wx = (w * 139 + 37) % size;
+      const wy = (w * 191 + 61) % size;
+      const rad = 36 + (w % 4) * 20;
+      const inner = w % 2 === 0 ? 'rgba(242, 240, 234, 0.09)' : 'rgba(38, 40, 42, 0.10)';
+      for (const ox of offsets) {
+        for (const oy of offsets) {
+          const cx = wx + ox;
+          const cy = wy + oy;
+          if (cx + rad < 0 || cx - rad > size || cy + rad < 0 || cy - rad > size) continue;
+          const wg = ctx.createRadialGradient(cx, cy, 4, cx, cy, rad);
+          wg.addColorStop(0, inner);
+          wg.addColorStop(1, 'rgba(0, 0, 0, 0)');
+          ctx.fillStyle = wg;
+          ctx.fillRect(cx - rad, cy - rad, rad * 2, rad * 2);
+        }
+      }
+    }
+
+    // Fine aggregate limestone/basalt concrete grain
+    for (let i = 0; i < 2600; i++) {
+      const gx = (i * 73 + 13) % size;
+      const gy = (i * 127 + 31) % size;
+      const sz = (i % 3) + 1;
+      ctx.fillStyle = i % 5 === 0
+        ? 'rgba(246, 244, 238, 0.095)'
+        : i % 3 === 0
+          ? 'rgba(26, 28, 30, 0.105)'
+          : 'rgba(182, 174, 158, 0.075)';
+      ctx.fillRect(gx, gy, sz, sz);
+    }
+
+    // Precast coping expansion joints with chamfer highlight
+    ctx.strokeStyle = 'rgba(26, 28, 30, 0.48)';
+    ctx.lineWidth = 3;
+    for (const pos of [0, 256]) {
+      ctx.beginPath();
+      ctx.moveTo(pos, 0);
+      ctx.lineTo(pos, size);
+      ctx.moveTo(0, pos);
+      ctx.lineTo(size, pos);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = 'rgba(248, 246, 240, 0.15)';
+    ctx.lineWidth = 1.5;
+    for (const pos of [2.5, 258.5]) {
+      ctx.beginPath();
+      ctx.moveTo(pos, 0);
+      ctx.lineTo(pos, size);
+      ctx.moveTo(0, pos);
+      ctx.lineTo(size, pos);
+      ctx.stroke();
+    }
+
+    // Subtle hairline curing micro-cracks
+    ctx.strokeStyle = 'rgba(32, 34, 36, 0.28)';
+    ctx.lineWidth = 1;
+    for (let c = 0; c < 6; c++) {
+      let cx = ((c * 149 + 48) % (size - 100)) + 50;
+      let cy = ((c * 211 + 54) % (size - 100)) + 50;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      for (let s = 0; s < 5; s++) {
+        cx += (c + s) % 2 === 0 ? 11 : -8;
+        cy += (c * s) % 3 === 0 ? 12 : -7;
+        ctx.lineTo(cx, cy);
+      }
+      ctx.stroke();
+    }
+  });
+}

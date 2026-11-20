@@ -24,7 +24,7 @@ import {
 } from '../shared.js';
 import { ClientPrediction, INPUT_BATCH_INTERVAL_MS } from '../prediction.js';
 import { SnapshotInterpolator } from '../snapshotBuffer.js';
-import { createProceduralEnvironmentMap, buildSkyAndAtmosphere, buildArena } from '../arenaBuilder.js';
+import { createProceduralEnvironmentMap, buildSkyAndAtmosphere, buildArena, mergeMeshGeometries } from '../arenaBuilder.js';
 import {
   applyDustHdriSky,
   getMapAtmospherePreset,
@@ -62,6 +62,7 @@ import {
 } from '../surfaceMaterials.js';
 import { CRATE_MODEL_NAMES, isPropOverrideEnabled } from '../arenaProps.js';
 import { applyWeaponAssetOverride, isWeaponOverrideEnabled, measureWeaponGroup } from '../weaponAssetOverrides.js';
+import { getSharedSmokeTex } from './combatEffects.js';
 
 export function shadowTypeFor(kind) {
   if (kind === 'pcfsoft') return THREE.PCFSoftShadowMap;
@@ -70,6 +71,9 @@ export function shadowTypeFor(kind) {
 }
 
 export const DEATH_BODY_MAX_MS = 1500;
+
+// Arid/Mediterranean CS:GO maps use muted amber jump pads and 0.28x damped floor wetness
+const ARID_CSGO_MAPS = new Set(['de_dust2', 'de_mirage', 'de_inferno']);
 
 // Preload hero 3P tactical operator, its Mixamo clip donor, and primary rifle at boot; secondary weapons load lazily on demand
 const CS2_GLB_PRELOAD_PATHS = [
@@ -99,9 +103,12 @@ export class SceneWorldMethods {
 
   _getShadowExtent(q = this.quality) {
     const mapSize = this._getEffectiveShadowMapSize(q);
-    if (mapSize >= 2048) return 40;
-    if (mapSize > 0) return 34;
-    return (this.arenaHalfSize || 60) + 4;
+    if (mapSize <= 0) return (this.arenaHalfSize || 60) + 4;
+    const arenaCap = (this.arenaHalfSize || 38) + 2;
+    if (this.inMatch) {
+      return Math.min(mapSize >= 2048 ? 28 : 24, arenaCap);
+    }
+    return Math.min(mapSize >= 2048 ? 36 : 32, arenaCap);
   }
 
   _configureDirectionalShadowFrustum(atmo) {
@@ -132,13 +139,13 @@ export class SceneWorldMethods {
     cam.right = extent;
     cam.top = extent;
     cam.bottom = -extent;
-    cam.near = 20;
-    cam.far = 240;
+    cam.near = 25;
+    cam.far = 225;
     cam.updateProjectionMatrix();
 
-    this.dirLight.shadow.bias = -0.00008;
-    this.dirLight.shadow.normalBias = 0.018;
-    this.dirLight.shadow.radius = 1.8;
+    this.dirLight.shadow.bias = -0.00006;
+    this.dirLight.shadow.normalBias = 0.016;
+    this.dirLight.shadow.radius = 1.6;
     this.dirLight.target.position.set(0, 0, 0);
     this.dirLight.position.copy(this._shadowSunDir).multiplyScalar(this._shadowDistance);
     this.dirLight.target.updateMatrixWorld();
@@ -192,7 +199,7 @@ export class SceneWorldMethods {
     if (isRealWebGL) {
       const isSoftwareGl = isSoftwareWebGLRenderer(this.renderer);
       if (!isSoftwareGl) {
-        installStablePCF({ taps: 4, maxSlope: 3.0, extent: 40, depthRange: 220 });
+        installStablePCF({ taps: 8, maxSlope: 3.0, extent: 30, depthRange: 200 });
       } else {
         // Runtime-only VRAM cap on software rasterizers without mutating QUALITY presets
         this.maxPixelRatio = this._getEffectiveMaxPixelRatio(this.quality);
@@ -488,6 +495,8 @@ export class SceneWorldMethods {
       this.minimap?.setMap?.(mapCfg);
     }
     if (this.dirLight) {
+      const atmo = getMapAtmospherePreset(this.currentMapId, this.currentMapConfig?.theme || {});
+      this._configureDirectionalShadowFrustum(atmo);
       const focusX = this.position?.x || 0;
       const focusZ = this.position?.z || 0;
       this.updateDirectionalShadowAnchor(focusX, focusZ, { force: true });
@@ -498,15 +507,23 @@ export class SceneWorldMethods {
   }
 
   clearPickups() {
+    const geos = new Set();
+    const mats = new Set();
     for (const item of this.pickupMeshes.values()) {
       this.scene.remove(item.group);
       item.group.traverse((obj) => {
         if (obj.isMesh) {
-          obj.geometry?.dispose();
-          obj.material?.dispose();
+          if (obj.geometry) geos.add(obj.geometry);
+          if (Array.isArray(obj.material)) {
+            for (let i = 0; i < obj.material.length; i++) mats.add(obj.material[i]);
+          } else if (obj.material) {
+            mats.add(obj.material);
+          }
         }
       });
     }
+    for (const geo of geos) geo.dispose?.();
+    for (const mat of mats) mat.dispose?.();
     this.pickupMeshes.clear();
   }
 
@@ -561,7 +578,7 @@ export class SceneWorldMethods {
 
     this.buildSkyAndAtmosphere(theme, this.arenaHalfSize);
     this.buildArena(mapCfg);
-    if (this.floorMat && this.currentMapId === 'desert_outpost') {
+    if (this.floorMat && ARID_CSGO_MAPS.has(this.currentMapId)) {
       const effWet = this._effectiveWetFloorStrength(this.quality);
       if (this.floorMat.userData?.wetFloorStrength !== effWet) {
         applySaltlineWetFloorShader(this.floorMat, effWet);
@@ -640,6 +657,231 @@ export class SceneWorldMethods {
       }
     }
 
+    const opGroup = this.lobbyOperator?.group || null;
+    const prevOpVisible = opGroup ? Boolean(opGroup.visible) : false;
+    const opFlash = this.lobbyOperator?.gunMesh?.userData?.flashMesh || null;
+    const prevOpFlashVisible = opFlash ? Boolean(opFlash.visible) : false;
+    if (opGroup) opGroup.visible = true;
+    if (opFlash) opFlash.visible = true;
+
+    this._ensureBulletDecalMaterial?.();
+
+    const prewarmGroup = new THREE.Group();
+    prewarmGroup.name = '__prewarm_fx__';
+    prewarmGroup.position.set(0, -250, 0);
+    const pooledBack = [];
+
+    const addWarmMesh = (geo, mat) => {
+      if (!geo || !mat) return null;
+      const m = new THREE.Mesh(geo, mat);
+      m.frustumCulled = false;
+      prewarmGroup.add(m);
+      return m;
+    };
+
+    addWarmMesh(this.sharedShellGeo, this.sharedShellMat);
+    addWarmMesh(this.sharedDecalGeo, this.sharedDecalMat);
+    addWarmMesh(this.sharedGrenadeBodyGeo, this.sharedGrenadeBodyMat);
+    addWarmMesh(this.sharedGrenadeBandGeo, this.sharedGrenadeBandMat);
+    addWarmMesh(this.sharedGrenadeCapGeo, this.sharedGrenadeCapMat);
+
+    if (!this.tracerLinePool) this.tracerLinePool = [];
+    let warmLine = this.tracerLinePool.pop();
+    if (!warmLine) {
+      const lGeo = new THREE.BufferGeometry();
+      lGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0, 0, 0, 0, 0, -1]), 3));
+      const lMat = new THREE.LineBasicMaterial({
+        color: 0xfef08a,
+        transparent: true,
+        opacity: 0.98,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false
+      });
+      warmLine = new THREE.Line(lGeo, lMat);
+      warmLine.frustumCulled = false;
+    }
+    prewarmGroup.add(warmLine);
+    pooledBack.push(() => {
+      prewarmGroup.remove(warmLine);
+      this.tracerLinePool.push(warmLine);
+    });
+
+    if (!this.tracerBoltMatPool) this.tracerBoltMatPool = [];
+    let warmBoltMat = this.tracerBoltMatPool.pop();
+    if (!warmBoltMat) {
+      warmBoltMat = new THREE.MeshBasicMaterial({
+        color: 0xffe08a,
+        transparent: true,
+        opacity: 0.95,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false
+      });
+    }
+    if (this.sharedSparkGeo) {
+      addWarmMesh(this.sharedSparkGeo, warmBoltMat);
+    }
+    pooledBack.push(() => {
+      this.tracerBoltMatPool.push(warmBoltMat);
+    });
+
+    if (!this.sparkMatPool) this.sparkMatPool = [];
+    if (!this.sparkMeshPool) this.sparkMeshPool = [];
+    let warmSparkMat = this.sparkMatPool.pop();
+    if (!warmSparkMat) {
+      warmSparkMat = new THREE.MeshBasicMaterial({
+        color: 0xffe08a,
+        transparent: true,
+        opacity: 1,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false
+      });
+    }
+    let warmSparkMesh = this.sparkMeshPool.pop();
+    if (!warmSparkMesh && this.sharedHitOrbGeo) {
+      warmSparkMesh = new THREE.Mesh(this.sharedHitOrbGeo, warmSparkMat);
+    }
+    if (warmSparkMesh) {
+      warmSparkMesh.material = warmSparkMat;
+      warmSparkMesh.frustumCulled = false;
+      prewarmGroup.add(warmSparkMesh);
+    }
+    pooledBack.push(() => {
+      if (warmSparkMesh) {
+        prewarmGroup.remove(warmSparkMesh);
+        this.sparkMeshPool.push(warmSparkMesh);
+      }
+      this.sparkMatPool.push(warmSparkMat);
+    });
+
+    const smokeTex = getSharedSmokeTex();
+    if (smokeTex) {
+      if (!this.smokeMatPool) this.smokeMatPool = [];
+      if (!this.smokeSpritePool) this.smokeSpritePool = [];
+      let warmSmokeMat = this.smokeMatPool.pop();
+      if (!warmSmokeMat) {
+        warmSmokeMat = new THREE.SpriteMaterial({
+          map: smokeTex,
+          color: 0xbcb5aa,
+          transparent: true,
+          opacity: 0.35,
+          depthWrite: false
+        });
+      }
+      let warmSmokeSprite = this.smokeSpritePool.pop();
+      if (!warmSmokeSprite) {
+        warmSmokeSprite = new THREE.Sprite(warmSmokeMat);
+      } else {
+        warmSmokeSprite.material = warmSmokeMat;
+      }
+      prewarmGroup.add(warmSmokeSprite);
+      pooledBack.push(() => {
+        prewarmGroup.remove(warmSmokeSprite);
+        this.smokeSpritePool.push(warmSmokeSprite);
+        this.smokeMatPool.push(warmSmokeMat);
+      });
+    }
+
+    if (this.sharedExplosionSphereGeo && this.sharedShockwaveRingGeo && this.sharedShockwaveTorusGeo) {
+      if (!this.explosionPool) this.explosionPool = [];
+      let warmFx = this.explosionPool.pop();
+      if (!warmFx) {
+        const coreMat = new THREE.MeshBasicMaterial({
+          color: 0xfffbeb,
+          transparent: true,
+          opacity: 1.0,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          toneMapped: false
+        });
+        const fireballMat = new THREE.MeshBasicMaterial({
+          color: 0xff6b1a,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+          toneMapped: false
+        });
+        const blastWaveMat = new THREE.MeshBasicMaterial({
+          color: 0xfdba74,
+          transparent: true,
+          opacity: 0.28,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          toneMapped: false
+        });
+        const shockwaveMat = new THREE.MeshBasicMaterial({
+          color: 0xfb923c,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.95,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          toneMapped: false
+        });
+        const torusMat = new THREE.MeshBasicMaterial({
+          color: 0xfde047,
+          transparent: true,
+          opacity: 0.88,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          toneMapped: false
+        });
+        const fxSparkMat = new THREE.MeshBasicMaterial({
+          color: 0xffd166,
+          transparent: true,
+          opacity: 1.0,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          toneMapped: false
+        });
+        const shockwaveRing = new THREE.Mesh(this.sharedShockwaveRingGeo, shockwaveMat);
+        shockwaveRing.rotation.x = -Math.PI / 2;
+        warmFx = {
+          type: 'explosion',
+          coreSphere: new THREE.Mesh(this.sharedExplosionSphereGeo, coreMat),
+          coreMat,
+          fireballSphere: new THREE.Mesh(this.sharedExplosionSphereGeo, fireballMat),
+          fireballMat,
+          blastWaveSphere: new THREE.Mesh(this.sharedExplosionSphereGeo, blastWaveMat),
+          blastWaveMat,
+          shockwaveRing,
+          shockwaveMat,
+          torusRing: new THREE.Mesh(this.sharedShockwaveTorusGeo, torusMat),
+          torusMat,
+          flashLight: this.explosionLight || null,
+          particles: [],
+          smokeClouds: [],
+          sparkMat: fxSparkMat,
+          maxRadius: 7.5,
+          createdAt: 0,
+          duration: 720
+        };
+      }
+      prewarmGroup.add(
+        warmFx.coreSphere,
+        warmFx.fireballSphere,
+        warmFx.blastWaveSphere,
+        warmFx.shockwaveRing,
+        warmFx.torusRing
+      );
+      pooledBack.push(() => {
+        prewarmGroup.remove(
+          warmFx.coreSphere,
+          warmFx.fireballSphere,
+          warmFx.blastWaveSphere,
+          warmFx.shockwaveRing,
+          warmFx.torusRing
+        );
+        this.explosionPool.push(warmFx);
+      });
+    }
+
+    if (prewarmGroup.children.length > 0) {
+      this.scene.add(prewarmGroup);
+    }
+
     let compilePromise = null;
     try {
       const canVmPrewarm = Boolean(
@@ -665,6 +907,18 @@ export class SceneWorldMethods {
     } catch {
       // Ignore shader prewarm fallback issues on constrained WebGL drivers
     } finally {
+      for (let i = 0; i < pooledBack.length; i++) {
+        pooledBack[i]();
+      }
+      if (prewarmGroup.parent) {
+        this.scene.remove(prewarmGroup);
+      }
+      if (opFlash) {
+        opFlash.visible = prevOpFlashVisible;
+      }
+      if (opGroup) {
+        opGroup.visible = prevOpVisible;
+      }
       for (let i = 0; i < savedVmVis.length; i++) {
         const [wId, vis] = savedVmVis[i];
         if (this.viewmodelMeshes[wId]) {
@@ -823,7 +1077,7 @@ export class SceneWorldMethods {
     const baseWet = q?.wetFloorStrength || 0;
     if (baseWet <= 0) return 0;
     const plan = getSurfacePlan(this.currentMapId);
-    const isArid = this.currentMapId === 'desert_outpost' || plan.floor?.set === 'dirt_floor';
+    const isArid = ARID_CSGO_MAPS.has(this.currentMapId) || plan.floor?.set === 'dirt_floor';
     return isArid ? baseWet * 0.28 : baseWet;
   }
 
@@ -857,54 +1111,50 @@ export class SceneWorldMethods {
       let item = this.pickupMeshes.get(p.id);
       if (!item) {
         const pType = p.type || 'health';
-        const pColors = pType === 'armor'
-          ? { main: 0x38bdf8, emissive: 0x0284c7 }
-          : pType === 'speed'
-            ? { main: 0xf59e0b, emissive: 0xd97706 }
-            : pType === 'damage'
-              ? { main: 0xec4899, emissive: 0xdb2777 }
-              : { main: 0x22c55e, emissive: 0x16a34a };
+        const ledColor =
+          pType === 'armor'
+            ? 0x4b7ba8
+            : pType === 'speed'
+              ? 0xb57c2e
+              : pType === 'damage'
+                ? 0x9c3a3a
+                : 0x3b8c58;
         const group = new THREE.Group();
         group.position.set(p.x, p.y, p.z);
 
-        const outerBaseGeo = new THREE.CylinderGeometry(1.38, 1.52, 0.14, 8);
-        const outerBaseMat = new THREE.MeshStandardMaterial({
-          color: 0x1e293b,
-          metalness: 0.75,
-          roughness: 0.35
+        const plateGeo = new THREE.CylinderGeometry(0.60, 0.64, 0.04, 16);
+        const plateMat = new THREE.MeshStandardMaterial({
+          color: 0x2b3138,
+          metalness: 0.58,
+          roughness: 0.72
         });
-        const outerBase = new THREE.Mesh(outerBaseGeo, outerBaseMat);
-        outerBase.position.y = 0.07;
-        group.add(outerBase);
+        const plateMesh = new THREE.Mesh(plateGeo, plateMat);
+        plateMesh.position.y = 0.02;
+        plateMesh.receiveShadow = true;
+        group.add(plateMesh);
 
-        const padGeo = new THREE.CylinderGeometry(1.05, 1.18, 0.18, 16);
+        const padGeo = new THREE.BoxGeometry(0.08, 0.012, 0.024);
         const padMat = new THREE.MeshStandardMaterial({
-          color: 0x0f172a,
-          emissive: pColors.emissive,
+          color: 0x1e242b,
+          emissive: ledColor,
           emissiveIntensity: 0.55,
-          metalness: 0.6,
-          roughness: 0.25
+          metalness: 0.35,
+          roughness: 0.45
         });
         const padMesh = new THREE.Mesh(padGeo, padMat);
-        padMesh.position.y = 0.12;
+        padMesh.position.set(0, 0.041, 0.52);
         group.add(padMesh);
 
-        const clawGeo = new THREE.BoxGeometry(0.22, 0.38, 0.36);
-        for (let c = 0; c < 4; c++) {
-          const ang = (c / 4) * Math.PI * 2 + Math.PI / 4;
-          const claw = new THREE.Mesh(clawGeo, outerBaseMat);
-          claw.position.set(Math.cos(ang) * 1.25, 0.22, Math.sin(ang) * 1.25);
-          claw.rotation.y = -ang + Math.PI / 2;
-          claw.rotation.x = 0.35;
-          group.add(claw);
-        }
-
-        const holoRingGeo = new THREE.RingGeometry(0.78, 1.08, 24);
-        const holoRingMat = new THREE.MeshBasicMaterial({
-          color: pColors.main,
+        const holoRingGeo = new THREE.RingGeometry(0.535, 0.575, 24);
+        const holoRingMat = new THREE.MeshStandardMaterial({
+          color: ledColor,
+          emissive: ledColor,
+          emissiveIntensity: 0.20,
           side: THREE.DoubleSide,
           transparent: true,
-          opacity: 0.72,
+          opacity: 0.24,
+          roughness: 0.55,
+          metalness: 0.2,
           depthWrite: false,
           polygonOffset: true,
           polygonOffsetFactor: -2,
@@ -912,32 +1162,76 @@ export class SceneWorldMethods {
         });
         const holoRing = new THREE.Mesh(holoRingGeo, holoRingMat);
         holoRing.rotation.x = -Math.PI / 2;
-        holoRing.position.y = 0.23;
+        holoRing.position.y = 0.042;
         group.add(holoRing);
 
         const crossGroup = new THREE.Group();
-        const barMat = new THREE.MeshStandardMaterial({
-          color: pColors.main,
-          emissive: pColors.emissive,
-          emissiveIntensity: 0.8,
-          roughness: 0.2,
-          metalness: 0.3
-        });
-        const trimMat = new THREE.MeshStandardMaterial({
-          color: 0xf8fafc,
-          metalness: 0.85,
-          roughness: 0.2
-        });
-        const vBar = new THREE.Mesh(new THREE.BoxGeometry(0.38, 1.12, 0.38), barMat);
-        const hBar = new THREE.Mesh(new THREE.BoxGeometry(1.12, 0.38, 0.38), barMat);
-        const dBar = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.38, 0.92), barMat);
-        const coreCrystal = new THREE.Mesh(new THREE.OctahedronGeometry(0.36, 0), trimMat);
-        const orbitRing = new THREE.Mesh(
-          new THREE.TorusGeometry(0.72, 0.035, 8, 24),
-          holoRingMat
-        );
-        crossGroup.add(vBar, hBar, dBar, coreCrystal, orbitRing);
-        crossGroup.position.y = 1.25;
+        crossGroup.position.y = 0.04;
+        crossGroup.rotation.y = 0;
+
+        const addCasePart = (w, h, d, mat, px, py, pz) => {
+          const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+          mesh.position.set(px, py, pz);
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
+          crossGroup.add(mesh);
+          return mesh;
+        };
+
+        if (pType === 'armor') {
+          const bodyMat = new THREE.MeshStandardMaterial({ color: 0x2b3036, roughness: 0.82, metalness: 0.12 });
+          const lidMat = new THREE.MeshStandardMaterial({ color: 0x333942, roughness: 0.78, metalness: 0.14 });
+          const ridgeMat = new THREE.MeshStandardMaterial({ color: 0x22262c, roughness: 0.76, metalness: 0.16 });
+          const claspMat = new THREE.MeshStandardMaterial({ color: 0x6f7a86, roughness: 0.36, metalness: 0.78 });
+          const stripeMat = new THREE.MeshStandardMaterial({ color: 0x466b8c, roughness: 0.68, metalness: 0.10 });
+
+          addCasePart(0.54, 0.22, 0.40, bodyMat, 0, 0.11, 0);
+          addCasePart(0.544, 0.04, 0.404, lidMat, 0, 0.24, 0);
+          for (const rz of [-0.11, 0, 0.11]) {
+            addCasePart(0.46, 0.012, 0.036, ridgeMat, 0, 0.265, rz);
+          }
+          addCasePart(0.055, 0.085, 0.024, claspMat, -0.15, 0.145, 0.204);
+          addCasePart(0.055, 0.085, 0.024, claspMat, 0.15, 0.145, 0.204);
+          addCasePart(0.548, 0.026, 0.408, stripeMat, 0, 0.195, 0);
+        } else if (pType === 'speed' || pType === 'damage') {
+          const isSpeed = pType === 'speed';
+          const crateMat = new THREE.MeshStandardMaterial({
+            color: isSpeed ? 0x4b5338 : 0x3e444a,
+            roughness: 0.84,
+            metalness: 0.10
+          });
+          const strapMat = new THREE.MeshStandardMaterial({ color: 0x2b3138, roughness: 0.50, metalness: 0.68 });
+          const stencilMat = new THREE.MeshStandardMaterial({
+            color: isSpeed ? 0xb57c2e : 0x943434,
+            roughness: 0.74,
+            metalness: 0.06
+          });
+
+          addCasePart(0.52, 0.26, 0.36, crateMat, 0, 0.13, 0);
+          addCasePart(0.042, 0.268, 0.368, strapMat, -0.16, 0.13, 0);
+          addCasePart(0.042, 0.268, 0.368, strapMat, 0.16, 0.13, 0);
+          addCasePart(0.05, 0.075, 0.022, strapMat, -0.09, 0.15, 0.184);
+          addCasePart(0.05, 0.075, 0.022, strapMat, 0.09, 0.15, 0.184);
+          addCasePart(0.18, 0.008, 0.11, stencilMat, 0, 0.263, 0);
+          addCasePart(0.20, 0.036, 0.364, stencilMat, 0, 0.14, 0);
+        } else {
+          const tubMat = new THREE.MeshStandardMaterial({ color: 0x5b634a, roughness: 0.80, metalness: 0.06 });
+          const lidMat = new THREE.MeshStandardMaterial({ color: 0xd8d2c5, roughness: 0.74, metalness: 0.05 });
+          const latchMat = new THREE.MeshStandardMaterial({ color: 0x1f2428, roughness: 0.72, metalness: 0.15 });
+          const crossMat = new THREE.MeshStandardMaterial({ color: 0x8e2424, roughness: 0.68, metalness: 0.04 });
+
+          addCasePart(0.52, 0.14, 0.36, tubMat, 0, 0.07, 0);
+          addCasePart(0.524, 0.10, 0.364, lidMat, 0, 0.19, 0);
+          addCasePart(0.055, 0.075, 0.024, latchMat, -0.14, 0.14, 0.184);
+          addCasePart(0.055, 0.075, 0.024, latchMat, 0.14, 0.14, 0.184);
+          addCasePart(0.18, 0.018, 0.026, latchMat, 0, 0.264, 0.11);
+          addCasePart(0.024, 0.016, 0.024, latchMat, -0.078, 0.247, 0.11);
+          addCasePart(0.024, 0.016, 0.024, latchMat, 0.078, 0.247, 0.11);
+          addCasePart(0.046, 0.008, 0.15, crossMat, 0, 0.244, -0.02);
+          addCasePart(0.052, 0.008, 0.046, crossMat, -0.049, 0.244, -0.02);
+          addCasePart(0.052, 0.008, 0.046, crossMat, 0.049, 0.244, -0.02);
+        }
+
         group.add(crossGroup);
 
         const isActive = Boolean(p.active);
@@ -976,58 +1270,122 @@ export class SceneWorldMethods {
   }
 
   clearJumpPads() {
+    const geos = new Set();
+    const mats = new Set();
     for (const jp of this.jumpPadMeshes) {
       this.scene.remove(jp.group);
       jp.group.traverse((obj) => {
         if (obj.isMesh) {
-          obj.geometry?.dispose();
-          obj.material?.dispose();
+          if (obj.geometry) geos.add(obj.geometry);
+          if (Array.isArray(obj.material)) {
+            for (let i = 0; i < obj.material.length; i++) mats.add(obj.material[i]);
+          } else if (obj.material) {
+            mats.add(obj.material);
+          }
         }
       });
     }
+    for (const geo of geos) geo.dispose?.();
+    for (const mat of mats) mat.dispose?.();
     this.jumpPadMeshes.length = 0;
   }
 
   buildJumpPads(jumpPads = []) {
     this.clearJumpPads();
-    const isDustMap = this.currentMapId === 'desert_outpost';
+    const isDustMap = ARID_CSGO_MAPS.has(this.currentMapId);
     for (const jp of jumpPads) {
       const group = new THREE.Group();
       group.position.set(jp.x || 0, jp.y || 0, jp.z || 0);
 
-      const discGeo = new THREE.CylinderGeometry(1.18, 1.32, 0.16, 20);
-      const discMat = new THREE.MeshStandardMaterial(
-        isDustMap
-          ? {
-              color: 0x3b3328,
-              emissive: 0xb87324,
-              emissiveIntensity: 0.36,
-              metalness: 0.55,
-              roughness: 0.58
-            }
-          : {
-              color: 0x083344,
-              emissive: 0x06b6d4,
-              emissiveIntensity: 0.85,
-              metalness: 0.65,
-              roughness: 0.2
-            }
-      );
+      // Chamfered recessed gunmetal vent housing (outer radius ~1.12, height 0.08)
+      const housingPts = [
+        new THREE.Vector2(0, 0),
+        new THREE.Vector2(1.16, 0),
+        new THREE.Vector2(1.14, 0.052),
+        new THREE.Vector2(1.07, 0.08),
+        new THREE.Vector2(0.92, 0.08),
+        new THREE.Vector2(0.90, 0.042),
+        new THREE.Vector2(0, 0.042)
+      ];
+      const housingGeo = new THREE.LatheGeometry(housingPts, 20);
+      const housingMat = new THREE.MeshStandardMaterial({
+        color: 0x30363d,
+        metalness: 0.68,
+        roughness: 0.56
+      });
+      const housingMesh = new THREE.Mesh(housingGeo, housingMat);
+      housingMesh.receiveShadow = true;
+      group.add(housingMesh);
+
+      const discGeo = new THREE.CylinderGeometry(0.90, 0.90, 0.014, 20);
+      const discMat = new THREE.MeshStandardMaterial({
+        color: 0x161a1f,
+        emissive: isDustMap ? 0x6b4c28 : 0x3b4d5c,
+        emissiveIntensity: 0.12,
+        metalness: 0.45,
+        roughness: 0.82
+      });
       const discMesh = new THREE.Mesh(discGeo, discMat);
-      discMesh.position.y = 0.08;
+      discMesh.position.y = 0.049;
+      discMesh.receiveShadow = true;
       group.add(discMesh);
 
-      const ringGeo = new THREE.RingGeometry(0.68, 0.96, 24);
+      // 5 parallel matte steel louver slats + central structural rib merged into one draw call
+      const slatParts = [];
+      for (const lz of [-0.56, -0.28, 0, 0.28, 0.56]) {
+        const chordW = 2 * Math.sqrt(Math.max(0.08, 0.87 * 0.87 - lz * lz));
+        const slatGeo = new THREE.BoxGeometry(chordW, 0.018, 0.11);
+        const slatPart = new THREE.Mesh(slatGeo);
+        slatPart.position.set(0, 0.068, lz);
+        slatPart.rotation.x = 0.22;
+        slatParts.push(slatPart);
+      }
+      const bracePart = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.018, 1.74));
+      bracePart.position.set(0, 0.062, 0);
+      slatParts.push(bracePart);
+
+      const louverGeo = mergeMeshGeometries(slatParts);
+      for (let i = 0; i < slatParts.length; i++) slatParts[i].geometry.dispose();
+      const slatMat = new THREE.MeshStandardMaterial({
+        color: 0x4d5661,
+        metalness: 0.72,
+        roughness: 0.48
+      });
+      const louverMesh = new THREE.Mesh(louverGeo, slatMat);
+      louverMesh.receiveShadow = true;
+      group.add(louverMesh);
+
+      // 4 subtle matte caution ticks around top housing rim merged into one draw call
+      const tickParts = [];
+      for (let k = 0; k < 4; k++) {
+        const ang = Math.PI * 0.25 + k * Math.PI * 0.5;
+        const tickPart = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.006, 0.048));
+        tickPart.position.set(Math.cos(ang) * 0.995, 0.082, Math.sin(ang) * 0.995);
+        tickPart.rotation.y = -ang + Math.PI / 2;
+        tickParts.push(tickPart);
+      }
+      const ticksGeo = mergeMeshGeometries(tickParts);
+      for (let i = 0; i < tickParts.length; i++) tickParts[i].geometry.dispose();
+      const tickMat = new THREE.MeshStandardMaterial({
+        color: isDustMap ? 0x9c7434 : 0x8f7236,
+        metalness: 0.15,
+        roughness: 0.86
+      });
+      const ticksMesh = new THREE.Mesh(ticksGeo, tickMat);
+      ticksMesh.receiveShadow = true;
+      group.add(ticksMesh);
+
+      const ringGeo = new THREE.RingGeometry(0.64, 0.80, 24);
       const ringMat1 = new THREE.MeshBasicMaterial({
-        color: isDustMap ? 0xe5a024 : 0x38bdf8,
+        color: 0xd8dee6,
         side: THREE.DoubleSide,
         transparent: true,
-        opacity: isDustMap ? 0.55 : 0.8,
+        opacity: 0.10,
         depthWrite: false
       });
       const ring1 = new THREE.Mesh(ringGeo, ringMat1);
       ring1.rotation.x = -Math.PI / 2;
-      ring1.position.y = 0.28;
+      ring1.position.y = 0.08;
       group.add(ring1);
 
       this.scene.add(group);

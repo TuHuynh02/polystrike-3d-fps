@@ -34,7 +34,7 @@ const {
 } = await import('../public/js/snapshotBuffer.js');
 
 const TICK_MS = 40; // 25 Hz
-const MAP_ID = 'cyber_citadel';
+const MAP_ID = 'de_dust2';
 
 /** Seeded PRNG (mulberry32) so jitter tests are reproducible. */
 function makeRng(seed) {

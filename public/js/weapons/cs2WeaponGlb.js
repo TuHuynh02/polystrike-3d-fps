@@ -94,8 +94,8 @@ export const CS2_WEAPON_SPECS = {
     variantSkin: 'knife_tactical',
     isKnife: true,
     pose: {
-      hip: { pos: [0.21, -0.145, -0.35], rot: [0.06, 0.16, 0.02] },
-      ads: { pos: [0.21, -0.145, -0.35], rot: [0.06, 0.16, 0.02] },
+      hip: { pos: [0.155, -0.060, -0.340], rot: [0.10, 1.32, -0.06] },
+      ads: { pos: [0.155, -0.060, -0.340], rot: [0.10, 1.32, -0.06] },
       vmFov: { hip: 66, ads: 66 }
     }
   }
@@ -576,7 +576,7 @@ export async function loadCs2ViewmodelGlb(weaponId, assets = null, envMap = null
     const pivot = new THREE.Group();
     pivot.name = 'cs2KnifeSpinPivot';
     const kPos = armsPreset.knifeLocalPos || [0, 0, 0];
-    const kRot = armsPreset.knifeLocalRot || [1.48, 0.08, -0.18];
+    const kRot = armsPreset.knifeLocalRot || [0.8229, -0.5797, -0.8415];
     pivot.position.set(kPos[0], kPos[1], kPos[2]);
 
     const alignGroup = new THREE.Group();

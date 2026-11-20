@@ -547,7 +547,7 @@ describe('Client proxy meshes are built from the shared definition', () => {
 // ---------------------------------------------------------------------------------------------------------------
 // Server-side shot resolution on top of the shared boxes
 // ---------------------------------------------------------------------------------------------------------------
-const MAP_ID = 'cyber_citadel';
+const MAP_ID = 'de_dust2';
 
 function createHarness() {
   const emitted = [];
@@ -582,9 +582,11 @@ function place(player, x, y, z) {
 }
 
 function findOpenPair(gap) {
-  const obstacles = getMapConfig(MAP_ID).obstacles;
-  for (let z = -40; z <= 40; z += 2) {
-    for (let x = -50; x + gap <= 50; x += 2) {
+  const cfg = getMapConfig(MAP_ID);
+  const obstacles = cfg.obstacles;
+  const lim = (cfg.arenaHalfSize || 38) - 4;
+  for (let z = -lim; z <= lim; z += 2) {
+    for (let x = -lim; x + gap <= lim; x += 2) {
       // Clear for a target that may be anywhere within +-2.5 m laterally and any stance
       const ok = [-2.5, 0, 2.5].every((dz) =>
         [1.76, 1.35, 0.78, 0.3].every((y) =>

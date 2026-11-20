@@ -393,21 +393,21 @@ describe('crate model fitting (visual only)', () => {
 
   it('arena keeps procedural crates when the model does not fit, and replaces only fitting ones (collision untouched)', async () => {
     const game = await createTestGame3D({ qualityChoice: 'high' });
-    const hashBefore = obstacleHash('cyber_citadel');
+    const hashBefore = obstacleHash('de_nuke');
     // 1) a model that cannot fit anything: every crate keeps its visible box
     game.assets.loadedModels.set('crate-wide', { scene: fakeCrateScene(0.79, 0.23, 1.2) });
-    game.loadMap('cyber_citadel');
-    const crates = getMapConfig('cyber_citadel').obstacles.filter((o) => o.type === 'crate');
-    const crateMeshes = game.worldMeshes.slice(1).filter((m, i) => getMapConfig('cyber_citadel').obstacles[i].type === 'crate');
+    game.loadMap('de_nuke');
+    const crates = getMapConfig('de_nuke').obstacles.filter((o) => o.type === 'crate');
+    const crateMeshes = game.worldMeshes.slice(1).filter((m, i) => getMapConfig('de_nuke').obstacles[i].type === 'crate');
     assert.equal(crateMeshes.length, crates.length);
     // 2) a model that matches crate #0 exactly
     const c0 = crates[0];
     game.assets.loadedModels.set('crate-wide', { scene: fakeCrateScene(c0.w / 3, c0.h / 3, c0.d / 3) });
-    game.loadMap('cyber_citadel');
-    const idx0 = getMapConfig('cyber_citadel').obstacles.indexOf(c0);
+    game.loadMap('de_nuke');
+    const idx0 = getMapConfig('de_nuke').obstacles.indexOf(c0);
     const mesh0 = game.worldMeshes[1 + idx0];
     assert.equal(mesh0.visible, false, 'fitting crate: box visual replaced');
-    assert.equal(game.worldMeshes.length, 1 + getMapConfig('cyber_citadel').obstacles.length, 'raycast/collision meshes remain');
+    assert.equal(game.worldMeshes.length, 1 + getMapConfig('de_nuke').obstacles.length, 'raycast/collision meshes remain');
     const batcher = game.propBatchers[0];
     const placement = batcher.fitted.find((f) => f.center.x === c0.x && f.center.z === c0.z);
     assert.ok(placement, 'crate 0 was fitted');
@@ -423,7 +423,7 @@ describe('crate model fitting (visual only)', () => {
     assert.ok(inst.length >= 1 && inst.every((m) => m.isInstancedMesh && m.frustumCulled === false && m.matrixAutoUpdate === false));
     // 3) the real crate proportions: toppers use the undistorted contain-fit and stay inside their footprint
     game.assets.loadedModels.set('crate-wide', { scene: fakeCrateScene(0.55, 0.37, 1.2) });
-    game.loadMap('cyber_citadel');
+    game.loadMap('de_nuke');
     const toppers = game.propBatchers[1].fitted;
     assert.ok(toppers.length > 0, 'at least one tactical case topper uses the glTF crate');
     for (const t of toppers) {
@@ -433,7 +433,7 @@ describe('crate model fitting (visual only)', () => {
       assert.ok(0.37 * t.fit.scale.y <= t.aabb.h + 1e-9);
     }
     game.assets.loadedModels.delete('crate-wide');
-    assert.equal(obstacleHash('cyber_citadel'), hashBefore, 'shared/maps obstacle data untouched');
+    assert.equal(obstacleHash('de_nuke'), hashBefore, 'shared/maps obstacle data untouched');
   });
 });
 
@@ -760,6 +760,7 @@ describe('Saltline graphics, 30Hz high-tier shadows, viewmodel springs, audio sy
     assert.ok(QUALITY.high.wetFloorStrength > QUALITY.medium.wetFloorStrength);
 
     const game = await createTestGame3D({ qualityChoice: 'high' });
+    game.loadMap('de_nuke');
     assert.equal(game.renderer.toneMapping, THREE.AgXToneMapping ?? THREE.ACESFilmicToneMapping);
     assert.equal(game.renderer.toneMappingExposure, 1.08);
     assert.ok(game.floorMat, 'arena exposes floorMat');
@@ -791,8 +792,8 @@ describe('Saltline graphics, 30Hz high-tier shadows, viewmodel springs, audio sy
     game.inMatch = false;
     game.applyQuality('high', { persist: false });
 
-    // Desert map scales wet floor strength down so sand stays natural
-    game.loadMap('desert_outpost');
+    // Desert map (de_dust2) scales wet floor strength down so sand stays natural
+    game.loadMap('de_dust2');
     assert.ok(
       game.floorMat.userData.wetFloorStrength > 0 &&
         game.floorMat.userData.wetFloorStrength < QUALITY.high.wetFloorStrength,
@@ -1097,7 +1098,7 @@ describe('Saltline graphics, 30Hz high-tier shadows, viewmodel springs, audio sy
 
 // ---------------------------------------------------------------- Saltline Round 2: unified environment, props, arsenal & operator
 describe('Saltline Round 2: harbor water, wall weathering, merged decals, 3D backdrops, arsenal & unified operator model', () => {
-  it('builds harbor water, wall weathering shaders & merged decals on medium/high, omits on low/desert, and disposes 100% cleanly', async () => {
+  it('builds wall weathering shaders & merged CS:GO decals on medium/high, omits legacy harbor water & low decals, and disposes 100% cleanly', async () => {
     const { getSaltlineDecalUVRect } = await import('../public/js/arena/proceduralTextures.js');
 
     // Boundary & negative index wrapping for 4-quadrant decal atlas UV rects
@@ -1109,25 +1110,18 @@ describe('Saltline Round 2: harbor water, wall weathering, merged decals, 3D bac
     assert.ok(q0[0] < q0[2] && q0[1] < q0[3] && q0[2] < 0.5 && q0[1] > 0.5, 'Q0 sits in top-left UV quadrant with padding');
 
     const game = await createTestGame3D({ qualityChoice: 'high' });
-    game.loadMap('cargo_dock');
+    game.loadMap('de_nuke');
 
-    const waterMesh = game.skyObjects.find((o) => o.name === 'saltlineHarborWater');
-    assert.ok(waterMesh, 'cargo_dock on high tier builds saltlineHarborWater');
-    assert.ok(game.harborWaterUniform, 'exposes harborWaterUniform for wave animation');
-    assert.equal(waterMesh.geometry.index.count, 24, 'hollow 4-quad harbor water ring uses exactly 8 triangles (24 indices)');
+    // Legacy harbor water is removed across all 6 CS:GO maps
+    assert.equal(
+      game.skyObjects.some((o) => o.name === 'saltlineHarborWater'),
+      false,
+      'CS:GO maps omit obsolete harbor ocean water plane'
+    );
+    assert.equal(game.harborWaterUniform, null);
 
-    // Verify harbor water shader & wall weathering shader inject cleanly against REAL Three.js ShaderLib.standard
+    // Verify wall weathering shader injects cleanly against REAL Three.js ShaderLib.standard
     const stdLib = THREE.ShaderLib.standard;
-    const waterShader = {
-      uniforms: {},
-      vertexShader: stdLib.vertexShader,
-      fragmentShader: stdLib.fragmentShader
-    };
-    waterMesh.material.onBeforeCompile(waterShader);
-    assert.match(waterShader.vertexShader, /vSaltlineSeaWorldPos/);
-    assert.match(waterShader.fragmentShader, /uSaltlineSeaTime/);
-    assert.match(waterShader.fragmentShader, /slFoamBand/);
-
     assert.ok(Array.isArray(game.wallWeatherMats) && game.wallWeatherMats.length > 0, 'registers vertical obstacle wallWeatherMats');
     const wallMat = game.wallWeatherMats[0];
     const wallKeyHigh = wallMat.customProgramCacheKey();
@@ -1143,10 +1137,6 @@ describe('Saltline Round 2: harbor water, wall weathering, merged decals, 3D bac
     assert.match(wallShader.vertexShader, /vSlWallWorldPos/);
     assert.match(wallShader.fragmentShader, /slRainDrip/);
     assert.match(wallShader.fragmentShader, /slSplashRough/);
-
-    // Animate advances harborWaterUniform
-    game.animate(2500);
-    assert.ok(Math.abs(game.harborWaterUniform.value - 2.5) < 1e-6, 'animate(now) updates harborWaterUniform in seconds');
 
     // Merged world decals exist as a single BufferGeometry mesh on high
     const decalMeshesHigh = game.arenaDecorMeshes.filter((m) => m.name === 'saltlineArenaDecals');
@@ -1164,20 +1154,19 @@ describe('Saltline Round 2: harbor water, wall weathering, merged decals, 3D bac
     assert.equal(wallMat.userData._hasSaltlineWallHook, false);
     game.inMatch = false;
 
-    // Desert map omits coastal harbor water even on high tier
+    // Dust II also omits coastal harbor water on high tier
     game.applyQuality('high', { persist: false });
-    game.loadMap('desert_outpost');
+    game.loadMap('de_dust2');
     assert.equal(
       game.skyObjects.some((o) => o.name === 'saltlineHarborWater'),
       false,
-      'desert_outpost omits coastal harbor water'
+      'de_dust2 omits coastal harbor water'
     );
     assert.equal(game.harborWaterUniform, null);
 
-    // Low tier omits harbor water and merged world decals
+    // Low tier omits merged world decals
     game.applyQuality('low', { persist: false });
-    game.loadMap('cargo_dock');
-    assert.equal(game.skyObjects.some((o) => o.name === 'saltlineHarborWater'), false, 'low tier omits harbor water');
+    game.loadMap('de_nuke');
     assert.equal(
       game.arenaDecorMeshes.some((m) => m.name === 'saltlineArenaDecals'),
       false,
@@ -1186,7 +1175,7 @@ describe('Saltline Round 2: harbor water, wall weathering, merged decals, 3D bac
 
     // Full disposal leaves zero leaked arena geometries, materials, or textures
     game.applyQuality('high', { persist: false });
-    game.loadMap('cargo_dock');
+    game.loadMap('de_nuke');
     assert.ok(game.arenaGeometries.size > 0 && game.arenaMaterials.size > 0 && game.arenaTextures.size > 0);
     game.disposeMapResources();
     assert.equal(game.arenaGeometries.size, 0, 'disposeMapResources clears all arenaGeometries');
@@ -1438,7 +1427,7 @@ describe('Saltline Round 2: harbor water, wall weathering, merged decals, 3D bac
     }
   });
 
-  it('keeps world stencil decals clear of staircases/obstacles across all 8 maps, layers bullet impacts on top, and caps Set arenaMaterials on Low', async () => {
+  it('keeps world stencil decals clear of staircases/obstacles across all 6 CS:GO maps, layers bullet impacts on top, and caps Set arenaMaterials on Low', async () => {
     const { MAPS: MAP_DEFS, MAP_ORDER } = await import('../shared/maps.js');
     const { revertPbrSlots } = await import('../public/js/surfaceMaterials.js');
     const game = await createTestGame3D({ qualityChoice: 'high' });
@@ -1475,17 +1464,16 @@ describe('Saltline Round 2: harbor water, wall weathering, merged decals, 3D bac
       assert.equal(buriedVerts, 0, `${mapId} has 0 world decal vertices buried inside obstacles or staircases`);
     }
 
-    // Mid-match quality switch High -> Low -> Medium syncs environment, water/decal visibility, and Set arenaMaterials metalness
+    // Mid-match quality switch High -> Low -> Medium syncs environment, decal visibility, and Set arenaMaterials metalness
     game.inMatch = true;
     game.applyQuality('high', { persist: false });
-    game.loadMap('cargo_dock');
+    game.loadMap('de_nuke');
     assert.equal(Boolean(game.scene.environment), true);
-    assert.equal(game.saltlineHarborWater?.visible, true);
+    assert.equal(game.saltlineHarborWater, null);
     assert.equal(game.saltlineArenaDecals?.visible, true);
 
     game.applyQuality('low', { persist: false });
     assert.equal(game.scene.environment, null, 'mid-match Low switch clears scene.environment');
-    assert.equal(game.saltlineHarborWater?.visible, false, 'mid-match Low switch hides harbor water');
     assert.equal(game.saltlineArenaDecals?.visible, false, 'mid-match Low switch hides world decals');
     for (const m of game.arenaMaterials) {
       if (typeof m.metalness === 'number') {
@@ -1501,7 +1489,6 @@ describe('Saltline Round 2: harbor water, wall weathering, merged decals, 3D bac
 
     game.applyQuality('medium', { persist: false });
     assert.equal(Boolean(game.scene.environment), true, 'mid-match Medium switch restores scene.environment');
-    assert.equal(game.saltlineHarborWater?.visible, true, 'mid-match Medium switch restores harbor water');
     assert.equal(game.saltlineArenaDecals?.visible, true, 'mid-match Medium switch restores world decals');
     let restoredHighMetalCount = 0;
     for (const m of game.arenaMaterials) {
@@ -1513,17 +1500,17 @@ describe('Saltline Round 2: harbor water, wall weathering, merged decals, 3D bac
 
 // ---------------------------------------------------------------- Saltline Full Overhaul (BR-01..BR-06)
 describe('Saltline Full Overhaul (BR-01..BR-06, AC-01..AC-05)', () => {
-  it('BR-01 / AC-01: defaults client boot & user prefs to Dust II (desert_outpost) while keeping shared DEFAULT_MAP_ID intact', async () => {
+  it('BR-01 / AC-01: defaults server, client boot & user prefs to Dust II (de_dust2) and migrates legacy prefs', async () => {
     const { DEFAULT_MAP_ID } = await import('../shared/maps.js');
     const { CLIENT_DEFAULT_MAP_ID, loadUserPrefs } = await import('../public/js/ui/userPrefsAndKeys.js');
-    assert.equal(DEFAULT_MAP_ID, 'cyber_citadel', 'server fallback DEFAULT_MAP_ID remains cyber_citadel');
-    assert.equal(CLIENT_DEFAULT_MAP_ID, 'desert_outpost', 'client default map ID is desert_outpost');
+    assert.equal(DEFAULT_MAP_ID, 'de_dust2', 'server fallback DEFAULT_MAP_ID is de_dust2');
+    assert.equal(CLIENT_DEFAULT_MAP_ID, 'de_dust2', 'client default map ID is de_dust2');
 
     const prevLocalStorage = globalThis.localStorage;
     globalThis.localStorage = memStorage();
     try {
       const prefs = loadUserPrefs();
-      assert.equal(prefs.selectedMap, 'desert_outpost', 'fresh userPrefs defaults selectedMap to desert_outpost');
+      assert.equal(prefs.selectedMap, 'de_dust2', 'fresh userPrefs defaults selectedMap to de_dust2');
     } finally {
       globalThis.localStorage = prevLocalStorage;
     }
@@ -1535,8 +1522,8 @@ describe('Saltline Full Overhaul (BR-01..BR-06, AC-01..AC-05)', () => {
     let bootGame;
     try {
       bootGame = new Game3D(container, { initialMapId: CLIENT_DEFAULT_MAP_ID });
-      assert.equal(bootGame.currentMapId, 'desert_outpost');
-      assert.equal(bootGame.currentMapConfig?.id, 'desert_outpost');
+      assert.equal(bootGame.currentMapId, 'de_dust2');
+      assert.equal(bootGame.currentMapConfig?.id, 'de_dust2');
     } finally {
       globalThis.localStorage = prevStorage2;
     }
@@ -1546,8 +1533,8 @@ describe('Saltline Full Overhaul (BR-01..BR-06, AC-01..AC-05)', () => {
     assert.ok(mapGridMatch, '#lobby-map-grid exists in index.html');
     const firstMapBtn = mapGridMatch[0].match(/<button[^>]*class="([^"]*)"[^>]*data-map="([^"]+)"/);
     assert.ok(firstMapBtn, 'first map option found in #lobby-map-grid');
-    assert.equal(firstMapBtn[2], 'desert_outpost', 'desert_outpost is listed first in #lobby-map-grid');
-    assert.match(firstMapBtn[1], /\bactive\b/, 'desert_outpost is marked .active on boot');
+    assert.equal(firstMapBtn[2], 'de_dust2', 'de_dust2 is listed first in #lobby-map-grid');
+    assert.match(firstMapBtn[1], /\bactive\b/, 'de_dust2 is marked .active on boot');
   });
 
   it('BR-02 / AC-02: gates Kenney cartoon .glb props behind explicit opt-in and loads 0 .glb models across Low/Medium/High by default', async () => {
@@ -1572,26 +1559,26 @@ describe('Saltline Full Overhaul (BR-01..BR-06, AC-01..AC-05)', () => {
     }
   });
 
-  it('BR-03 / BR-05: hides solid monolithic obstacle proxy boxes while keeping exact AABB raycast meshes and merged Saltline architecture', async () => {
+  it('BR-03 / BR-05: hides solid monolithic obstacle proxy boxes while keeping exact AABB raycast meshes and merged CS:GO architecture', async () => {
     const game = await createTestGame3D({ qualityChoice: 'high' });
-    game.loadMap('cargo_dock');
-    const cfg = getMapConfig('cargo_dock');
+    game.loadMap('de_nuke');
+    const cfg = getMapConfig('de_nuke');
     assert.equal(game.worldMeshes.length, 1 + cfg.obstacles.length, 'floor + exact obstacle raycast proxy count');
     assert.equal(game.worldMeshes[0].visible, true, 'floor mesh remains visible');
     for (let i = 1; i < game.worldMeshes.length; i++) {
       assert.equal(
         game.worldMeshes[i].visible,
         false,
-        `obstacle collision proxy [${i - 1}] (${cfg.obstacles[i - 1].type}) is hidden behind sculpted Saltline architecture`
+        `obstacle collision proxy [${i - 1}] (${cfg.obstacles[i - 1].type}) is hidden behind sculpted CS:GO architecture`
       );
     }
-    assert.ok(game.mergedWorldMeshes.length >= 4, 'builds batched Saltline architectural meshes & InstancedMeshes');
+    assert.ok(game.mergedWorldMeshes.length >= 4, 'builds batched CS:GO architectural meshes & InstancedMeshes');
 
-    // Verify clean disposal & rebuild on map switch (invite room edge case: cargo_dock -> desert_outpost -> cargo_dock)
+    // Verify clean disposal & rebuild on map switch across all 6 CS:GO maps (de_nuke -> de_dust2 -> de_nuke)
     const statsBefore = sceneStats(game);
-    game.loadMap('desert_outpost');
-    assert.equal(game.currentMapConfig?.id, 'desert_outpost');
-    game.loadMap('cargo_dock');
+    game.loadMap('de_dust2');
+    assert.equal(game.currentMapConfig?.id, 'de_dust2');
+    game.loadMap('de_nuke');
     const statsAfter = sceneStats(game);
     assert.equal(statsAfter.drawCalls, statsBefore.drawCalls, 'map switch disposes previous arena cleanly without draw-call leak');
     assert.equal(statsAfter.triangles, statsBefore.triangles, 'map switch disposes previous arena cleanly without triangle leak');
@@ -1662,7 +1649,7 @@ describe('Saltline Full Overhaul (BR-01..BR-06, AC-01..AC-05)', () => {
 
   it('BR-06 / AC-05: defaults lobby camera to unobstructed harbor vista, switches weapon/operator inspection stages cleanly, and purges all UI emojis', async () => {
     const game = await createTestGame3D({ qualityChoice: 'medium' });
-    game.loadMap('cargo_dock');
+    game.loadMap('de_dust2');
     assert.equal(game.lobbyCameraMode, 'harbor', 'defaults to cinematic harbor vista mode');
     assert.equal(game.lobbyShowcaseGroup.visible, false, 'harbor vista hides close-up showcase stage');
 
@@ -1723,6 +1710,119 @@ describe('Saltline Full Overhaul (BR-01..BR-06, AC-01..AC-05)', () => {
     assert.match(html, /id="btn-open-rooms-tab"/);
   });
 });
+
+// ---------------------------------------------------------------- Polish & 1P Knife Grip Regression Guards
+describe('Visual polish, grounded props, soft ambient particles & 1P knife grip', () => {
+  it('syncPickups() grounds all pickup types (crossGroup.position.y <= 0.25) with zero torus/octahedron sci-fi meshes', async () => {
+    const game = await createTestGame3D({ qualityChoice: 'high' });
+    const samplePickups = [
+      { id: 'pk_hp', type: 'health', x: 2, y: 0, z: 2, active: true },
+      { id: 'pk_ar', type: 'armor', x: -2, y: 0, z: 2, active: true },
+      { id: 'pk_sp', type: 'speed', x: 2, y: 0, z: -2, active: true },
+      { id: 'pk_dm', type: 'damage', x: -2, y: 0, z: -2, active: true }
+    ];
+    game.syncPickups(samplePickups);
+    game.animate(2000);
+
+    assert.equal(game.pickupMeshes.size, 4);
+    for (const item of game.pickupMeshes.values()) {
+      assert.ok(item.crossGroup.position.y <= 0.25, `${item.type} crossGroup.position.y=${item.crossGroup.position.y} must be grounded <= 0.25`);
+      assert.equal(item.crossGroup.rotation.y, 0, `${item.type} pickup case does not spin`);
+      assert.ok(item.holoRing.material.opacity <= 0.28, `${item.type} holoRing opacity <= 0.28`);
+      assert.ok(item.holoRing.material.emissiveIntensity <= 0.25, `${item.type} holoRing emissiveIntensity <= 0.25`);
+      item.group.traverse((obj) => {
+        if (!obj.isMesh || !obj.geometry) return;
+        assert.notEqual(obj.geometry.type, 'TorusGeometry', `${item.type} must not contain sci-fi TorusGeometry`);
+        assert.notEqual(obj.geometry.type, 'OctahedronGeometry', `${item.type} must not contain sci-fi OctahedronGeometry`);
+      });
+    }
+    game.clearPickups();
+  });
+
+  it('buildJumpPads() uses matte industrial emissive bounds (emissiveIntensity <= 0.25) across all 6 CS:GO maps', async () => {
+    const game = await createTestGame3D({ qualityChoice: 'high' });
+    for (const mapId of MAPS) {
+      game.loadMap(mapId);
+      assert.ok(game.jumpPadMeshes.length >= 2, `${mapId} builds jump pads`);
+      game.animate(1500);
+      for (const jp of game.jumpPadMeshes) {
+        assert.ok(jp.ringMat1.opacity <= 0.15, `${mapId} jump pad mist ring opacity <= 0.15`);
+        let checkedMatteEmissive = false;
+        jp.group.traverse((obj) => {
+          if (!obj.isMesh || !obj.material) return;
+          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+          for (const mat of mats) {
+            const hasEmissiveColor = Boolean(mat.emissive && mat.emissive.getHex() !== 0);
+            if (hasEmissiveColor) {
+              checkedMatteEmissive = true;
+              assert.ok(
+                mat.emissiveIntensity <= 0.25,
+                `${mapId} jump pad material emissiveIntensity ${mat.emissiveIntensity} exceeds 0.25`
+              );
+            }
+          }
+        });
+        assert.equal(checkedMatteEmissive, true, `${mapId} jump pad has matte recessed emissive grate well`);
+      }
+    }
+    game.disposeMapResources();
+  });
+
+  it('ambientParticles preserves QUALITY[tier].ambientParticles vertex count and uses soft alpha config (alphaTest > 0, depthWrite === false)', async () => {
+    const { createSoftParticleTexture } = await import('../public/js/arena/skyAtmosphere.js');
+    const origDoc = globalThis.document;
+    try {
+      globalThis.document = undefined;
+      assert.equal(createSoftParticleTexture(null), null, 'createSoftParticleTexture is null-safe without document');
+    } finally {
+      globalThis.document = origDoc;
+    }
+
+    for (const tier of TIER_ORDER) {
+      const game = await createTestGame3D({ qualityChoice: tier });
+      for (const mapId of ['de_dust2', 'fy_iceworld', 'de_nuke']) {
+        game.loadMap(mapId);
+        const expected = QUALITY[tier].ambientParticles;
+        if (expected === 0) {
+          assert.equal(game.ambientParticles, null, `${tier}/${mapId} omits ambientParticles when budget is 0`);
+        } else {
+          assert.ok(game.ambientParticles?.isPoints, `${tier}/${mapId} builds THREE.Points ambientParticles`);
+          assert.equal(game.ambientParticles.geometry.attributes.position.count, expected, `${tier}/${mapId} exact particle count`);
+          assert.ok(game.ambientParticles.material.alphaTest > 0, `${tier}/${mapId} soft particle alphaTest > 0`);
+          assert.equal(game.ambientParticles.material.depthWrite, false, `${tier}/${mapId} soft particle depthWrite === false`);
+          assert.equal(game.ambientParticles.material.transparent, true, `${tier}/${mapId} soft particle transparent === true`);
+          assert.ok(Boolean(game.ambientParticles.material.map), `${tier}/${mapId} binds soft radial particle texture`);
+        }
+      }
+      game.disposeMapResources();
+    }
+  });
+
+  it('FPS_ARMS_WEAPON_PRESETS.knife has useRiggedKnifeFist: true and non-vertical angled combat grip orientation', async () => {
+    const { FPS_ARMS_WEAPON_PRESETS } = await import('../public/js/weapons/fpsArmsRig.js');
+    const { CS2_WEAPON_SPECS } = await import('../public/js/weapons/cs2WeaponGlb.js');
+    const knifePreset = FPS_ARMS_WEAPON_PRESETS.knife;
+    const knifePose = CS2_WEAPON_SPECS.knife?.pose;
+
+    assert.equal(knifePreset.useRiggedKnifeFist, true);
+    assert.equal(knifePreset.anchorKind, 'rigged_knife');
+    assert.equal(knifePreset.knifeLocalRot.length, 3);
+    assert.ok(knifePose && Array.isArray(knifePose.hip?.rot), 'CS2_WEAPON_SPECS.knife defines hip pose rotation');
+
+    // Transform the knife blade forward axis (0, 0, -1) by local grip + hip pose rotations and assert angled forward stance (non-vertical)
+    const bladeDir = new THREE.Vector3(0, 0, -1)
+      .applyEuler(new THREE.Euler(...knifePreset.knifeLocalRot, 'XYZ'))
+      .applyEuler(new THREE.Euler(...knifePose.hip.rot, 'XYZ'))
+      .normalize();
+
+    assert.ok(bladeDir.y < 0.85, `knife blade must not point straight vertical (dir.y=${bladeDir.y.toFixed(3)})`);
+    assert.ok(bladeDir.z < -0.35, `knife blade must angle forward toward target (dir.z=${bladeDir.z.toFixed(3)})`);
+    assert.ok(Math.abs(bladeDir.x) > 0.15, `knife blade must angle inward/horizontally (dir.x=${bladeDir.x.toFixed(3)})`);
+    assert.ok(Math.abs(knifePreset.knifeLocalRot[0] - Math.PI / 2) > 0.25, 'knifeLocalRot pitch is not straight vertical 90 deg');
+    assert.ok(Math.abs(knifePreset.knifeLocalRot[2]) > 0.1, 'knifeLocalRot includes roll to expose blade bevel');
+  });
+});
+
 
 
 

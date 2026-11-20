@@ -1,7 +1,6 @@
 import {
   DEFAULT_LOADOUT,
   DEFAULT_MAP_ID,
-  MAPS,
   PRIMARY_WEAPONS,
   WEAPONS,
   buildLanCreateUrl,
@@ -377,72 +376,60 @@ export function syncLobbyWeaponSelectionUi(weaponId) {
 }
 
 const LOBBY_MAP_META = {
-  desert_outpost: {
+  de_dust2: {
     badge: 'D2',
-    eyebrow: 'DE_DUST2 // MOROCCO — SECTOR A/B · 60HZ',
-    title: 'DE_DUST2 // MOROCCO — SECTOR A/B',
-    subtitle: 'MID DOUBLE DOORS · SHORT A CATWALK · LONG A & B TUNNELS — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
+    eyebrow: 'DE_DUST2 // MOROCCO — RETAKE A/B · 60HZ',
+    title: 'DE_DUST2 // MOROCCO — RETAKE A/B',
+    subtitle: 'MID DOUBLE DOORS · XBOX SHORT A · LONG A & B TUNNELS — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
   },
-  cargo_dock: {
-    badge: 'B4',
-    eyebrow: 'BERTH 4 // SALTLINE TERMINAL · 60HZ',
-    title: 'SALTLINE TERMINAL // BERTH 4',
-    subtitle: 'ĐƠN VỊ ĐỘT KÍCH CẢNG BIỂN — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
+  de_mirage: {
+    badge: 'MR',
+    eyebrow: 'DE_MIRAGE // MOROCCO PALACE — RETAKE A · 60HZ',
+    title: 'DE_MIRAGE // MOROCCO PALACE',
+    subtitle: 'A-SITE TRIPLE BOX · PALACE BALCONY · CONNECTOR & MID WINDOW — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
   },
-  cyber_citadel: {
-    badge: '03',
-    eyebrow: 'SECTOR 03 // CYBER CITADEL · 60HZ',
-    title: 'CYBER CITADEL // CORE SPIRE',
-    subtitle: 'PHÁO ĐÀI TÁC CHIẾN ĐA TẦNG — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
+  de_inferno: {
+    badge: 'IF',
+    eyebrow: 'DE_INFERNO // ITALY BANANA — WINGMAN B · 60HZ',
+    title: 'DE_INFERNO // ITALY BANANA',
+    subtitle: 'ĐÀI PHUN NƯỚC B-SITE · BANANA CAR & SANDBAGS · CT COFFINS — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
   },
-  neon_lab: {
-    badge: '04',
-    eyebrow: 'SECTOR 04 // QUANTUM LAB · 60HZ',
-    title: 'QUANTUM LAB // CONTAINMENT BAY',
-    subtitle: 'PHÒNG THÍ NGHIỆM PHẢN ỨNG NHANH — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
-  },
-  crossfire_plus: {
-    badge: 'CQB',
-    eyebrow: 'SECTOR CQB // CROSSFIRE (+) · 60HZ',
-    title: 'CROSSFIRE (+) // INTERSECTION',
-    subtitle: 'GIAO LỘ BỐN HƯỚNG TỐC ĐỘ CAO — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
+  de_nuke: {
+    badge: 'NK',
+    eyebrow: 'DE_NUKE // CEDAR CREEK — YARD & A-SITE · 60HZ',
+    title: 'DE_NUKE // CEDAR CREEK',
+    subtitle: 'LÒ PHẢN ỨNG A-SITE · HEAVEN CATWALK · CONTAINER ĐỎ & SILO — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
   },
   fy_iceworld: {
-    badge: 'CQB',
-    eyebrow: 'SECTOR CQB // ICEWORLD ARENA · 60HZ',
-    title: 'ICEWORLD ARENA // FROZEN GRID',
-    subtitle: 'ĐẤU TRƯỜNG CẬN CHIẾN ĐỐI XỨNG — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
+    badge: 'FY',
+    eyebrow: 'FY_ICEWORLD // CS CLASSIC — ARCTIC 4-PILLAR · 60HZ',
+    title: 'FY_ICEWORLD // CS CLASSIC',
+    subtitle: 'ĐẤU TRƯỜNG 4 TRỤ BĂNG ĐỐI XỨNG · XUYÊN TƯỜNG TỐC ĐỘ CAO — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
   },
-  killhouse_cqb: {
-    badge: 'CQB',
-    eyebrow: 'SECTOR CQB // KILLHOUSE · 60HZ',
-    title: 'KILLHOUSE CQB // BREACH COURSE',
-    subtitle: 'KHU HUẤN LUYỆN ĐỘT KÍCH CẬN CHIẾN — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
-  },
-  arena_duel: {
+  aim_map: {
     badge: '1V1',
-    eyebrow: 'SECTOR 1V1 // AIM DUEL ARENA · 60HZ',
-    title: 'AIM DUEL ARENA // PROVING GROUND',
-    subtitle: 'SÂN ĐẤU ĐỐI KHÁNG PHẢN XẠ — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
+    eyebrow: 'AIM_MAP // CS2 1V1 — RIFLE DUEL YARD · 60HZ',
+    title: 'AIM_MAP // CS2 1V1',
+    subtitle: 'SÂN ĐẤU SÚNG TRƯỜNG ĐỐI XỨNG · CẦU TRUNG TÂM & LÀN AWP — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
   }
 };
 
 export function syncLobbyMapSelectionUi(mapId) {
+  const mapCfg = getMapConfig(mapId);
+  const resolvedId = mapCfg?.id || mapId;
   if (mapGrid?.querySelectorAll) {
     mapGrid.querySelectorAll('.map-option').forEach((el) => {
-      el.classList?.toggle('active', el.dataset?.map === mapId);
+      el.classList?.toggle('active', el.dataset?.map === resolvedId);
     });
   }
   if (pauseMapSelect) {
-    pauseMapSelect.value = mapId;
+    pauseMapSelect.value = resolvedId;
   }
   if (typeof document !== 'undefined' && typeof document.getElementById === 'function') {
-    const mapCfg = getMapConfig(mapId);
-    const resolvedId = mapCfg?.id || mapId;
     const meta = LOBBY_MAP_META[resolvedId] || {
-      badge: 'OP',
-      eyebrow: `${ String(mapCfg?.name || resolvedId || 'SECTOR').toUpperCase() } · 60HZ`,
-      title: String(mapCfg?.name || resolvedId || 'COMBAT SECTOR').toUpperCase(),
+      badge: 'D2',
+      eyebrow: `${ String(mapCfg?.name || resolvedId || 'DE_DUST2').toUpperCase() } · 60HZ`,
+      title: String(mapCfg?.name || resolvedId || 'DUST II // MOROCCO').toUpperCase(),
       subtitle: 'CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D'
     };
     const tagEl = document.getElementById('lobby-sector-tag');
@@ -999,7 +986,7 @@ export async function fetchActiveRooms() {
       .map(
         (r) => {
           const safeCode = escapeHtml(r.code);
-          const safeMap = escapeHtml(r.mapName || 'CYBER CITADEL');
+          const safeMap = escapeHtml(r.mapName || 'DUST II // MOROCCO');
           const safeTotal = Number(r.total ?? r.humans) || 0;
           const safeMax = Number(r.maxPlayers) || 16;
           const modeLabel = r.gameMode === 'tdm' ? '2 PHE' : 'FFA';
@@ -1269,7 +1256,7 @@ if (mapGrid) {
   mapGrid.addEventListener('click', (e) => {
     const btn = e.target.closest('.map-option');
     if (!btn) return;
-    appState.selectedMapId = btn.dataset.map;
+    appState.selectedMapId = getMapConfig(btn.dataset.map)?.id || btn.dataset.map;
     syncLobbyMapSelectionUi(appState.selectedMapId);
     // Live 3D map preview in the lobby background
     appState.game.loadMap(appState.selectedMapId);
@@ -1357,10 +1344,10 @@ btnStartTeamMatch?.addEventListener('click', () => {
 
 if (pauseMapSelect) {
   pauseMapSelect.addEventListener('change', () => {
-    appState.selectedMapId = pauseMapSelect.value;
+    appState.selectedMapId = getMapConfig(pauseMapSelect.value)?.id || pauseMapSelect.value;
     syncLobbyMapSelectionUi(appState.selectedMapId);
     saveUserPrefs({ selectedMap: appState.selectedMapId });
-    appState.socket.emit('changeMap', { mapId: pauseMapSelect.value });
+    appState.socket.emit('changeMap', { mapId: appState.selectedMapId });
   });
 }
 
@@ -1563,9 +1550,12 @@ export function initLanServerRoom() {
 
   const applyLobbySelections = ({ name, mapId, gameMode }) => {
     if (name) playerNameInput.value = name;
-    if (mapId && Object.hasOwn(MAPS, mapId)) {
-      appState.selectedMapId = mapId;
-      syncLobbyMapSelectionUi(mapId);
+    if (mapId) {
+      const resolvedMapId = getMapConfig(mapId)?.id;
+      if (resolvedMapId) {
+        appState.selectedMapId = resolvedMapId;
+        syncLobbyMapSelectionUi(resolvedMapId);
+      }
     }
     appState.selectedGameMode = gameMode === 'tdm' ? 'tdm' : 'ffa';
     lobbyGameModeGrid?.querySelectorAll('.game-mode-option').forEach((el) => {

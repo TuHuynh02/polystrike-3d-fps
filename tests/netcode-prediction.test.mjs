@@ -41,7 +41,7 @@ const { RECONCILE_EPSILON, CORRECTION_DECAY_RATE } = await import('../public/js/
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, '..');
-const MAP_ID = 'cyber_citadel';
+const MAP_ID = 'de_dust2';
 const MAP_CFG = getMapConfig(MAP_ID);
 const STEP_MS = 1000 / 60;
 
@@ -373,11 +373,11 @@ function createMoveStateAt(x, y, z) {
 // ---------------------------------------------------------------------------------------------------------------------
 
 describe('input commands: world rules are enforced by the server', () => {
-  it('cannot walk through a wall (3.2 m high wall face at z = -23.25)', () => {
+  it('cannot walk through a wall (3.4 m high Mid Double Doors wall face at z = -16.1)', () => {
     const { rm } = createServer();
     const { room, player } = join(rm, 'wall');
     const T0 = Date.now();
-    teleport(rm, player, -10, 0.1, -15, T0);
+    teleport(rm, player, -6, 0.1, -12, T0);
     // yaw = 0 faces -Z: sprint into the wall for 6 s of real time
     const run = Array.from({ length: 360 }, (_, i) => cmd(i + 1, { moveForward: 1, wantsSprint: true, yaw: 0 }));
     let t = T0;
@@ -387,8 +387,8 @@ describe('input commands: world rules are enforced by the server', () => {
       rm.processPlayerInputs(room, player, t);
     }
     assert.ok(player.lastProcessedSeq >= 300);
-    assert.ok(player.z < -22, `reached the wall (z = ${player.z})`);
-    assert.ok(player.z >= -23.25 + 0.45 - 1e-6, `stopped by the wall, z = ${player.z}`);
+    assert.ok(player.z < -15, `reached the wall (z = ${player.z})`);
+    assert.ok(player.z >= -16.1 + 0.45 - 1e-6, `stopped by the wall, z = ${player.z}`);
     assert.ok(player.y < 0.6, 'did not climb it');
   });
 
@@ -396,7 +396,7 @@ describe('input commands: world rules are enforced by the server', () => {
     const { rm } = createServer();
     const { room, player } = join(rm, 'fly');
     const T0 = Date.now();
-    teleport(rm, player, -40, 0.1, 40, T0);
+    teleport(rm, player, -32, 0.1, 32, T0);
     let t = T0;
     let maxY = 0;
     for (let i = 0; i < 250; i++) {

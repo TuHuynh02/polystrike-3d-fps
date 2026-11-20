@@ -71,7 +71,7 @@ const {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, '..');
 const TICK_MS = 40;
-const MAP_ID = 'cyber_citadel';
+const MAP_ID = 'de_dust2';
 
 // ---------------------------------------------------------------------------------------------------------------------
 describe('impairment profiles (real RoomManager -> simulated link -> real headless Game3D), 30 s, 5 remote players', () => {

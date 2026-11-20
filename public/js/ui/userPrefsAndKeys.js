@@ -6,12 +6,12 @@ import {
   SECONDARY_WEAPONS,
   VALID_OPERATOR_COLORS,
   PlayerStateCache,
-  getMapConfig
+  resolveMapId
 } from '../shared.js';
 
 export const USER_PREFS_STORAGE_KEY = 'polystrike_user_prefs_v1';
 export const LEGACY_NAME_STORAGE_KEY = 'polystrike_name';
-export const CLIENT_DEFAULT_MAP_ID = 'desert_outpost';
+export const CLIENT_DEFAULT_MAP_ID = 'de_dust2';
 export { VALID_OPERATOR_COLORS, DEFAULT_OPERATOR_COLOR };
 export const KEYBOARD_LOCK_CODES = [
   'KeyW',
@@ -101,11 +101,10 @@ export function loadUserPrefs() {
     ? parsedColor
     : DEFAULT_OPERATOR_COLOR;
 
-  const candidateMap = typeof raw.selectedMap === 'string' ? raw.selectedMap : '';
-  const resolvedMapCfg = candidateMap ? getMapConfig(candidateMap) : null;
-  const selectedMap = candidateMap && resolvedMapCfg?.id === candidateMap
-    ? candidateMap
-    : (CLIENT_DEFAULT_MAP_ID || DEFAULT_MAP_ID || 'desert_outpost');
+  const candidateMap = typeof raw.selectedMap === 'string' ? raw.selectedMap.trim() : '';
+  const selectedMap = candidateMap
+    ? resolveMapId(candidateMap)
+    : (CLIENT_DEFAULT_MAP_ID || DEFAULT_MAP_ID || 'de_dust2');
 
   const parsedSens = Number(raw.sensitivity);
   const sensitivity = Number.isFinite(parsedSens)
@@ -129,6 +128,9 @@ export const userPrefs = loadUserPrefs();
 
 export function saveUserPrefs(partial = {}) {
   Object.assign(userPrefs, partial);
+  if (typeof userPrefs.selectedMap === 'string' && userPrefs.selectedMap) {
+    userPrefs.selectedMap = resolveMapId(userPrefs.selectedMap);
+  }
   userPrefs.secondaryWeapon = DEFAULT_LOADOUT.secondary || 'pistol';
   try {
     localStorage.setItem(USER_PREFS_STORAGE_KEY, JSON.stringify(userPrefs));

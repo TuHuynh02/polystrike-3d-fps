@@ -24,7 +24,7 @@ import { FIXED_DT } from '../shared/movement.js';
 import { BTN, buildInputCommand, commandTimeMs } from '../shared/netcode.js';
 import { RoomManager, SHOT_REJECT } from '../server/roomManager.js';
 
-const MAP_ID = 'cyber_citadel';
+const MAP_ID = 'de_dust2';
 const STEP_MS = 1000 / 60;
 
 function createServerHarness() {

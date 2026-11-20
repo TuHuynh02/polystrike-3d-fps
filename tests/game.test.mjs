@@ -382,7 +382,10 @@ describe('1. Room Creation, Joining, Sanitization & Map Synchronization', () => 
     assert.equal(sanitizeRoomCode('1234567890'), '123456');
     assert.equal(sanitizeRoomCode(null), '');
 
-    assert.equal(sanitizeMapId('cargo_dock'), 'cargo_dock');
+    assert.equal(sanitizeMapId('de_mirage'), 'de_mirage');
+    assert.equal(sanitizeMapId('desert_outpost'), 'de_dust2');
+    assert.equal(sanitizeMapId('arena_duel'), 'aim_map');
+    assert.equal(sanitizeMapId('cargo_dock'), DEFAULT_MAP_ID);
     assert.equal(sanitizeMapId('invalid_map'), DEFAULT_MAP_ID);
     assert.equal(sanitizeMapId(null), DEFAULT_MAP_ID);
 
@@ -402,13 +405,13 @@ describe('1. Room Creation, Joining, Sanitization & Map Synchronization', () => 
     // `botCount` is a field of OLD clients: it must be ignored (no bots exist any more), never an error
     const createRes = rm.addHumanPlayer(
       { id: 'host_1' },
-      { name: 'HostPlayer', mode: 'private', botCount: 3, mapId: 'cargo_dock', weapon: 'm4a1' }
+      { name: 'HostPlayer', mode: 'private', botCount: 3, mapId: 'de_mirage', weapon: 'm4a1' }
     );
 
     assert.ok(!createRes.error);
     const { room, player: hostPlayer } = createRes;
     assert.equal(room.isPublic, false);
-    assert.equal(room.mapId, 'cargo_dock');
+    assert.equal(room.mapId, 'de_mirage');
     assert.equal(room.desiredBots, undefined, 'rooms no longer carry a bot count');
     assert.equal(room.players.size, 1, 'a legacy botCount adds no extra entities');
     assert.match(room.code, /^[A-Z0-9]{6}$/);
@@ -463,44 +466,44 @@ describe('1. Room Creation, Joining, Sanitization & Map Synchronization', () => 
     const { rm } = createTestRoomManager();
     const { room: room1 } = rm.addHumanPlayer(
       { id: 'pub_1' },
-      { name: 'Pub1', mode: 'public', mapId: 'neon_lab' }
+      { name: 'Pub1', mode: 'public', mapId: 'de_nuke' }
     );
     assert.equal(room1.isPublic, true);
-    assert.equal(room1.mapId, 'neon_lab');
+    assert.equal(room1.mapId, 'de_nuke');
 
     // Fill room1 with humans up to MATCH_CONFIG.MAX_PLAYERS
     for (let i = 2; i <= MATCH_CONFIG.MAX_PLAYERS; i++) {
       const { room } = rm.addHumanPlayer(
         { id: `pub_${i}` },
-        { name: `Pub${i}`, mode: 'public', mapId: 'neon_lab' }
+        { name: `Pub${i}`, mode: 'public', mapId: 'de_nuke' }
       );
       assert.equal(room.code, room1.code);
     }
 
-    // Next public join on neon_lab must create a new public room
+    // Next public join on de_nuke must create a new public room
     const { room: room2 } = rm.addHumanPlayer(
       { id: 'pub_next' },
-      { name: 'PubNext', mode: 'public', mapId: 'neon_lab' }
+      { name: 'PubNext', mode: 'public', mapId: 'de_nuke' }
     );
     assert.notEqual(room2.code, room1.code);
     assert.equal(room2.isPublic, true);
-    assert.equal(room2.mapId, 'neon_lab');
+    assert.equal(room2.mapId, 'de_nuke');
   });
 
   it('handles map switching and automatic empty room cleanup', () => {
     const { rm, io } = createTestRoomManager();
     const { room } = rm.addHumanPlayer(
       { id: 'p1' },
-      { name: 'One', mode: 'private', mapId: 'cyber_citadel' }
+      { name: 'One', mode: 'private', mapId: 'de_dust2' }
     );
     rm.addHumanPlayer({ id: 'p2' }, { name: 'Two', roomCode: room.code });
 
-    // Switch map to desert_outpost
-    rm.changeRoomMap(room, 'desert_outpost');
-    assert.equal(room.mapId, 'desert_outpost');
+    // Switch map to de_inferno
+    rm.changeRoomMap(room, 'de_inferno');
+    assert.equal(room.mapId, 'de_inferno');
     const mapEvt = io.roomEmitted.find((e) => e.event === 'mapChanged');
     assert.ok(mapEvt, 'Expected mapChanged broadcast');
-    assert.equal(mapEvt.payload.mapId, 'desert_outpost');
+    assert.equal(mapEvt.payload.mapId, 'de_inferno');
 
     // Remove p1 -> room still has p2
     rm.removePlayer('p1');
@@ -513,7 +516,7 @@ describe('1. Room Creation, Joining, Sanitization & Map Synchronization', () => 
 
   it('solo play: one human alone keeps ticking (timer, respawn, health packs) and the match is never auto-ended', () => {
     const { rm, io } = createTestRoomManager();
-    const { room, player } = rm.addHumanPlayer({ id: 'solo' }, { name: 'Solo', mode: 'private', mapId: 'cyber_citadel' });
+    const { room, player } = rm.addHumanPlayer({ id: 'solo' }, { name: 'Solo', mode: 'private', mapId: 'de_dust2' });
     assert.equal(room.players.size, 1);
     assert.equal(room.state, 'PLAYING');
     assert.equal(room.hostId, 'solo');
@@ -567,7 +570,7 @@ describe('2. State Synchronization, Sequence Ordering, Quantization, Lag Comp & 
     const { rm } = createTestRoomManager();
     const { room, player } = rm.addHumanPlayer(
       { id: 'mover' },
-      { name: 'Mover', mode: 'private', mapId: 'cyber_citadel' }
+      { name: 'Mover', mode: 'private', mapId: 'de_dust2' }
     );
 
     placeServerSide(player, 10, 2.5, -15);
@@ -610,7 +613,7 @@ describe('2. State Synchronization, Sequence Ordering, Quantization, Lag Comp & 
     assert.equal(player.x, 10.1234, 'Duplicate seq packet must be rejected');
 
     // Out-of-bounds coordinates and pitch must be clamped on seq 2
-    const arenaLimit = getMapConfig('cyber_citadel').arenaHalfSize - 0.4;
+    const arenaLimit = getMapConfig('de_dust2').arenaHalfSize - 0.4;
     placeServerSide(player, arenaLimit - 0.5, 0, -(arenaLimit - 0.5));
     rm.handlePlayerMove(room, player, {
       x: arenaLimit + 3,
@@ -653,7 +656,7 @@ describe('2. State Synchronization, Sequence Ordering, Quantization, Lag Comp & 
     const { rm, io } = createTestRoomManager();
     const { room, player } = rm.addHumanPlayer(
       { id: 'ser_1' },
-      { name: 'SerialTester', mode: 'private', mapId: 'cyber_citadel' }
+      { name: 'SerialTester', mode: 'private', mapId: 'de_dust2' }
     );
     rm.addHumanPlayer({ id: 'ser_2' }, { name: 'SerialOther', roomCode: room.code, mode: 'private' });
     player.lastMoveAt = Date.now();
@@ -924,10 +927,10 @@ describe('2. State Synchronization, Sequence Ordering, Quantization, Lag Comp & 
       clientA = await connectSocketIOClient();
       clientB = await connectSocketIOClient();
 
-      // Client A joins a public room on cyber_citadel (a legacy `botCount` from an old client is ignored)
-      clientA.emit('joinRoom', { name: 'AlphaWS', mode: 'public', botCount: 2, mapId: 'cyber_citadel', weapon: 'm4a1' });
+      // Client A joins a public room on de_dust2 (a legacy `botCount` from an old client is ignored)
+      clientA.emit('joinRoom', { name: 'AlphaWS', mode: 'public', botCount: 2, mapId: 'de_dust2', weapon: 'm4a1' });
       const joinedA = await clientA.waitFor('roomJoined');
-      assert.equal(joinedA.mapId, 'cyber_citadel');
+      assert.equal(joinedA.mapId, 'de_dust2');
       assert.equal(joinedA.isPublic, true);
       assert.equal(joinedA.botCount, undefined, 'roomJoined no longer reports a bot count');
       assert.equal(joinedA.players.length, 1, 'no bots are spawned for a legacy botCount');
@@ -1293,7 +1296,7 @@ describe('4. Weapon Shooting, Hit Detection, Kill/Respawn, Grenades & Match Win'
     const { rm } = createTestRoomManager();
     const { room, player: shooter } = rm.addHumanPlayer(
       { id: 'shooter' },
-      { name: 'Shooter', mode: 'private', mapId: 'cyber_citadel', weapon: 'm4a1' }
+      { name: 'Shooter', mode: 'private', mapId: 'de_dust2', weapon: 'm4a1' }
     );
     const { player: target } = rm.addHumanPlayer(
       { id: 'target' },
@@ -1303,9 +1306,9 @@ describe('4. Weapon Shooting, Hit Detection, Kill/Respawn, Grenades & Match Win'
     shooter.invulnerableUntil = 0;
     target.invulnerableUntil = 0;
 
-    // Place both in the unobstructed northern plaza (x = 0, z = -16 to z = -24, 8m apart)
-    placeServerSide(shooter, 0, 0, -16);
-    placeServerSide(target, 0, 0, -24);
+    // Place both in the unobstructed Mid Double Doors lane (x = 0, z = -13.5 to z = -21.5, 8m apart)
+    placeServerSide(shooter, 0, 0, -13.5);
+    placeServerSide(target, 0, 0, -21.5);
     target.yaw = 0;
     recordPlayerSnapshot(target, Date.now());
 
@@ -1314,11 +1317,11 @@ describe('4. Weapon Shooting, Hit Detection, Kill/Respawn, Grenades & Match Win'
     shooter.ammoByWeapon.m4a1 = 30;
     shooter.lastShotAt = 0;
 
-    // Server eye is always (0, 1.62, -16); client `origin` / `isHeadshot` / `isLegshot` claims are ignored.
+    // Server eye is always (0, 1.62, -13.5); client `origin` / `isHeadshot` / `isLegshot` claims are ignored.
     const aimFromServerEye = (tx, ty, tz) => {
       const dx = tx - 0;
       const dy = ty - 1.62;
-      const dz = tz - (-16);
+      const dz = tz - (-13.5);
       const len = Math.hypot(dx, dy, dz);
       return { x: dx / len, y: dy / len, z: dz / len };
     };
@@ -1328,7 +1331,7 @@ describe('4. Weapon Shooting, Hit Detection, Kill/Respawn, Grenades & Match Win'
     rm.handleShoot(room, shooter, {
       weapon: 'm4a1',
       origin: { x: 99, y: 99, z: 99 }, // spoofed origin ignored
-      dir: aimFromServerEye(0, 1.71, -24),
+      dir: aimFromServerEye(0, 1.71, -21.5),
       targetId: target.id,
       isHeadshot: false,
     });
@@ -1339,7 +1342,7 @@ describe('4. Weapon Shooting, Hit Detection, Kill/Respawn, Grenades & Match Win'
     const hpAfterFirstShot = target.hp;
     rm.handleShoot(room, shooter, {
       weapon: 'm4a1',
-      dir: aimFromServerEye(0, 1.20, -24),
+      dir: aimFromServerEye(0, 1.20, -21.5),
       targetId: target.id,
       isHeadshot: false,
     });
@@ -1350,31 +1353,31 @@ describe('4. Weapon Shooting, Hit Detection, Kill/Respawn, Grenades & Match Win'
     target.hp = 100;
     rm.handleShoot(room, shooter, {
       weapon: 'm4a1',
-      origin: { x: 0, y: 1.71, z: -16 }, // spoofed origin at head height must not turn a torso ray into a headshot
-      dir: aimFromServerEye(0, 1.20, -24),
+      origin: { x: 0, y: 1.71, z: -13.5 }, // spoofed origin at head height must not turn a torso ray into a headshot
+      dir: aimFromServerEye(0, 1.20, -21.5),
       targetId: target.id,
       isHeadshot: true,
       isLegshot: false,
     });
     assert.equal(target.hp, 100 - WEAPONS.m4a1.damage);
 
-    // 4. Legshot test (aimed at left shin (-0.145, 0.40, -24): 0.78x multiplier even if client claims isHeadshot: true)
+    // 4. Legshot test (aimed at left shin (-0.145, 0.40, -21.5): 0.78x multiplier even if client claims isHeadshot: true)
     shooter.lastShotAt = 0;
     target.hp = 100;
     rm.handleShoot(room, shooter, {
       weapon: 'm4a1',
-      dir: aimFromServerEye(-0.145, 0.40, -24),
+      dir: aimFromServerEye(-0.145, 0.40, -21.5),
       targetId: target.id,
       isHeadshot: true,
       isLegshot: false,
     });
     assert.equal(target.hp, 100 - Math.round(WEAPONS.m4a1.damage * 0.78));
 
-    // 5. Obstacle occlusion: place shooter and target on opposite sides of container at (-22, 1.6, -10)
+    // 5. Obstacle occlusion: place shooter and target on opposite sides of B-Tunnel container at (-25, 1.6, -4.2)
     shooter.lastShotAt = 0;
     target.hp = 100;
-    placeServerSide(shooter, -26, 0, -10);
-    placeServerSide(target, -18, 0, -10);
+    placeServerSide(shooter, -29, 0, -4.2);
+    placeServerSide(target, -21, 0, -4.2);
     recordPlayerSnapshot(target, Date.now());
     rm.handleShoot(room, shooter, {
       weapon: 'sniper',
@@ -1389,7 +1392,7 @@ describe('4. Weapon Shooting, Hit Detection, Kill/Respawn, Grenades & Match Win'
     const { rm, io } = createTestRoomManager();
     const { room, player: human } = rm.addHumanPlayer(
       { id: 'human_1' },
-      { name: 'Hunter', mode: 'private', mapId: 'cyber_citadel', weapon: 'm4a1' }
+      { name: 'Hunter', mode: 'private', mapId: 'de_dust2', weapon: 'm4a1' }
     );
     const { player: victim } = rm.addHumanPlayer(
       { id: 'victim' },
@@ -1410,13 +1413,13 @@ describe('4. Weapon Shooting, Hit Detection, Kill/Respawn, Grenades & Match Win'
     victim.ammo = 20;
     victim.ammoByWeapon.scar = 20;
 
-    // Position human at (0, 0, -16) looking North (-Z) at victim at (0, 0, -22) in open plaza
+    // Position human at (0, 0, -14) looking North (-Z) at victim at (0, 0, -20) through open Mid Double Doors
     const now0 = Date.now();
-    placeServerSide(human, 0, 0, -16);
+    placeServerSide(human, 0, 0, -14);
     human.yaw = 0;
     human.pitch = 0;
     rm.resetPlayerMovement(human, now0);
-    placeServerSide(victim, 0, 0, -22);
+    placeServerSide(victim, 0, 0, -20);
     rm.resetPlayerMovement(victim, now0);
     victim.yaw = Math.PI;
     recordPlayerSnapshot(victim, now0);
@@ -1535,14 +1538,14 @@ describe('4. Weapon Shooting, Hit Detection, Kill/Respawn, Grenades & Match Win'
 
     assert.ok(defender.invulnerableUntil > Date.now());
     attacker.invulnerableUntil = 0;
-    attacker.x = 0; attacker.y = 0; attacker.z = -16;
-    defender.x = 0; defender.y = 0; defender.z = -24;
+    attacker.x = 0; attacker.y = 0; attacker.z = -13.5;
+    defender.x = 0; defender.y = 0; defender.z = -21.5;
     recordPlayerSnapshot(defender, Date.now());
     attacker.lastShotAt = 0;
 
     rm.handleShoot(room, attacker, {
       weapon: 'sniper',
-      origin: { x: 0, y: 1.5, z: -16 },
+      origin: { x: 0, y: 1.5, z: -13.5 },
       dir: { x: 0, y: 0, z: -1 },
       targetId: defender.id,
       isHeadshot: true,
@@ -1641,22 +1644,22 @@ describe('4. Weapon Shooting, Hit Detection, Kill/Respawn, Grenades & Match Win'
 
     grenadier.invulnerableUntil = 0;
     target.invulnerableUntil = 0;
-    grenadier.x = 0; grenadier.y = 0; grenadier.z = -16;
-    target.x = 0; target.y = 0; target.z = -24;
+    grenadier.x = 0; grenadier.y = 0; grenadier.z = -13.5;
+    target.x = 0; target.y = 0; target.z = -21.5;
 
     assert.equal(grenadier.grenades, 1);
     const gren = rm.handleThrowGrenade(room, grenadier, {
-      origin: { x: 0, y: 1.5, z: -16.5 },
+      origin: { x: 0, y: 1.5, z: -14.0 },
       dir: { x: 0, y: 0.1, z: -1 },
     });
     assert.ok(gren);
     assert.equal(grenadier.grenades, 0);
     assert.equal(room.grenades.length, 1);
 
-    // Position settled grenade 1m from target in open plaza and detonate
+    // Position settled grenade 1m from target in open Mid Double Doors lane and detonate
     gren.x = 0;
     gren.y = 0.2;
-    gren.z = -23.0;
+    gren.z = -20.5;
     gren.vx = 0;
     gren.vy = 0;
     gren.vz = 0;
@@ -1790,7 +1793,7 @@ describe('5. Health Pack Pickups, Healing Cap, Elevation Bounds & Cooldown Respa
     const { rm, io } = createTestRoomManager();
     const { room, player } = rm.addHumanPlayer(
       { id: 'medic' },
-      { name: 'Medic', mode: 'private', mapId: 'cyber_citadel' }
+      { name: 'Medic', mode: 'private', mapId: 'de_dust2' }
     );
     const pack = room.pickups[0];
 
@@ -1850,7 +1853,7 @@ describe('5. Health Pack Pickups, Healing Cap, Elevation Bounds & Cooldown Respa
     const { rm } = createTestRoomManager();
     const { room, player: human } = rm.addHumanPlayer(
       { id: 'h_obs' },
-      { name: 'Observer', mode: 'private', mapId: 'cyber_citadel' }
+      { name: 'Observer', mode: 'private', mapId: 'de_dust2' }
     );
     human.alive = false; // the first human is dead and far away: it must not take the pack
     const { player: injured } = rm.addHumanPlayer(
@@ -1894,23 +1897,21 @@ describe('5. Health Pack Pickups, Healing Cap, Elevation Bounds & Cooldown Respa
 // 6. TERRAIN / MAP COLLISION, AABB RAYCASTING & 3D RENDERING INVARIANTS
 // ============================================================================
 describe('6. Terrain/Map Collision, AABB Raycasting, Entity Physics & 3D Rendering Invariants', () => {
-  it('validates all 8 map configurations, precomputed AABBs, spawn points, and health packs', () => {
+  it('validates all 6 CS:GO map configurations, precomputed AABBs, spawn points, and health packs', () => {
     assert.deepEqual(MAP_ORDER, [
-      'cyber_citadel',
-      'cargo_dock',
-      'desert_outpost',
-      'neon_lab',
-      'crossfire_plus',
+      'de_dust2',
+      'de_mirage',
+      'de_inferno',
+      'de_nuke',
       'fy_iceworld',
-      'killhouse_cqb',
-      'arena_duel'
+      'aim_map'
     ]);
 
     for (const mapId of MAP_ORDER) {
       const cfg = getMapConfig(mapId);
       assert.equal(cfg.id, mapId);
       assert.ok(cfg.obstacles.length > 10, `Map ${mapId} should have obstacles`);
-      assert.ok(cfg.spawnPoints.length >= 10, `Map ${mapId} should have at least 10 spawn points`);
+      assert.ok(cfg.spawnPoints.length >= 12, `Map ${mapId} should have at least 12 spawn points`);
       assert.ok(cfg.healthPacks.length >= 4, `Map ${mapId} should have health packs`);
       assert.ok(Array.isArray(cfg.callouts) && cfg.callouts.length >= 8, `Map ${mapId} should define tactical radar callouts`);
       assert.ok(cfg.obstacles.filter((o) => o.type === 'platform' && o.h >= 2.0).length >= 3, `Map ${mapId} should have elevated platforms`);
@@ -1923,11 +1924,8 @@ describe('6. Terrain/Map Collision, AABB Raycasting, Entity Physics & 3D Renderi
       }
       for (const team of ['alpha', 'bravo']) {
         for (const sp of cfg.teamSpawns?.[team] || []) {
-          assert.equal(isPointClearOfObstacles(sp.x, sp.z, 0.5, cfg.obstacles, sp.y || 0.1), true, `Team ${team} spawn (${sp.x}, ${sp.z}) in ${mapId} overlaps an obstacle!`);
+          assert.equal(isPointClearOfObstacles(sp.x, sp.z, 0.85, cfg.obstacles, sp.y || 0.1), true, `Team ${team} spawn (${sp.x}, ${sp.z}) in ${mapId} overlaps an obstacle!`);
         }
-      }
-      if (mapId === 'neon_lab') {
-        assert.equal(cfg.theme.floorBase, '#0b0f1e', 'neon_lab floorBase must match skyAtmosphere/proceduralTextures isLab check');
       }
       for (const hp of cfg.healthPacks) {
         assert.equal(isPointClearOfObstacles(hp.x, hp.z, 0.4, cfg.obstacles, (hp.y || 0) + 0.2), true, `Health pack ${hp.id} in ${mapId} overlaps an obstacle!`);
@@ -1939,7 +1937,7 @@ describe('6. Terrain/Map Collision, AABB Raycasting, Entity Physics & 3D Renderi
 
       // Every spawn point should be clear of obstacles at spawn elevation
       for (const sp of cfg.spawnPoints) {
-        const clear = isPointClearOfObstacles(sp.x, sp.z, 0.5, cfg.obstacles, sp.y || 0.1);
+        const clear = isPointClearOfObstacles(sp.x, sp.z, 0.85, cfg.obstacles, sp.y || 0.1);
         assert.equal(clear, true, `Spawn point (${sp.x}, ${sp.z}) in ${mapId} overlaps an obstacle!`);
       }
     }
@@ -2095,7 +2093,7 @@ describe('6. Terrain/Map Collision, AABB Raycasting, Entity Physics & 3D Renderi
   it('Game3D fixed-timestep movement: frame-rate independent, matches the shared module exactly, interpolates the camera', async () => {
     const movement = await import('../shared/movement.js');
     const { FIXED_DT, createMovementState, stepPlayerMovement } = movement;
-    const mapCfg = getMapConfig('cyber_citadel');
+    const mapCfg = getMapConfig('de_dust2');
 
     const makeGame = () => {
       const events = { jump: 0, land: 0, slide: 0 };
@@ -2107,7 +2105,7 @@ describe('6. Terrain/Map Collision, AABB Raycasting, Entity Physics & 3D Renderi
       game.inMatch = true;
       game.alive = true;
       game.isPointerLocked = true;
-      game.spawnLocalPlayer({ x: 0, y: 0, z: 30, yaw: 0, weapon: 'rifle' });
+      game.spawnLocalPlayer({ x: 18, y: 0, z: 30, yaw: 0, weapon: 'rifle' });
       game.onGround = true;
       game.simTimeMs = 0; // deterministic simulation clock for the test
       game.equipUntil = 0;
@@ -2490,7 +2488,7 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
     const sock2 = { id: 'p2', emit: () => {} };
     const sock3 = { id: 'p3', emit: () => {} };
 
-    const join1 = rm.addHumanPlayer(sock1, { name: 'AlphaLead', mode: 'private', gameMode: 'tdm', mapId: 'cyber_citadel' });
+    const join1 = rm.addHumanPlayer(sock1, { name: 'AlphaLead', mode: 'private', gameMode: 'tdm', mapId: 'de_dust2' });
     assert.ok(join1.room, 'TDM room should be created');
     const room = join1.room;
     const p1 = join1.player;
@@ -2554,15 +2552,15 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
     p1.invulnerableUntil = 0;
     p2.invulnerableUntil = 0;
     p3.invulnerableUntil = 0;
-    placeServerSide(p1, 0, 0, -16);
-    placeServerSide(p3, 0, 0, -20);
-    placeServerSide(p2, 0, 0, -24);
+    placeServerSide(p1, 0, 0, -13.5);
+    placeServerSide(p3, 0, 0, -17.5);
+    placeServerSide(p2, 0, 0, -21.5);
     const snapNow = Date.now();
     recordPlayerSnapshot(p1, snapNow);
     recordPlayerSnapshot(p3, snapNow);
     recordPlayerSnapshot(p2, snapNow);
 
-    // Shoot North (-Z) where teammate p3 is at z=-20 and enemy p2 is at z=-24
+    // Shoot North (-Z) where teammate p3 is at z=-17.5 and enemy p2 is at z=-21.5
     rm.handleShoot(room, p1, {
       weapon: 'rifle',
       dir: { x: 0, y: -0.05, z: -1 }
@@ -2572,14 +2570,14 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
 
     // Grenade friendly fire check (including when ownerTeam is snapshotted at throw time even if attacker disconnects):
     p2.hp = 100;
-    placeServerSide(p2, 0, 0, -20.5);
+    placeServerSide(p2, 0, 0, -18.0);
     rm.detonateGrenade(room, {
       id: 'g_test',
       ownerId: 'disconnected_alpha_player',
       ownerTeam: 'alpha',
       x: 0,
       y: 0.5,
-      z: -20,
+      z: -17.5,
       exploded: false
     });
     assert.equal(p3.hp, 100, 'Teammate p3 must take 0 friendly-fire grenade damage even if thrower disconnected');
@@ -2613,8 +2611,8 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
     rm.stop();
 
     // 1. Prototype keys ('constructor', '__proto__', 'toString') rejected in map & weapon lookups
-    assert.equal(getMapConfig('constructor').id, 'cyber_citadel');
-    assert.equal(getMapConfig('__proto__').id, 'cyber_citadel');
+    assert.equal(getMapConfig('constructor').id, 'de_dust2');
+    assert.equal(getMapConfig('__proto__').id, 'de_dust2');
     const sPriv = { id: 'sec_p1', emit: () => {} };
     const sPub = { id: 'sec_p2', emit: () => {} };
 
@@ -2625,14 +2623,14 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
       weapon: 'constructor',
       loadout: { primary: 'toString', secondary: '__proto__' }
     });
-    assert.equal(privJoin.room.mapId, 'cyber_citadel', 'Prototype mapId must fall back to default map');
+    assert.equal(privJoin.room.mapId, 'de_dust2', 'Prototype mapId must fall back to default map');
     assert.equal(privJoin.player.weapon, 'rifle', 'Prototype weapon must fall back to loadout primary');
     assert.equal(privJoin.player.loadout.primary, 'rifle');
     assert.equal(privJoin.player.loadout.secondary, 'pistol');
 
     // Attempt to change map to 'constructor'
     rm.changeRoomMap(privJoin.room, 'constructor');
-    assert.equal(privJoin.room.mapId, 'cyber_citadel');
+    assert.equal(privJoin.room.mapId, 'de_dust2');
     assert.ok(Array.isArray(getMapConfig(privJoin.room.mapId).obstacles) && getMapConfig(privJoin.room.mapId).obstacles.length > 0);
 
     // Initial weapon must belong to the sanitized loadout (cannot spawn with sniper while loadout primary is rifle)
@@ -2645,7 +2643,7 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
     assert.equal(mismatchJoin.player.weapon, 'rifle', 'Initial weapon outside loadout must fall back to loadout primary');
 
     // 2. Private rooms excluded from getPublicRoomsSummary()
-    const pubJoin = rm.addHumanPlayer(sPub, { name: 'PubPlayer', mode: 'public', mapId: 'cargo_dock' });
+    const pubJoin = rm.addHumanPlayer(sPub, { name: 'PubPlayer', mode: 'public', mapId: 'de_mirage' });
     const summary = rm.getPublicRoomsSummary();
     assert.ok(summary.some((r) => r.code === pubJoin.room.code), 'Public room must appear in summary');
     assert.ok(!summary.some((r) => r.code === privJoin.room.code), 'Private room must NOT appear in public summary');
@@ -2680,7 +2678,7 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
 
     const s1 = { id: 'tac_1', emit: () => {} };
     const s2 = { id: 'tac_2', emit: () => {} };
-    const { room, player: p1 } = rm.addHumanPlayer(s1, { name: 'Alpha', mode: 'private', mapId: 'cyber_citadel' });
+    const { room, player: p1 } = rm.addHumanPlayer(s1, { name: 'Alpha', mode: 'private', mapId: 'de_dust2' });
     const { player: p2 } = rm.addHumanPlayer(s2, { name: 'Bravo', mode: 'private', roomCode: room.code });
     p1.invulnerableUntil = 0;
     p2.invulnerableUntil = 0;
@@ -2721,7 +2719,7 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
     assert.ok(p1.damageBoostUntil > now, 'Damage pickup must activate 10s damageBoostUntil');
 
     // 2. Jump Pad deterministic launch
-    const mapCfg = getMapConfig('cyber_citadel');
+    const mapCfg = getMapConfig('de_dust2');
     assert.ok(Array.isArray(mapCfg.jumpPads) && mapCfg.jumpPads.length >= 4, 'Map must define jumpPads');
     const jp = mapCfg.jumpPads[0];
     p1.moveState.x = jp.x;
@@ -2848,10 +2846,10 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
     const currentId = minimap.mapConfig.id;
     minimap.setMap(currentId);
     assert.equal(bakeCount, 0, 'setMap with identical mapId and canvas size must skip bakeStaticObstacles');
-    minimap.setMap('cargo_dock');
+    minimap.setMap('de_mirage');
     assert.equal(bakeCount, 1, 'setMap with a new mapId must bakeStaticObstacles once');
-    minimap.setMap('cargo_dock');
-    assert.equal(bakeCount, 1, 'repeating setMap with cargo_dock must not re-bake');
+    minimap.setMap('de_mirage');
+    assert.equal(bakeCount, 1, 'repeating setMap with de_mirage must not re-bake');
 
     // Verify FOV radial gradient is created once and reused across frames, and TDM teammate blips draw inside update()
     let gradCalls = 0;

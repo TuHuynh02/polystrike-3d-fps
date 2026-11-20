@@ -50,7 +50,7 @@
       <div class="topbar-brand">
         <span class="sl-tag" id="lobby-sector-tag">D2</span>
         <div class="topbar-brand-text">
-          <span class="topbar-eyebrow" id="lobby-sector-eyebrow">DE_DUST2 // MOROCCO — SECTOR A/B · 60HZ</span>
+          <span class="topbar-eyebrow" id="lobby-sector-eyebrow">DE_DUST2 // MOROCCO — RETAKE A/B · 60HZ</span>
           <h1 class="brand-title">POLY<span>STRIKE</span> <em>3D</em></h1>
         </div>
       </div>
@@ -176,40 +176,32 @@
         <div class="rail-row">
           <div class="rail-row-head">
             <span class="field-label">Khu vực chiến trường</span>
-            <span class="field-code">08 SECTORS</span>
+            <span class="field-code">06 CS:GO MAPS</span>
           </div>
           <div class="map-select-grid" id="lobby-map-grid">
-            <button type="button" class="map-option active" data-map="desert_outpost">
+            <button type="button" class="map-option active" data-map="de_dust2">
               <span class="map-badge">D2</span>
               <span class="map-name">DUST II // MOROCCO</span>
             </button>
-            <button type="button" class="map-option" data-map="cargo_dock">
-              <span class="map-badge">B4</span>
-              <span class="map-name">CARGO DOCKYARD</span>
+            <button type="button" class="map-option" data-map="de_mirage">
+              <span class="map-badge">MR</span>
+              <span class="map-name">MIRAGE // PALACE</span>
             </button>
-            <button type="button" class="map-option" data-map="cyber_citadel">
-              <span class="map-badge">03</span>
-              <span class="map-name">CYBER CITADEL</span>
+            <button type="button" class="map-option" data-map="de_inferno">
+              <span class="map-badge">IF</span>
+              <span class="map-name">INFERNO // ITALY</span>
             </button>
-            <button type="button" class="map-option" data-map="neon_lab">
-              <span class="map-badge">04</span>
-              <span class="map-name">QUANTUM LAB</span>
-            </button>
-            <button type="button" class="map-option" data-map="crossfire_plus">
-              <span class="map-badge">CQB</span>
-              <span class="map-name">CROSSFIRE (+)</span>
+            <button type="button" class="map-option" data-map="de_nuke">
+              <span class="map-badge">NK</span>
+              <span class="map-name">NUKE // CEDAR CREEK</span>
             </button>
             <button type="button" class="map-option" data-map="fy_iceworld">
-              <span class="map-badge">CQB</span>
-              <span class="map-name">ICEWORLD ARENA</span>
+              <span class="map-badge">FY</span>
+              <span class="map-name">FY_ICEWORLD</span>
             </button>
-            <button type="button" class="map-option" data-map="killhouse_cqb">
-              <span class="map-badge">CQB</span>
-              <span class="map-name">KILLHOUSE CQB</span>
-            </button>
-            <button type="button" class="map-option" data-map="arena_duel">
+            <button type="button" class="map-option" data-map="aim_map">
               <span class="map-badge">1V1</span>
-              <span class="map-name">AIM DUEL ARENA</span>
+              <span class="map-name">AIM_MAP // CS2</span>
             </button>
           </div>
         </div>
@@ -298,8 +290,8 @@
       <!-- Active Sector Location Caption (visible in default 'harbor' overview vista mode) -->
       <div class="harbor-loc-card" id="lobby-loc-card" aria-hidden="true">
         <i></i>
-        <b id="lobby-loc-title">DE_DUST2 // MOROCCO — SECTOR A/B</b>
-        <span id="lobby-loc-subtitle">MID DOUBLE DOORS · SHORT A CATWALK · LONG A &amp; B TUNNELS — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D</span>
+        <b id="lobby-loc-title">DE_DUST2 // MOROCCO — RETAKE A/B</b>
+        <span id="lobby-loc-subtitle">MID DOUBLE DOORS · XBOX SHORT A · LONG A &amp; B TUNNELS — CHỌN BÀN SÚNG HOẶC ĐẶC NHIỆM ĐỂ KIỂM TRA 3D</span>
       </div>
 
       <!-- Compact Right-Stage Control Dock (visible in 'weapon' & 'operator' modes) -->
@@ -370,7 +362,7 @@
         <div class="room-tag">
           <strong id="hud-room-code">#------</strong>
         </div>
-        <div class="map-pill-hud" id="hud-map-name">CARGO DOCKYARD</div>
+        <div class="map-pill-hud" id="hud-map-name">DUST II // MOROCCO</div>
         <button id="btn-copy-link-hud" class="hud-copy-btn" title="Sao chép link mời [L]">
           LINK <kbd>L</kbd>
         </button>
@@ -395,7 +387,7 @@
 
     <div id="hud-minimap" class="hud-minimap">
       <div class="minimap-header">
-        <span class="minimap-title"><strong id="minimap-map-label">CARGO DOCKYARD</strong></span>
+        <span class="minimap-title"><strong id="minimap-map-label">DUST II // MOROCCO</strong></span>
         <span class="minimap-coords" id="minimap-coords">X:00 Z:00</span>
       </div>
       <div class="minimap-frame">
@@ -565,7 +557,7 @@
     <div class="sl-modal pause-card loadout-card">
       <div class="sl-modal-header">
         <div>
-          <div class="sl-modal-eyebrow">BERTH 4 // ARMORY BENCH</div>
+          <div class="sl-modal-eyebrow">CS:GO // ARMORY BENCH</div>
           <h2 class="pause-title">KHO VŨ KHÍ</h2>
         </div>
         <div class="sl-key-badge"><kbd>B</kbd> ĐÓNG</div>
@@ -711,14 +703,12 @@
         <div class="setting-item">
           <label for="pause-map-select">KHU VỰC CHIẾN TRƯỜNG</label>
           <select id="pause-map-select" class="select-input">
-            <option value="desert_outpost">Dust II // Morocco (Solar Outpost)</option>
-            <option value="cargo_dock">Cargo Dockyard (Berth 4)</option>
-            <option value="cyber_citadel">Cyber Citadel</option>
-            <option value="neon_lab">Quantum Lab</option>
-            <option value="crossfire_plus">Crossfire Plus (+) [CQB]</option>
-            <option value="fy_iceworld">Iceworld Arena [CQB]</option>
-            <option value="killhouse_cqb">Killhouse CQB [CQB]</option>
-            <option value="arena_duel">Aim Duel Arena [CQB]</option>
+            <option value="de_dust2">Dust II // Morocco (Retake)</option>
+            <option value="de_mirage">Mirage // Morocco Palace</option>
+            <option value="de_inferno">Inferno // Italy Banana</option>
+            <option value="de_nuke">Nuke // Cedar Creek</option>
+            <option value="fy_iceworld">fy_iceworld // CS Classic</option>
+            <option value="aim_map">aim_map // CS2 1v1</option>
           </select>
         </div>
 
@@ -759,9 +749,9 @@
     <div class="sl-modal scoreboard-card">
       <div class="scoreboard-header">
         <div>
-          <div class="sl-modal-eyebrow">BERTH 4 // COMBAT ROSTER</div>
+          <div class="sl-modal-eyebrow">CS:GO // COMBAT ROSTER</div>
           <h3>BẢNG XẾP HẠNG</h3>
-          <p><strong id="sb-room-code">#------</strong> · <strong id="sb-map-name">CARGO DOCKYARD</strong></p>
+          <p><strong id="sb-room-code">#------</strong> · <strong id="sb-map-name">DUST II // MOROCCO</strong></p>
         </div>
         <div class="sb-hint"><kbd>TAB</kbd> GIỮ ĐỂ XEM</div>
       </div>
@@ -790,7 +780,7 @@
           <span class="sl-modal-eyebrow">TEAM DEATHMATCH // 2 PHE</span>
           <h2 class="team-lobby-title">PHÒNG CHỜ PHÂN ĐỘI</h2>
           <p class="team-lobby-meta">
-            PHÒNG <strong id="team-lobby-room-code">#------</strong> · BẢN ĐỒ <strong id="team-lobby-map-name">CARGO DOCKYARD</strong> · MỤC TIÊU <strong id="team-lobby-kill-limit">30</strong> MẠNG
+            PHÒNG <strong id="team-lobby-room-code">#------</strong> · BẢN ĐỒ <strong id="team-lobby-map-name">DUST II // MOROCCO</strong> · MỤC TIÊU <strong id="team-lobby-kill-limit">30</strong> MẠNG
           </p>
         </div>
         <button type="button" id="btn-copy-team-lobby-link" class="btn btn-outline">SAO CHÉP LINK</button>
@@ -838,7 +828,7 @@
   <!-- ======================== MATCH END / DEBRIEF MODAL ======================== -->
   <div id="match-end-modal" class="modal-backdrop hidden">
     <div class="sl-modal victory-card">
-      <div class="victory-badge">BERTH 4 // DEBRIEF</div>
+      <div class="victory-badge">CS:GO // DEBRIEF</div>
       <h2 class="victory-winner">CHIẾN THẮNG: <span id="victory-winner-name">---</span></h2>
       <p class="victory-stats" id="victory-winner-stats">20 Kills · 4 Deaths</p>
 

@@ -13,7 +13,7 @@ import {
   RoomManager
 } from '../server/roomManager.js';
 
-const MAP_ID = 'cyber_citadel';
+const MAP_ID = 'de_dust2';
 
 function createHarness() {
   const emitted = [];
@@ -402,7 +402,7 @@ describe('Only the room host may change the map', () => {
     const { player: guest } = join(rm, 'guest');
     const mapBefore = room.mapId;
 
-    const map = rm.handleChangeMap(room, guest, { mapId: 'neon_lab' });
+    const map = rm.handleChangeMap(room, guest, { mapId: 'de_nuke' });
 
     assert.deepEqual([map.ok, map.error], [false, 'not_host']);
     assert.equal(room.mapId, mapBefore);
@@ -414,9 +414,9 @@ describe('Only the room host may change the map', () => {
     const { room, player: host } = join(rm, 'host');
     join(rm, 'guest');
 
-    const map = rm.handleChangeMap(room, host, { mapId: 'neon_lab' });
+    const map = rm.handleChangeMap(room, host, { mapId: 'de_nuke' });
     assert.equal(map.ok, true);
-    assert.equal(room.mapId, 'neon_lab');
+    assert.equal(room.mapId, 'de_nuke');
     assert.ok(emitted.some((e) => e.event === 'mapChanged'));
   });
 
@@ -431,7 +431,7 @@ describe('Only the room host may change the map', () => {
     const changed = emitted.find((e) => e.event === 'hostChanged');
     assert.ok(changed);
     assert.equal(changed.payload.hostId, 'guest');
-    assert.equal(rm.handleChangeMap(room, guest, { mapId: 'neon_lab' }).ok, true);
+    assert.equal(rm.handleChangeMap(room, guest, { mapId: 'de_nuke' }).ok, true);
   });
 
   it('keeps the host on the earliest remaining player and a solo player is always host', () => {

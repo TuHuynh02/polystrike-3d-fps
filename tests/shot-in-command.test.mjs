@@ -47,7 +47,7 @@ import { RoomManager, SHOT_REJECT } from '../server/roomManager.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, '..');
-const MAP_ID = 'cyber_citadel';
+const MAP_ID = 'de_dust2';
 
 function createServer() {
   const emitted = [];
@@ -356,9 +356,9 @@ describe('(e) per-ray obstacle occlusion: wall blocks, gap passes, head shot ove
     const { player: target } = join(rm, 't_occ', 'OCC001');
     const now0 = 40_000;
 
-    // 1. Solid container on cyber_citadel at (-22, 1.6, -10) with size (3.6, 3.2, 7.5): blocks shooter at (-26,0,-10) -> target at (-18,0,-10)
-    teleport(rm, shooter, -26, 0, -10, now0);
-    teleport(rm, target, -18, 0, -10, now0);
+    // 1. Solid container on de_dust2 at (-25, 1.6, -4.2) with size (3.2, 3.2, 6.8): blocks shooter at (-29,0,-4.2) -> target at (-21,0,-4.2)
+    teleport(rm, shooter, -29, 0, -4.2, now0);
+    teleport(rm, target, -21, 0, -4.2, now0);
     recordPlayerSnapshot(target, now0);
     const eye1 = { x: shooter.x, y: 1.62, z: shooter.z };
     const head1 = partCenter(target, 'head');
@@ -369,13 +369,13 @@ describe('(e) per-ray obstacle occlusion: wall blocks, gap passes, head shot ove
     rm.processPlayerInputs(room, shooter, now0 + 50);
     assert.equal(target.hp, 100, 'wall closer than target must absorb the ray');
 
-    // 2. Open corridor (gap between obstacles) in northern plaza: (0, 0, -16) -> (0, 0, -24)
+    // 2. Open corridor (gap through Dust II North Mid Double Doors): (0, 0, -13.5) -> (0, 0, -21.5)
     const now1 = now0 + 2000;
-    teleport(rm, shooter, 0, 0, -16, now1);
+    teleport(rm, shooter, 0, 0, -13.5, now1);
     rm.resetShotSession(shooter);
-    teleport(rm, target, 0, 0, -24, now1);
+    teleport(rm, target, 0, 0, -21.5, now1);
     recordPlayerSnapshot(target, now1);
-    const eye2 = { x: 0, y: 1.62, z: -16 };
+    const eye2 = { x: 0, y: 1.62, z: -13.5 };
     const head2 = partCenter(target, 'head');
     const { yaw: yaw2, pitch: pitch2 } = aimYawPitch(eye2, head2);
     const cmdOpen = buildInputCommand(1, { yaw: yaw2, pitch: pitch2, isAiming: true, weapon: 'sniper', fire: true, shotSeq: 2 });
@@ -384,19 +384,19 @@ describe('(e) per-ray obstacle occlusion: wall blocks, gap passes, head shot ove
     rm.processPlayerInputs(room, shooter, now1 + 50);
     assert.equal(target.hp, 0, 'unobstructed sniper headshot through open gap must hit and kill');
 
-    // 3. Low cover crate: inject a temporary 1.1m-tall crate at (0, 0.55, -20) between (0,0,-16) and (0,0,-24)
+    // 3. Low cover crate: inject a temporary 1.1m-tall crate at (0, 0.55, -17.5) between (0,0,-13.5) and (0,0,-21.5)
     const mapCfg = getMapConfig(room.mapId);
     const lowCrate = {
-      x: 0, y: 0.55, z: -20, w: 2.0, h: 1.1, d: 1.0,
-      minX: -1.0, maxX: 1.0, minY: 0, maxY: 1.1, minZ: -20.5, maxZ: -19.5
+      x: 0, y: 0.55, z: -17.5, w: 2.0, h: 1.1, d: 1.0,
+      minX: -1.0, maxX: 1.0, minY: 0, maxY: 1.1, minZ: -18.0, maxZ: -17.0
     };
     mapCfg.obstacles.push(lowCrate);
     try {
       const now2 = now1 + 2000;
       target.alive = true;
       target.hp = 100;
-      teleport(rm, shooter, 0, 0, -16, now2);
-      teleport(rm, target, 0, 0, -24, now2);
+      teleport(rm, shooter, 0, 0, -13.5, now2);
+      teleport(rm, target, 0, 0, -21.5, now2);
       recordPlayerSnapshot(target, now2);
 
       // Ray aimed at target's shins (y = 0.35) passes through z = -20 at y ≈ 0.985 <= 1.1m => blocked by low crate!
@@ -556,10 +556,10 @@ describe('(i) lag-compensation rewind on FIRE commands', () => {
     const { room, player: shooter } = join(rm, 's_lag', 'LAG001', { weapon: 'sniper' });
     const { player: target } = join(rm, 't_lag', 'LAG001');
     const now0 = 80_000;
-    teleport(rm, shooter, 0, 0, -16, now0);
-    teleport(rm, target, 0, 0, -26, now0);
+    teleport(rm, shooter, 0, 0, -12.5, now0);
+    teleport(rm, target, 0, 0, -22.0, now0);
 
-    // Target sprints from x = -2 to x = +2 across z = -26 over 250ms (8 m/s)
+    // Target sprints from x = -2 to x = +2 across z = -22.0 over 250ms (8 m/s)
     target.positionHistory = [];
     const vx = 8;
     const startX = -2;
@@ -573,8 +573,8 @@ describe('(i) lag-compensation rewind on FIRE commands', () => {
     const rewindLug = resolveShotRewindMs(shooter, null, now0);
     const rewoundX = startX + vx * ((250 - rewindLug) / 1000); // -1.44m (1.44m away from liveX = 0.0m)
 
-    const eye = { x: 0, y: 1.62, z: -16 };
-    const seenHead = { x: rewoundX, y: 1.71, z: -26 };
+    const eye = { x: 0, y: 1.62, z: -12.5 };
+    const seenHead = { x: rewoundX, y: 1.71, z: -22.0 };
     const { yaw, pitch } = aimYawPitch(eye, seenHead);
 
     // 1. With RTT = 0 (rewind = 100ms -> target at x = -0.80m, 0.64m away from rewoundX = -1.44m), aiming at rewoundX misses!

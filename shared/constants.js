@@ -2,7 +2,7 @@
 // Modularized into:
 // - ./config.js   (MATCH_CONFIG, PLAYER_COLORS)
 // - ./weapons.js  (WEAPONS, PRIMARY_WEAPONS, SECONDARY_WEAPONS, MELEE_WEAPONS, DEFAULT_LOADOUT, WEAPON_ORDER)
-// - ./maps.js     (MAPS, MAP_ORDER, DEFAULT_MAP_ID, getMapConfig, HEALTH_PACK_SPAWNS, SPAWN_POINTS, MAP_OBSTACLES)
+// - ./maps.js     (MAPS, MAP_ORDER, DEFAULT_MAP_ID, LEGACY_MAP_ALIASES, resolveMapId, getMapConfig, HEALTH_PACK_SPAWNS, SPAWN_POINTS, MAP_OBSTACLES)
 // - ./physics.js  (isPointClearOfObstacles, rayIntersectsAABB, hasLineOfSight)
 
 export * from './config.js';

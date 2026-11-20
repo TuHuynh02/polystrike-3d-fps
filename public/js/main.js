@@ -204,7 +204,7 @@ appState.sfx = sfx;
 
 
 const game = appState.game = new Game3D(canvasContainer, {
-  initialMapId: appState.selectedMapId || 'cargo_dock',
+  initialMapId: appState.selectedMapId || 'de_dust2',
   // Client-side prediction: input commands (never positions) go to the server; it answers with `moveAck`
   onInputBatch: (batch) => {
     // `d` = interpolation delay (ms) remote players are drawn with right now: the server rewinds exactly this much (plus

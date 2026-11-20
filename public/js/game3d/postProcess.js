@@ -4,9 +4,10 @@ import { isSoftwareWebGLRenderer } from '../arena/shadowFilter.js';
 /**
  * Unified WebGL2 post-processing pipeline powered by pmndrs/postprocessing + N8AO.
  * Pipeline order:
- *   1. RenderPass (Single linear HDR world render on Layer 0 + shared depth texture)
+ *   1. RenderPass (Single linear HDR world render on Layer 0 + shared depth texture, WebGL2 MSAA on Medium/High)
  *   2. N8AOPostPass (Half-res Performance SSAO on High tier only, disabled automatically on low FPS)
- *   3. EffectPass (SMAA Low on High tier only + MipmapBlur Bloom + AgX ToneMapping + Clarity Contrast + Subtle Vignette)
+ *   3. EffectPass (SMAA Medium on Medium/High + MipmapBlur Bloom + AgX ToneMapping + Clarity Contrast + Subtle Vignette,
+ *      with a pre-built no-SMAA fallback EffectPass toggled via `.enabled` for zero mid-combat recompile hitches)
  * Note: Layer-1 viewmodel rendering runs separately after composer.render() using depth clear.
  */
 export class PostProcessPipeline {
@@ -16,6 +17,7 @@ export class PostProcessPipeline {
     this.renderPass = null;
     this.aoPass = null;
     this.effectPass = null;
+    this.effectPassNoSmaa = null;
     this.bloomEffect = null;
     this.smaaEffect = null;
     this.toneMappingEffect = null;
@@ -51,19 +53,29 @@ export class PostProcessPipeline {
   }
 
   _resolvePostConfig(q = this.game?.quality) {
-    const tier = this.game?.tier || 'medium';
+    const tier = q?.id || this.game?.tier || 'medium';
     const postFx = q?.postFx ?? (tier !== 'low' ? 1 : 0);
     const bloomStrength = q?.bloomStrength ?? (tier === 'high' ? 0.28 : tier === 'medium' ? 0.18 : 0);
     const isSoftwareGl = isSoftwareWebGLRenderer(this.game?.renderer);
     const aoRaw = isSoftwareGl ? 0 : (q?.aoEnabled ?? (tier === 'high' ? 1 : 0));
-    const smaaRaw = isSoftwareGl ? 0 : (q?.smaaEnabled ?? (tier === 'high' ? 1 : 0));
+    const smaaRaw = isSoftwareGl ? 0 : (q?.smaaEnabled ?? (tier === 'high' || tier === 'medium' ? 1 : 0));
     return {
+      tier,
       enabled: Number(postFx) > 0,
       bloomStrength: Math.max(0, Number(bloomStrength) || 0),
       aoEnabled: Number(aoRaw) > 0,
       smaaEnabled: Number(smaaRaw) > 0,
       isSoftwareGl
     };
+  }
+
+  _resolveMultisampling(renderer, tier, isSoftwareGl) {
+    const isWebGL2 = Boolean(renderer?.capabilities?.isWebGL2);
+    if (!isWebGL2 || isSoftwareGl) return 0;
+    const maxSamples = Math.min(4, renderer.capabilities?.maxSamples || 4);
+    if (tier === 'high') return maxSamples;
+    if (tier === 'medium') return Math.min(2, maxSamples);
+    return 0;
   }
 
   async init() {
@@ -76,6 +88,16 @@ export class PostProcessPipeline {
     if (this._initPromise) return this._initPromise;
 
     this._initPromise = (async () => {
+      let composer = null;
+      let renderPass = null;
+      let aoPass = null;
+      let effectPass = null;
+      let effectPassNoSmaa = null;
+      let smaaEffect = null;
+      let bloomEffect = null;
+      let toneMappingEffect = null;
+      let gradeEffect = null;
+      let vignetteEffect = null;
       try {
         const isSoftwareGl = isSoftwareWebGLRenderer(this.game?.renderer);
         const [ppMod, n8aoMod] = await Promise.all([
@@ -108,6 +130,7 @@ export class PostProcessPipeline {
 
         renderer.setPixelRatio?.(pr);
 
+        const latestCfg = this._resolvePostConfig();
         const isWebGL2 = Boolean(renderer.capabilities?.isWebGL2);
         const hasHalfFloat = Boolean(
           isWebGL2 ||
@@ -115,10 +138,11 @@ export class PostProcessPipeline {
             renderer.extensions?.has?.('EXT_color_buffer_half_float')
         );
         const frameBufferType = hasHalfFloat ? THREE.HalfFloatType : THREE.UnsignedByteType;
+        const multisampling = this._resolveMultisampling(renderer, latestCfg.tier, isSoftwareGl);
 
-        const composer = new EffectComposer(renderer, {
+        composer = new EffectComposer(renderer, {
           frameBufferType,
-          multisampling: 0
+          multisampling
         });
 
         const drawSize = renderer.getDrawingBufferSize
@@ -127,9 +151,8 @@ export class PostProcessPipeline {
         const drawW = Math.max(1, Math.floor(drawSize.x || width * pr));
         const drawH = Math.max(1, Math.floor(drawSize.y || height * pr));
 
-        const renderPass = new RenderPass(this.game.scene, this.game.camera);
+        renderPass = new RenderPass(this.game.scene, this.game.camera);
 
-        let aoPass = null;
         if (!isSoftwareGl && N8AOPostPass) {
           aoPass = new N8AOPostPass(this.game.scene, this.game.camera, drawW, drawH);
           aoPass.setQualityMode('Performance');
@@ -144,7 +167,6 @@ export class PostProcessPipeline {
           aoPass.configuration.transparencyAware = false;
         }
 
-        const latestCfg = this._resolvePostConfig();
         this.enabled = latestCfg.enabled && !this._postDisabledByWatchdog;
         this.aoEnabled = Boolean(aoPass) && latestCfg.aoEnabled && !this._aoDisabledByWatchdog;
         this.smaaEnabled = !isSoftwareGl && latestCfg.smaaEnabled && !this._smaaDisabledByWatchdog;
@@ -152,42 +174,48 @@ export class PostProcessPipeline {
           aoPass.enabled = Boolean(this.enabled && this.aoEnabled);
         }
 
-        const smaaEffect = isSoftwareGl ? null : new SMAAEffect({ preset: SMAAPreset.LOW });
-        const bloomEffect = new BloomEffect({
+        smaaEffect = isSoftwareGl ? null : new SMAAEffect({ preset: SMAAPreset.MEDIUM });
+        bloomEffect = new BloomEffect({
           mipmapBlur: true,
           luminanceThreshold: 1.35,
           luminanceSmoothing: 0.28,
           intensity: latestCfg.bloomStrength,
           radius: 0.48
         });
-        const toneMappingEffect = new ToneMappingEffect({
+        toneMappingEffect = new ToneMappingEffect({
           mode: ToneMappingMode.AGX
         });
-        const gradeEffect = new BrightnessContrastEffect({
+        gradeEffect = new BrightnessContrastEffect({
           brightness: 0.005,
           contrast: 0.06
         });
-        const vignetteEffect = new VignetteEffect({
+        vignetteEffect = new VignetteEffect({
           offset: 0.42,
           darkness: 0.26
         });
 
-        this._smaaActiveInPass = Boolean(this.smaaEnabled && smaaEffect);
-        const effectPass = new EffectPass(
+        effectPassNoSmaa = new EffectPass(
           this.game.camera,
-          ...(this._smaaActiveInPass
-            ? [smaaEffect, bloomEffect, toneMappingEffect, gradeEffect, vignetteEffect]
-            : [bloomEffect, toneMappingEffect, gradeEffect, vignetteEffect])
+          bloomEffect,
+          toneMappingEffect,
+          gradeEffect,
+          vignetteEffect
         );
+        effectPass = smaaEffect
+          ? new EffectPass(
+              this.game.camera,
+              smaaEffect,
+              bloomEffect,
+              toneMappingEffect,
+              gradeEffect,
+              vignetteEffect
+            )
+          : null;
 
         composer.addPass(renderPass);
         if (aoPass) composer.addPass(aoPass);
-        composer.addPass(effectPass);
-        if (smaaEffect && !this._smaaActiveInPass) {
-          const alpha = Boolean(renderer.getContext?.()?.getContextAttributes?.()?.alpha);
-          smaaEffect.initialize?.(renderer, alpha, frameBufferType);
-          smaaEffect.setSize?.(drawW, drawH);
-        }
+        if (effectPass) composer.addPass(effectPass);
+        composer.addPass(effectPassNoSmaa);
         composer.setSize(width, height, false);
 
         if (!this.enabled) {
@@ -198,14 +226,27 @@ export class PostProcessPipeline {
         this.renderPass = renderPass;
         this.aoPass = aoPass;
         this.effectPass = effectPass;
+        this.effectPassNoSmaa = effectPassNoSmaa;
         this.smaaEffect = smaaEffect;
         this.bloomEffect = bloomEffect;
         this.toneMappingEffect = toneMappingEffect;
         this.gradeEffect = gradeEffect;
         this.vignetteEffect = vignetteEffect;
+        this._syncEffectPassSMAA();
         this.ready = true;
         return true;
       } catch {
+        this._disposeAoHelpers(aoPass);
+        renderPass?.dispose?.();
+        aoPass?.dispose?.();
+        smaaEffect?.dispose?.();
+        bloomEffect?.dispose?.();
+        toneMappingEffect?.dispose?.();
+        gradeEffect?.dispose?.();
+        vignetteEffect?.dispose?.();
+        effectPass?.dispose?.();
+        effectPassNoSmaa?.dispose?.();
+        composer?.dispose?.();
         this.ready = false;
         return false;
       } finally {
@@ -214,6 +255,27 @@ export class PostProcessPipeline {
     })();
 
     return this._initPromise;
+  }
+
+  _disposeAoHelpers(aoPass) {
+    if (!aoPass) return;
+    const helperProps = [
+      'effectShaderQuad',
+      'poissonBlurQuad',
+      'effectCompositerQuad',
+      'depthDownsampleQuad',
+      'accumulationQuad',
+      'copyQuad',
+      'depthCopyPass',
+      'depthMipAtlas'
+    ];
+    for (const prop of helperProps) {
+      aoPass[prop]?.dispose?.();
+    }
+    aoPass.standardDenoiseMaterial?.dispose?.();
+    aoPass.neuralDenoiseMaterial?.dispose?.();
+    aoPass.standardCompositerMaterial?.dispose?.();
+    aoPass.neuralCompositerMaterial?.dispose?.();
   }
 
   setAOEnabled(flag, { fromWatchdog = false } = {}) {
@@ -231,22 +293,15 @@ export class PostProcessPipeline {
   }
 
   _syncEffectPassSMAA() {
-    if (!this.effectPass || !this.bloomEffect || !this.toneMappingEffect || !this.gradeEffect || !this.vignetteEffect) {
-      return;
-    }
-    const wantSmaa = Boolean(this.smaaEnabled && this.smaaEffect);
-    if (wantSmaa === this._smaaActiveInPass) return;
+    const wantSmaa = Boolean(this.smaaEnabled && this.effectPass && this.smaaEffect);
     this._smaaActiveInPass = wantSmaa;
-    const effects = wantSmaa
-      ? [this.smaaEffect, this.bloomEffect, this.toneMappingEffect, this.gradeEffect, this.vignetteEffect]
-      : [this.bloomEffect, this.toneMappingEffect, this.gradeEffect, this.vignetteEffect];
-    this.effectPass.setEffects(effects);
-    this.effectPass.recompile();
-    if (this.composer?.stableDepthTexture) {
-      this.effectPass.setDepthTexture?.(this.composer.stableDepthTexture);
+    if (this.effectPass) {
+      this.effectPass.enabled = wantSmaa;
+      this.effectPass.renderToScreen = wantSmaa;
     }
-    if (this.composer && typeof window !== 'undefined') {
-      this.setSize(window.innerWidth || this._width, window.innerHeight || this._height, this.game?.currentPixelRatio);
+    if (this.effectPassNoSmaa) {
+      this.effectPassNoSmaa.enabled = !wantSmaa;
+      this.effectPassNoSmaa.renderToScreen = !wantSmaa;
     }
   }
 
@@ -290,6 +345,12 @@ export class PostProcessPipeline {
     this.aoEnabled = cfg.aoEnabled && !this._aoDisabledByWatchdog;
     this.smaaEnabled = cfg.smaaEnabled && !this._smaaDisabledByWatchdog;
 
+    if (this.composer && this.game?.renderer) {
+      const targetSamples = this._resolveMultisampling(this.game.renderer, cfg.tier, cfg.isSoftwareGl);
+      if (this.composer.multisampling !== targetSamples) {
+        this.composer.multisampling = targetSamples;
+      }
+    }
     if (this.bloomEffect) {
       this.bloomEffect.intensity = cfg.bloomStrength;
     }
@@ -362,31 +423,20 @@ export class PostProcessPipeline {
     this.ready = false;
     this.enabled = false;
     this.aoEnabled = false;
+    this.smaaEnabled = false;
+    this._smaaActiveInPass = false;
 
-    if (this.aoPass) {
-      const helperProps = [
-        'effectShaderQuad',
-        'poissonBlurQuad',
-        'effectCompositerQuad',
-        'depthDownsampleQuad',
-        'accumulationQuad',
-        'copyQuad',
-        'depthCopyPass',
-        'depthMipAtlas'
-      ];
-      for (const prop of helperProps) {
-        this.aoPass[prop]?.dispose?.();
-      }
-      this.aoPass.standardDenoiseMaterial?.dispose?.();
-      this.aoPass.neuralDenoiseMaterial?.dispose?.();
-      this.aoPass.standardCompositerMaterial?.dispose?.();
-      this.aoPass.neuralCompositerMaterial?.dispose?.();
-    }
+    this._disposeAoHelpers(this.aoPass);
 
     this.renderPass?.dispose?.();
     this.aoPass?.dispose?.();
     this.smaaEffect?.dispose?.();
+    this.bloomEffect?.dispose?.();
+    this.toneMappingEffect?.dispose?.();
+    this.gradeEffect?.dispose?.();
+    this.vignetteEffect?.dispose?.();
     this.effectPass?.dispose?.();
+    this.effectPassNoSmaa?.dispose?.();
     this.composer?.dispose?.();
 
     if (this.game?.renderer) {
@@ -397,6 +447,7 @@ export class PostProcessPipeline {
     this.renderPass = null;
     this.aoPass = null;
     this.effectPass = null;
+    this.effectPassNoSmaa = null;
     this.bloomEffect = null;
     this.smaaEffect = null;
     this.toneMappingEffect = null;

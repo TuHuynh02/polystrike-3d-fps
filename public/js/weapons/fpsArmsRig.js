@@ -172,13 +172,13 @@ export const FPS_ARMS_WEAPON_PRESETS = Object.freeze({
     useRiggedKnifeFist: true,
     useLeftArm: false,
     useRightArm: true,
-    // Right tactical gloved hand posed via fps_arms_rigged.glb R_point1..3 / R_thumb2..3 into a closed 5-finger knife grip
+    // Right tactical gloved hand posed via fps_arms_rigged.glb R_wrist/R_point/R_middle/R_ring/R_pink/R_thumb into a closed 5-finger combat grip
     rightScale: 0.56,
-    rightPos: Object.freeze([0.008, 0.004, 0.014]),
-    rightRot: Object.freeze([0.10, 0.36, 0.24]),
-    // Knife seated flush between steel crossguard (above thumb/index) and pommel (below pinky), broad blade face visible
-    knifeLocalPos: Object.freeze([0.001, -0.005, 0.003]),
-    knifeLocalRot: Object.freeze([1.36, -0.18, -0.62]),
+    rightPos: Object.freeze([0.0324, -0.0038, -0.0162]),
+    rightRot: Object.freeze([0.0, 0.0, 0.0]),
+    // Handle shaft seated dead-center inside the closed palm-to-finger cavity; 4 curled fingers wrap across camera-facing front of handle
+    knifeLocalPos: Object.freeze([0.0, 0.0, 0.0]),
+    knifeLocalRot: Object.freeze([0.8229, -0.5797, -0.8415]),
     reloadMagPos: Object.freeze([0.0, 0.0, 0.0]),
     reloadMagRot: Object.freeze([0.0, 0.0, 0.0]),
     reloadBoltPos: Object.freeze([0.0, 0.0, 0.0]),
@@ -217,14 +217,25 @@ const BAKED_KNIFE_ARM_GEO_CACHE = new Map();
 const PROCEDURAL_ARMS_GEO_CACHE = new Map();
 const PROCEDURAL_ARMS_MAT_CACHE = new Map();
 
-// Calibrated local finger-bone curls applied ONCE to fps_arms_rigged.glb to close all 5 fingers
-// tightly around the knife handle (eliminating the trigger-finger C-hook on static rifle hands).
+// Calibrated local bone curls applied ONCE to fps_arms_rigged.glb to pitch the wrist into a
+// forward tactical saber grip and wrap all 5 fingers cleanly around the knife handle with zero clipping.
 const KNIFE_FIST_BONE_CURLS = Object.freeze({
-  R_point1_031: Object.freeze([0.16, 1.32, -0.14]),
-  R_point2_032: Object.freeze([-0.08, -0.58, 0.08]),
-  R_point3_033: Object.freeze([0.0, 0.25, 0.0]),
-  R_thumb2_028: Object.freeze([-0.20, 0.14, 0.0]),
-  R_thumb3_029: Object.freeze([-0.20, 0.14, 0.0])
+  R_wrist_026: Object.freeze([0.385, 0.1899, -0.902]),
+  R_point1_031: Object.freeze([-0.14, 0.72, 0.05]),
+  R_point2_032: Object.freeze([0.0, -0.28, 0.0]),
+  R_point3_033: Object.freeze([0.0, 0.30, 0.0]),
+  R_middle1_035: Object.freeze([0.0, -0.50, 0.0]),
+  R_middle2_036: Object.freeze([0.0, 0.16, 0.0]),
+  R_middle3_037: Object.freeze([0.0, 0.18, 0.0]),
+  R_ring1_040: Object.freeze([0.0, -0.40, 0.0]),
+  R_ring2_041: Object.freeze([0.0, 0.18, 0.0]),
+  R_ring3_042: Object.freeze([0.0, 0.24, 0.0]),
+  R_pink1_044: Object.freeze([0.0, -0.68, 0.0]),
+  R_pink2_045: Object.freeze([0.0, 0.16, 0.0]),
+  R_pink3_046: Object.freeze([0.0, 0.22, 0.0]),
+  R_thumb1_027: Object.freeze([0.24, 0.20, 0.0]),
+  R_thumb2_028: Object.freeze([0.16, 0.26, 0.0]),
+  R_thumb3_029: Object.freeze([-0.28, 0.44, 0.0])
 });
 
 function markTextureShared(tex, isColor = false) {
@@ -372,10 +383,11 @@ function buildSingleExternalArmPivot(armName, sourceArmNode, gripAnchor, envMap)
 }
 
 /**
- * Poses `fps_arms_rigged.glb` right-hand index & thumb bones (`R_point1..3`, `R_thumb2..3`) into a tight
- * closed 5-finger tactical knife grip ONCE and CPU-bakes ONLY the right-arm triangles into a cached static
- * BufferGeometry centered on `RightGripFrame` in `-Z` forward space (0 runtime SkinnedMesh cost, 0 shader
- * program additions, 0 GPU leaks, and full texture/material sharing with `FPS_ARMS_MAT_CACHE`).
+ * Poses `fps_arms_rigged.glb` right-hand wrist & all 5 fingers (`R_wrist_026`, `R_point1..3`,
+ * `R_middle1..3`, `R_ring1..3`, `R_pink1..3`, `R_thumb1..3`) into a tight closed tactical knife grip ONCE
+ * and CPU-bakes ONLY the right-arm triangles into a cached static BufferGeometry centered on
+ * `RightGripFrame` in `-Z` forward space (0 runtime SkinnedMesh cost, 0 shader program additions,
+ * 0 GPU leaks, and full texture/material sharing with `FPS_ARMS_MAT_CACHE`).
  */
 function buildBakedRiggedKnifeRightArm(riggedScene, envMap) {
   if (!riggedScene) return null;
@@ -398,7 +410,7 @@ function buildBakedRiggedKnifeRightArm(riggedScene, envMap) {
   });
   if (!skinnedMesh?.skeleton || !skinnedMesh.geometry) return null;
 
-  const cacheKey = `${riggedScene.uuid || 'rigged'}:knife_right_fist_v1`;
+  const cacheKey = `${riggedScene.uuid || 'rigged'}:knife_right_fist_v3`;
   let bakedGeo = BAKED_KNIFE_ARM_GEO_CACHE.get(cacheKey);
 
   if (!bakedGeo) {

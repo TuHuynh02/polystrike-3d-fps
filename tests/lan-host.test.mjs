@@ -41,7 +41,7 @@ describe('LAN host core (real RoomManager behind a LanHub)', () => {
     const a = harness.addPeer('host');
     const b = harness.addPeer('guest1');
     const joinedA = waitForEvent(a, 'roomJoined');
-    a.emit('joinRoom', { name: 'Hosty', mode: 'private', roomCode: 'LAN123', mapId: 'cyber_citadel' });
+    a.emit('joinRoom', { name: 'Hosty', mode: 'private', roomCode: 'LAN123', mapId: 'de_dust2' });
     const ra = await joinedA;
     const playerJoined = waitForEvent(a, 'playerJoined');
     const joinedB = waitForEvent(b, 'roomJoined');
@@ -161,7 +161,7 @@ describe('LAN host core (real RoomManager behind a LanHub)', () => {
     try {
       core.peerOpen('host');
       core.peerOpen('g1');
-      core.peerMessage('host', encodeEmit('joinRoom', [{ name: 'H', mode: 'private', roomCode: 'LAN123', mapId: 'cyber_citadel' }]));
+      core.peerMessage('host', encodeEmit('joinRoom', [{ name: 'H', mode: 'private', roomCode: 'LAN123', mapId: 'de_dust2' }]));
       core.peerMessage('g1', encodeEmit('joinRoom', [{ name: 'G', mode: 'private', roomCode: 'LAN123' }]));
       await sleep(60);
       assert.ok(coreBatch.length >= 1, 'createHostCore must use sendMany when broadcasting to 2+ peers in a room');

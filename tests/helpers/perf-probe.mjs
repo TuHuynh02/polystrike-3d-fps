@@ -17,7 +17,7 @@ import { createFakeGL, installFakeWebGL2Class } from './fake-gl.mjs';
 import { recordPlayerSnapshot } from '../../shared/lagCompensation.js';
 import { RoomManager } from '../../server/roomManager.js';
 
-export const MAP_ID = 'cyber_citadel';
+export const MAP_ID = 'de_dust2';
 export const FRAME_MS = 1000 / 60;
 export const TICK_MS = 40;
 

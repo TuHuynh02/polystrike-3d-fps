@@ -108,9 +108,9 @@ describe('LanSignaling', () => {
 
 describe('LAN room URLs and the client socket', () => {
   it('host / guest URLs round-trip and are sanitised', () => {
-    const url = buildLanHostUrl('https://game.example.com', { code: 'ab-c234', name: '<Tu>', mapId: 'cyber_citadel', gameMode: 'tdm' });
+    const url = buildLanHostUrl('https://game.example.com', { code: 'ab-c234', name: '<Tu>', mapId: 'de_dust2', gameMode: 'tdm' });
     assert.ok(url.startsWith('https://game.example.com/?lanhost=ABC234'));
-    assert.deepEqual(parseLanHostParams(new URL(url).search), { code: 'ABC234', name: 'Tu', mapId: 'cyber_citadel', gameMode: 'tdm' });
+    assert.deepEqual(parseLanHostParams(new URL(url).search), { code: 'ABC234', name: 'Tu', mapId: 'de_dust2', gameMode: 'tdm' });
     assert.equal(parseLanHostParams('?lanhost=XY'), null);
     assert.equal(parseLanHostParams('?room=ABC234'), null);
     assert.deepEqual(parseLanGuestParams('?room=abc234&lan=1'), { code: 'ABC234' });
@@ -304,7 +304,7 @@ describe('LAN room discovery, auto-detection, hot-swap, STUN fallback, beforeunl
     appState.knownLanCodes = new Set();
     appState.latestPlayers = [];
     appState.lastJoinPayload = null;
-    appState.selectedMapId = 'cyber_citadel';
+    appState.selectedMapId = 'de_dust2';
     appState.selectedGameMode = 'ffa';
     appState.selectedStartingWeapon = 'rifle';
     appState.selectedLoadout = { primary: 'rifle', secondary: 'pistol', melee: 'knife' };
@@ -347,7 +347,7 @@ describe('LAN room discovery, auto-detection, hot-swap, STUN fallback, beforeunl
 
   it('2. LanSignaling tracks LAN room metadata, updates player counts, answers lanCheck, and cleans up on lanLeave', () => {
     const { sig, host, guest } = setup();
-    host.fire('lanHostOpen', { code: 'lan777', mapId: 'cargo_dock', gameMode: 'tdm' });
+    host.fire('lanHostOpen', { code: 'lan777', mapId: 'de_mirage', gameMode: 'tdm' });
 
     assert.equal(sig.hasHost('lan777'), true);
     assert.equal(sig.hasHost('NOPE99'), false);
@@ -356,7 +356,7 @@ describe('LAN room discovery, auto-detection, hot-swap, STUN fallback, beforeunl
       isLan: true,
       code: 'LAN777',
       roomCode: 'LAN777',
-      mapId: 'cargo_dock',
+      mapId: 'de_mirage',
       gameMode: 'tdm'
     });
     assert.deepEqual(guest.fire('lanCheck', { code: 'NOPE99' }), { ok: true, isLan: false });
@@ -364,7 +364,7 @@ describe('LAN room discovery, auto-detection, hot-swap, STUN fallback, beforeunl
     let summary = sig.getLanRoomsSummary();
     assert.equal(summary.length, 1);
     assert.equal(summary[0].code, 'LAN777');
-    assert.equal(summary[0].mapId, 'cargo_dock');
+    assert.equal(summary[0].mapId, 'de_mirage');
     assert.equal(summary[0].gameMode, 'tdm');
     assert.equal(summary[0].isLan, true);
     assert.equal(summary[0].humans, 1);
@@ -378,9 +378,9 @@ describe('LAN room discovery, auto-detection, hot-swap, STUN fallback, beforeunl
     assert.equal(summary[0].total, 2);
 
     // Host updates map/mode/humans metadata via lanHostUpdate
-    host.fire('lanHostUpdate', { mapId: 'cyber_citadel', gameMode: 'ffa', state: 'PLAYING', humans: 3 });
+    host.fire('lanHostUpdate', { mapId: 'de_dust2', gameMode: 'ffa', state: 'PLAYING', humans: 3 });
     summary = sig.getLanRoomsSummary();
-    assert.equal(summary[0].mapId, 'cyber_citadel');
+    assert.equal(summary[0].mapId, 'de_dust2');
     assert.equal(summary[0].gameMode, 'ffa');
     assert.equal(summary[0].humans, 3);
 
@@ -454,7 +454,7 @@ describe('LAN room discovery, auto-detection, hot-swap, STUN fallback, beforeunl
       const hostSession = await startLanHost({
         code: 'HST123',
         signalSocket: clientSignalSocket,
-        mapId: 'cyber_citadel',
+        mapId: 'de_dust2',
         gameMode: 'ffa'
       });
 
@@ -525,7 +525,7 @@ describe('LAN room discovery, auto-detection, hot-swap, STUN fallback, beforeunl
     const lanHost = await startLanHostInPlace({
       code: 'HOT111',
       name: 'HostUser',
-      mapId: 'cargo_dock',
+      mapId: 'de_mirage',
       gameMode: 'tdm',
       startHostFn: () => ({
         socket: fakeHostSocket,
@@ -560,8 +560,8 @@ describe('LAN room discovery, auto-detection, hot-swap, STUN fallback, beforeunl
     };
     resetTestAppState(onlineSocket);
     appState.netClient.fetchRooms = async () => [
-      { code: 'PUB111', mapName: 'CYBER CITADEL', gameMode: 'ffa', total: 3, maxPlayers: 16 },
-      { code: 'LAN999', mapName: 'CARGO DOCK', gameMode: 'tdm', total: 2, maxPlayers: 16, isLan: true, lan: true }
+      { code: 'PUB111', mapName: 'DUST II // MOROCCO', gameMode: 'ffa', total: 3, maxPlayers: 16 },
+      { code: 'LAN999', mapName: 'MIRAGE // MOROCCO PALACE', gameMode: 'tdm', total: 2, maxPlayers: 16, isLan: true, lan: true }
     ];
 
     await fetchActiveRooms();

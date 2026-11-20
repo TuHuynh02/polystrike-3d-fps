@@ -1,9 +1,8 @@
 import {
-  DEFAULT_MAP_ID,
-  MAPS,
   MATCH_CONFIG,
   SHOT_REJECT,
-  WEAPONS
+  WEAPONS,
+  resolveMapId
 } from '../../shared/constants.js';
 import { INTERP_DELAY_MIN_MS, INTERP_DELAY_MS } from '../../shared/config.js';
 
@@ -66,10 +65,7 @@ export function sanitizeRoomCode(raw) {
 }
 
 export function sanitizeMapId(raw) {
-  if (typeof raw === 'string' && Object.hasOwn(MAPS, raw)) {
-    return raw;
-  }
-  return DEFAULT_MAP_ID;
+  return resolveMapId(raw);
 }
 
 export function sanitizeGameMode(raw) {

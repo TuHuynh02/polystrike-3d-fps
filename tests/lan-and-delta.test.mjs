@@ -130,7 +130,7 @@ describe('SnapshotInterpolator.configure(net)', () => {
 describe('stateUpdate hot/cold split', () => {
   function twoPlayerRoom() {
     const { rm, emitted } = createServerHarness();
-    const a = rm.addHumanPlayer({ id: 'hot_a' }, { name: 'Alpha', mode: 'private', mapId: 'cyber_citadel' });
+    const a = rm.addHumanPlayer({ id: 'hot_a' }, { name: 'Alpha', mode: 'private', mapId: 'de_dust2' });
     rm.addHumanPlayer({ id: 'hot_b' }, { name: 'Bravo', roomCode: a.room.code, mode: 'private' });
     return { rm, emitted, room: a.room, player: a.player };
   }
@@ -277,10 +277,10 @@ describe('private rooms on the LAN server', () => {
   });
 
   it('buildLanCreateUrl and parseCreateParams round-trip and sanitise', () => {
-    const url = buildLanCreateUrl('http://192.168.2.161:3000', { name: '<b>Tu"</b>', mapId: 'cyber_citadel', gameMode: 'tdm' });
+    const url = buildLanCreateUrl('http://192.168.2.161:3000', { name: '<b>Tu"</b>', mapId: 'de_dust2', gameMode: 'tdm' });
     assert.ok(url.startsWith('http://192.168.2.161:3000/?create=private'));
     const parsed = parseCreateParams(new URL(url).search);
-    assert.deepEqual(parsed, { name: 'bTu/b', mapId: 'cyber_citadel', gameMode: 'tdm' });
+    assert.deepEqual(parsed, { name: 'bTu/b', mapId: 'de_dust2', gameMode: 'tdm' });
     assert.equal(parseCreateParams('?room=ABC123'), null, 'an ordinary invite link is not a create request');
     assert.equal(parseCreateParams('?create=public'), null);
     assert.deepEqual(parseCreateParams('?create=private&map=../../x&mode=weird&name=' + 'n'.repeat(40)), { name: 'n'.repeat(16), mapId: '', gameMode: 'ffa' });

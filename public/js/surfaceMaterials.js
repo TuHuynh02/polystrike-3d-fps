@@ -29,25 +29,7 @@ const PBR_UV_CHANNEL = 1; // geometry attribute `uv1`; textures use texture.chan
 const S = (set, tile, tint, rough, metal, normalScale = 1.25) => ({ set, tile, tint, rough, metal, normalScale });
 
 export const SURFACE_PLANS = {
-  cyber_citadel: {
-    floor: S('concrete_floor_worn_001', 4, 0x9aa4b6, 0.88, 0.04, 1.35),
-    wall: S('concrete_block_wall', 2.5, 0xb2bcc9, 0.9, 0.03, 1.40),
-    platform: S('metal_plate', 2, 0x98a4b8, 0.54, 0.46, 1.26),
-    container: S('corrugated_iron_02', 2, 'obs', 0.48, 0.48, 1.35),
-    crate: S('metal_plate', 1.6, 'obs', 0.58, 0.38, 1.24),
-    pillar: S('concrete_block_wall', 2.5, 0xa8b2c2, 0.88, 0.05, 1.32),
-    step: S('metal_plate', 1.6, 0x8e9bb0, 0.48, 0.52, 1.26)
-  },
-  cargo_dock: {
-    floor: S('concrete_floor_worn_001', 4, 0x9aa3ae, 0.9, 0.03, 1.36),
-    wall: S('concrete_block_wall', 2.5, 0xb2b8be, 0.9, 0.03, 1.40),
-    platform: S('rusty_metal_02', 2, 0x9c9188, 0.58, 0.42, 1.26),
-    container: S('corrugated_iron_02', 2, 'obs', 0.48, 0.46, 1.36),
-    crate: S('metal_plate', 1.6, 'obs', 0.56, 0.38, 1.24),
-    pillar: S('concrete_block_wall', 2.5, 0xa8aeb4, 0.88, 0.05, 1.32),
-    step: S('metal_plate', 1.6, 0x9099a6, 0.48, 0.52, 1.26)
-  },
-  desert_outpost: {
+  de_dust2: {
     floor: S('cobblestone_pavement', 4.2, 0xd8c8ae, 0.90, 0.02, 1.32),
     wall: S('beige_wall_001', 3.0, 0xdfd2bc, 0.92, 0.02, 1.45),
     platform: S('sandstone_blocks_04', 2.5, 0xcbb99d, 0.88, 0.02, 1.30),
@@ -57,55 +39,71 @@ export const SURFACE_PLANS = {
     step: S('sandstone_blocks_04', 2.0, 0xcbb99d, 0.88, 0.02, 1.28),
     dado: S('concrete_block_wall', 2.2, 0x8c8578, 0.94, 0.02, 1.40)
   },
-  neon_lab: {
-    floor: S('concrete_floor_worn_001', 4, 0x8a90aa, 0.8, 0.12, 1.34),
-    wall: S('metal_plate', 2.2, 0x9a94c0, 0.5, 0.5, 1.36),
-    platform: S('metal_plate', 2, 0x9c98c6, 0.46, 0.55, 1.28),
-    container: S('metal_plate', 2, 'obs', 0.46, 0.52, 1.36),
-    crate: S('metal_plate', 1.6, 'obs', 0.55, 0.44, 1.24),
-    pillar: S('metal_plate', 2, 0x9692be, 0.46, 0.55, 1.30),
-    step: S('metal_plate', 1.6, 0x8b88b4, 0.46, 0.55, 1.24)
+  de_mirage: {
+    floor: S('dirt_floor', 4.0, 0xd6bfa0, 0.92, 0.02, 1.28),
+    wall: S('beige_wall_001', 2.8, 0xe4cda9, 0.90, 0.02, 1.42),
+    platform: S('sandstone_blocks_04', 2.4, 0xd4bb94, 0.88, 0.02, 1.34),
+    container: S('corrugated_iron_02', 2.0, 'obs', 0.52, 0.40, 1.32),
+    crate: S('weathered_brown_planks', 1.6, 0xc2935e, 0.84, 0.04, 1.34),
+    pillar: S('sandstone_blocks_04', 2.2, 0xd9c29e, 0.88, 0.02, 1.36),
+    step: S('sandstone_blocks_04', 2.0, 0xcfb48c, 0.88, 0.02, 1.30),
+    dado: S('sandstone_blocks_04', 2.2, 0xb59b78, 0.92, 0.02, 1.38)
   },
-  crossfire_plus: {
-    floor: S('concrete_floor_worn_001', 3.5, 0x97a1b0, 0.88, 0.04, 1.35),
-    wall: S('concrete_block_wall', 2.2, 0xb0b8c5, 0.88, 0.04, 1.40),
-    platform: S('metal_plate', 2, 0x9ca7b8, 0.52, 0.48, 1.26),
-    container: S('corrugated_iron_02', 2, 'obs', 0.48, 0.46, 1.35),
-    crate: S('metal_plate', 1.6, 'obs', 0.56, 0.40, 1.24),
-    pillar: S('concrete_block_wall', 2.2, 0xb6aa9c, 0.85, 0.06, 1.32),
-    step: S('metal_plate', 1.6, 0x8e9aab, 0.50, 0.50, 1.24)
+  de_inferno: {
+    floor: S('cobblestone_pavement', 3.4, 0xc8beb2, 0.88, 0.02, 1.40),
+    wall: S('beige_wall_001', 2.8, 0xe2c7a4, 0.90, 0.02, 1.40),
+    platform: S('sandstone_blocks_04', 2.4, 0xc8b59e, 0.88, 0.02, 1.34),
+    container: S('red_brick', 2.2, 'obs', 0.86, 0.03, 1.44),
+    crate: S('weathered_brown_planks', 1.6, 0xaa7e52, 0.84, 0.04, 1.34),
+    pillar: S('red_brick', 2.2, 0xc6987e, 0.88, 0.03, 1.42),
+    step: S('cobblestone_pavement', 2.0, 0xbcb2a4, 0.88, 0.02, 1.32),
+    dado: S('red_brick', 2.2, 0xb8856c, 0.90, 0.03, 1.42)
+  },
+  de_nuke: {
+    floor: S('concrete_floor_worn_001', 4.0, 0xc6ced8, 0.84, 0.04, 1.34),
+    wall: S('concrete_block_wall', 2.5, 0xedf2f7, 0.86, 0.04, 1.40),
+    platform: S('metal_plate', 2.0, 0xc8d2dc, 0.52, 0.42, 1.28),
+    container: S('corrugated_iron_02', 2.0, 'obs', 0.48, 0.44, 1.38),
+    crate: S('metal_plate', 1.6, 'obs', 0.54, 0.38, 1.26),
+    pillar: S('concrete_block_wall', 2.4, 0xdce4ec, 0.84, 0.06, 1.34),
+    step: S('metal_plate', 1.6, 0xc0cad4, 0.48, 0.46, 1.26),
+    dado: S('rusty_metal_02', 2.2, 0xc4ced8, 0.62, 0.32, 1.32)
   },
   fy_iceworld: {
-    floor: S('concrete_floor_worn_001', 3.5, 0xb0cbe0, 0.78, 0.10, 1.32),
-    wall: S('concrete_block_wall', 2.2, 0xc2dced, 0.82, 0.08, 1.38),
-    platform: S('metal_plate', 2, 0xa2c2da, 0.5, 0.48, 1.26),
-    container: S('metal_plate', 2, 'obs', 0.5, 0.5, 1.35),
-    crate: S('metal_plate', 1.6, 'obs', 0.55, 0.45, 1.24),
-    pillar: S('concrete_block_wall', 2.2, 0xc4e3f6, 0.8, 0.1, 1.32),
-    step: S('metal_plate', 1.6, 0x98bad4, 0.5, 0.5, 1.24)
+    floor: S('concrete_floor_worn_001', 3.6, 0xe4f0f8, 0.76, 0.06, 1.30),
+    wall: S('beige_wall_001', 2.4, 0xe8f4fc, 0.80, 0.04, 1.34),
+    platform: S('beige_wall_001', 2.4, 0xebf5fc, 0.76, 0.06, 1.28),
+    container: S('concrete_floor_worn_001', 2.2, 'obs', 0.76, 0.06, 1.34),
+    crate: S('weathered_brown_planks', 1.6, 0xc4d2dc, 0.82, 0.05, 1.30),
+    pillar: S('sandstone_blocks_04', 2.2, 0xe4f1fa, 0.80, 0.05, 1.34),
+    step: S('sandstone_blocks_04', 1.8, 0xd4e6f4, 0.78, 0.06, 1.26),
+    dado: S('sandstone_blocks_04', 2.2, 0xcbe0f0, 0.82, 0.05, 1.34)
   },
-  killhouse_cqb: {
-    floor: S('concrete_floor_worn_001', 3.5, 0x9e9b97, 0.9, 0.03, 1.35),
-    wall: S('red_brick', 2.2, 0xba9f84, 0.88, 0.03, 1.42),
-    platform: S('rusty_metal_02', 2, 0xa29384, 0.58, 0.42, 1.26),
-    container: S('corrugated_iron_02', 2, 'obs', 0.50, 0.45, 1.35),
-    crate: S('metal_plate', 1.6, 'obs', 0.58, 0.36, 1.24),
-    pillar: S('concrete_block_wall', 2.2, 0xb2a89d, 0.88, 0.04, 1.32),
-    step: S('metal_plate', 1.6, 0x928e88, 0.52, 0.48, 1.24)
-  },
-  arena_duel: {
-    floor: S('concrete_floor_worn_001', 3.5, 0x988ca6, 0.84, 0.08, 1.34),
-    wall: S('metal_plate', 2.2, 0xa894b8, 0.52, 0.48, 1.36),
-    platform: S('metal_plate', 2, 0xae98c0, 0.48, 0.52, 1.28),
-    container: S('metal_plate', 2, 'obs', 0.48, 0.50, 1.35),
-    crate: S('metal_plate', 1.6, 'obs', 0.56, 0.44, 1.24),
-    pillar: S('concrete_block_wall', 2.2, 0xb4a0c4, 0.82, 0.08, 1.32),
-    step: S('metal_plate', 1.6, 0x9886aa, 0.48, 0.52, 1.24)
+  aim_map: {
+    floor: S('concrete_floor_worn_001', 3.8, 0xd0cdc6, 0.88, 0.03, 1.32),
+    wall: S('red_brick', 2.2, 0xc8a48c, 0.88, 0.03, 1.42),
+    platform: S('concrete_floor_worn_001', 2.4, 0xb4b8be, 0.84, 0.06, 1.30),
+    container: S('corrugated_iron_02', 2.0, 'obs', 0.50, 0.42, 1.34),
+    crate: S('weathered_brown_planks', 1.6, 0xc29868, 0.84, 0.04, 1.32),
+    pillar: S('concrete_floor_worn_001', 2.2, 0xd8d6d0, 0.88, 0.04, 1.34),
+    step: S('metal_plate', 1.6, 0x9aa2ac, 0.52, 0.44, 1.26),
+    dado: S('concrete_floor_worn_001', 2.2, 0xdad8d2, 0.90, 0.03, 1.36)
   }
 };
 
+const SURFACE_MAP_ALIASES = {
+  desert_outpost: 'de_dust2',
+  arena_duel: 'aim_map'
+};
+
+function resolveSurfaceMapId(mapId) {
+  if (typeof mapId !== 'string') return 'de_dust2';
+  const canonical = SURFACE_MAP_ALIASES[mapId] || mapId;
+  return SURFACE_PLANS[canonical] ? canonical : 'de_dust2';
+}
+
 export function getSurfacePlan(mapId) {
-  return SURFACE_PLANS[mapId] || SURFACE_PLANS.cyber_citadel;
+  return SURFACE_PLANS[resolveSurfaceMapId(mapId)];
 }
 
 /** Distinct texture sets one map needs (what preload / upgrade actually fetch). */
@@ -114,48 +112,137 @@ export function surfaceSetsForMap(mapId) {
 }
 
 /**
- * Colour multiplier for a textured surface: maps arcade obstacle hues into rich, grounded
- * maritime/military painted steel and ordnance tones (deep navy, oxide crimson, forest olive,
- * slate steel, coyote tan) calibrated for multiplicative PBR albedo maps.
+ * Colour multiplier for a textured surface: maps obstacle hues into photoreal CS:GO/CS2
+ * architectural palettes (Moroccan sandstone/timber, Tuscan terracotta/red-brick/oak,
+ * Cedar Creek industrial Red/Blue steel & hazard yellow, alpine glacier concrete, and
+ * daylight brick/concrete/wood) calibrated for multiplicative PBR albedo maps.
  */
 export function tintFromObstacleColor(hex, role = 'container', mapId = null) {
   const c = new THREE.Color(hex);
-  const hsl = { h: 0, s: 0, l: 0 };
-  c.getHSL(hsl);
+  const srgbHsl = { h: 0, s: 0, l: 0 };
+  c.getHSL(srgbHsl, THREE.SRGBColorSpace);
   const isCrate = role === 'crate';
-  const isDesertColor = hex === 0x451a03 || hex === 0x78350f || hex === 0x92400e;
+  const canonicalMapId = typeof mapId === 'string' ? (SURFACE_MAP_ALIASES[mapId] || mapId) : null;
+  const isDesertHex = hex === 0x451a03 || hex === 0x78350f || hex === 0x92400e;
 
-  if (mapId === 'desert_outpost' || isDesertColor) {
-    const srgbHsl = { h: 0, s: 0, l: 0 };
-    c.getHSL(srgbHsl, THREE.SRGBColorSpace);
-    if (srgbHsl.h >= 0.47 && srgbHsl.h <= 0.66) {
-      // Iconic Dust II Long-A blue container
-      return 0x2b6da8;
+  if (canonicalMapId === 'de_dust2' || canonicalMapId === 'de_mirage' || (!canonicalMapId && isDesertHex)) {
+    const isMirage = canonicalMapId === 'de_mirage';
+    if (srgbHsl.h >= 0.47 && srgbHsl.h <= 0.68 && srgbHsl.s >= 0.20) {
+      // Iconic Dust II Long-A blue container / Mirage blue tarp-steel
+      return isMirage ? 0x326e9e : 0x2b6da8;
     }
-    if (hex === 0x451a03) return 0xdfd2bc;
-    if (hex === 0x78350f) return 0xcbb99d;
-    if (hex === 0x92400e) return isCrate ? 0xba9364 : 0xc6b397;
+    if (srgbHsl.s < 0.14) {
+      return isMirage ? 0xd4c2a4 : 0xc8bca6;
+    }
+    if (hex === 0x451a03) return isMirage ? 0xe4cda9 : 0xdfd2bc;
+    if (hex === 0x78350f) return isMirage ? 0xd4bb94 : 0xcbb99d;
+    if (hex === 0x92400e) return isCrate ? (isMirage ? 0xc2935e : 0xba9364) : (isMirage ? 0xd0b68f : 0xc6b397);
+    if (srgbHsl.h >= 0.88 || srgbHsl.h <= 0.035) {
+      return isMirage ? 0xb4563d : 0xa84c38;
+    }
+    if (srgbHsl.h > 0.18 && srgbHsl.h < 0.47) {
+      return srgbHsl.h >= 0.38 ? 0x5c7468 : 0x6c7a56;
+    }
     if (srgbHsl.l < 0.20) {
-      // Sunlit Moroccan limestone / stucco
-      return 0xdfd2bc;
+      return isMirage ? 0xe4cda9 : 0xdfd2bc;
     }
     if (srgbHsl.l < 0.29) {
-      // Warm carved sandstone
-      return 0xcbb99d;
+      return isMirage ? 0xd4bb94 : 0xcbb99d;
     }
-    if (srgbHsl.l < 0.35) {
-      // Aged Moroccan timber / sun-baked sandstone
-      return isCrate ? 0xba9364 : 0xc6b397;
+    if (srgbHsl.l < 0.36) {
+      return isCrate ? (isMirage ? 0xc2935e : 0xba9364) : (isMirage ? 0xd0b68f : 0xc6b397);
     }
     if (srgbHsl.h > 0.035 && srgbHsl.h <= 0.16) {
-      return isCrate ? 0xba9364 : 0xc6985e;
+      return isCrate ? (isMirage ? 0xc2935e : 0xba9364) : (isMirage ? 0xd0a26c : 0xc6985e);
     }
-    return 0xcbb99d;
+    return isMirage ? 0xd4bb94 : 0xcbb99d;
   }
 
+  if (canonicalMapId === 'de_inferno') {
+    if (srgbHsl.s < 0.15) {
+      return isCrate ? 0xaa7e52 : 0xc8baa6;
+    }
+    if (srgbHsl.h >= 0.89 || srgbHsl.h <= 0.065) {
+      // Tuscan terracotta & red-brick masonry
+      return srgbHsl.l < 0.34 ? 0xa64d3b : 0xb85b42;
+    }
+    if (srgbHsl.h > 0.065 && srgbHsl.h <= 0.16) {
+      // Rustic timber crates / First & Second Oranges warm terracotta stucco
+      return isCrate ? 0xaa7e52 : 0xc88952;
+    }
+    if (srgbHsl.h > 0.16 && srgbHsl.h < 0.47) {
+      // Mediterranean olive / cypress shutter green
+      return 0x5a6e4c;
+    }
+    if (srgbHsl.h >= 0.47 && srgbHsl.h <= 0.68) {
+      return 0x466b8c;
+    }
+    return isCrate ? 0xaa7e52 : 0xc8b298;
+  }
+
+  if (canonicalMapId === 'de_nuke') {
+    if (srgbHsl.s < 0.16) {
+      if (srgbHsl.l < 0.34) return isCrate ? 0x94a2b0 : 0x8c9aa8;
+      return isCrate ? 0xb4c0cc : 0xc0cad4;
+    }
+    if (srgbHsl.h >= 0.89 || srgbHsl.h <= 0.04) {
+      // Iconic Cedar Creek Outside Red Container
+      return isCrate ? 0xb43c32 : 0xc4362c;
+    }
+    if (srgbHsl.h >= 0.47 && srgbHsl.h <= 0.68) {
+      // Iconic Cedar Creek Blue Container / Blue Box
+      return isCrate ? 0x3272a6 : 0x286ea8;
+    }
+    if (srgbHsl.h > 0.04 && srgbHsl.h <= 0.18) {
+      // Industrial hazard yellow / amber facility steel
+      return isCrate ? 0xc29838 : 0xd4a42c;
+    }
+    if (srgbHsl.h > 0.18 && srgbHsl.h < 0.47) {
+      return 0x4e6e54;
+    }
+    return isCrate ? 0xa4b0bc : 0xb0bcc8;
+  }
+
+  if (canonicalMapId === 'fy_iceworld') {
+    if (srgbHsl.h >= 0.45 && srgbHsl.h <= 0.68 && srgbHsl.s >= 0.16) {
+      // Crisp frosted glacier stone/concrete (grounded pale slate-ice, zero stark dark-vs-white contrast)
+      return isCrate ? 0xc4d8e8 : 0xbed4e6;
+    }
+    if (srgbHsl.s < 0.18) {
+      return srgbHsl.l > 0.62 ? 0xe6f1fa : 0xd2e3f0;
+    }
+    if (srgbHsl.h > 0.04 && srgbHsl.h <= 0.16) {
+      return 0xc6cdd2;
+    }
+    if (srgbHsl.h >= 0.88 || srgbHsl.h <= 0.04) {
+      return 0xb46464;
+    }
+    return 0xcce0ee;
+  }
+
+  if (canonicalMapId === 'aim_map') {
+    if (srgbHsl.s < 0.16) {
+      return isCrate ? 0xc4c2bc : 0xd4d2cc;
+    }
+    if (srgbHsl.h >= 0.89 || srgbHsl.h <= 0.045) {
+      return 0xb25444;
+    }
+    if (srgbHsl.h > 0.045 && srgbHsl.h <= 0.16) {
+      return isCrate ? 0xc29868 : 0xb88652;
+    }
+    if (srgbHsl.h >= 0.47 && srgbHsl.h <= 0.68) {
+      return 0x3b6c94;
+    }
+    if (srgbHsl.h > 0.16 && srgbHsl.h < 0.47) {
+      return 0x556b4d;
+    }
+    return 0xc8c6c0;
+  }
+
+  const hsl = { h: 0, s: 0, l: 0 };
+  c.getHSL(hsl);
   if (hsl.s < 0.18) {
-    // Slate steel / neutral industrial grey
-    c.setHSL(0.58, 0.16, isCrate ? 0.56 : 0.58);
+    c.setHSL(0.58, 0.14, isCrate ? 0.56 : 0.58);
     return c.getHex();
   }
 
@@ -164,28 +251,23 @@ export function tintFromObstacleColor(hex, role = 'container', mapId = null) {
   let l = isCrate ? 0.54 : 0.55;
 
   if (h >= 0.86 || h <= 0.035) {
-    // Crimson / rose -> Corten oxide crimson
     h = 0.018;
     s = isCrate ? 0.52 : 0.62;
     l = isCrate ? 0.50 : 0.52;
   } else if (h > 0.035 && h <= 0.16) {
-    // Amber / orange / brown -> coyote tan (crates) or weathered maritime ochre (containers)
     h = isCrate ? 0.092 : 0.075;
-    s = isCrate ? 0.40 : 0.58;
+    s = isCrate ? 0.40 : 0.56;
     l = isCrate ? 0.57 : 0.56;
   } else if (h > 0.16 && h < 0.47) {
-    // Emerald / green -> military forest olive
     h = 0.265;
     s = isCrate ? 0.36 : 0.42;
     l = isCrate ? 0.51 : 0.53;
   } else if (h >= 0.47 && h <= 0.66) {
-    // Cyan / sky / blue -> deep maritime navy steel
     h = 0.585;
-    s = isCrate ? 0.46 : 0.62;
+    s = isCrate ? 0.46 : 0.60;
     l = isCrate ? 0.54 : 0.56;
   } else {
-    // Indigo / purple -> muted tactical plum/slate
-    s = Math.min(s, 0.46);
+    s = Math.min(s, 0.44);
     l = isCrate ? 0.52 : 0.54;
   }
 
@@ -270,7 +352,7 @@ export function applyMetricPlaneUV1(geo, width, height, tile = 4) {
 const SALTLINE_WET_PROGRAM_KEY = () => 'saltline_wet_v1';
 const SALTLINE_WALL_PROGRAM_KEY = () => 'saltline_wall_weather_v1';
 
-const MACRO_GRIME_MAPS = new Set(['desert_outpost', 'cargo_dock']);
+const MACRO_GRIME_MAPS = new Set(['de_dust2', 'de_mirage', 'de_inferno', 'de_nuke', 'aim_map']);
 const MACRO_GRIME_ROLES = new Set(['wall', 'floor', 'pillar', 'platform', 'dado']);
 
 let _macroGrimeLoadPromise = null;
@@ -292,17 +374,39 @@ function loadMacroGrimeModule() {
 void loadMacroGrimeModule();
 
 export function isMacroGrimeEligible(mapId, role) {
-  return MACRO_GRIME_MAPS.has(mapId) && MACRO_GRIME_ROLES.has(role);
+  const canonical = typeof mapId === 'string' ? (SURFACE_MAP_ALIASES[mapId] || mapId) : null;
+  return Boolean(canonical && MACRO_GRIME_MAPS.has(canonical) && MACRO_GRIME_ROLES.has(role));
 }
 
 function defaultMacroGrimeParams(mapId, role) {
-  if (mapId === 'desert_outpost') {
+  const canonical = typeof mapId === 'string' ? (SURFACE_MAP_ALIASES[mapId] || mapId) : 'de_dust2';
+  if (canonical === 'de_dust2') {
     if (role === 'floor') return { scale: 0.048, strength: 0.24, dustTop: 0.32, drips: 0 };
     if (role === 'wall' || role === 'dado') return { scale: 0.056, strength: 0.26, dustTop: 0.65, drips: 0.60 };
     return { scale: 0.058, strength: 0.22, dustTop: 0.68, drips: 0.45 };
   }
-  if (role === 'floor') return { scale: 0.046, strength: 0.20, dustTop: 0, drips: 0 };
-  return { scale: 0.054, strength: 0.22, dustTop: 0.12, drips: 0.45 };
+  if (canonical === 'de_mirage') {
+    if (role === 'floor') return { scale: 0.045, strength: 0.22, dustTop: 0.38, drips: 0 };
+    if (role === 'wall' || role === 'dado') return { scale: 0.052, strength: 0.24, dustTop: 0.70, drips: 0.52 };
+    return { scale: 0.056, strength: 0.20, dustTop: 0.68, drips: 0.40 };
+  }
+  if (canonical === 'de_inferno') {
+    if (role === 'floor') return { scale: 0.052, strength: 0.20, dustTop: 0.14, drips: 0 };
+    if (role === 'wall' || role === 'dado') return { scale: 0.058, strength: 0.24, dustTop: 0.30, drips: 0.66 };
+    return { scale: 0.060, strength: 0.20, dustTop: 0.28, drips: 0.48 };
+  }
+  if (canonical === 'de_nuke') {
+    if (role === 'floor') return { scale: 0.046, strength: 0.18, dustTop: 0.04, drips: 0 };
+    if (role === 'wall' || role === 'dado') return { scale: 0.054, strength: 0.22, dustTop: 0.10, drips: 0.64 };
+    return { scale: 0.056, strength: 0.18, dustTop: 0.08, drips: 0.44 };
+  }
+  if (canonical === 'aim_map') {
+    if (role === 'floor') return { scale: 0.050, strength: 0.16, dustTop: 0.08, drips: 0 };
+    if (role === 'wall' || role === 'dado') return { scale: 0.058, strength: 0.19, dustTop: 0.18, drips: 0.38 };
+    return { scale: 0.058, strength: 0.16, dustTop: 0.16, drips: 0.30 };
+  }
+  if (role === 'floor') return { scale: 0.048, strength: 0.20, dustTop: 0.10, drips: 0 };
+  return { scale: 0.054, strength: 0.20, dustTop: 0.20, drips: 0.40 };
 }
 
 function invokeWorldMacroGrime(material, spec) {
@@ -326,7 +430,7 @@ function invokeWorldMacroGrime(material, spec) {
 
 /**
  * Hooks world-space macro grime (`./arena/macroGrime.js` if present, safe no-op fallback otherwise) onto
- * `wall`, `floor`, `pillar`, `platform` (and `dado`) materials on `desert_outpost` and `cargo_dock`.
+ * `wall`, `floor`, `pillar`, `platform` (and `dado`) materials on eligible CS:GO maps.
  * Always call AFTER `applySaltlineWetFloorShader` / `applySaltlineWallWeatheringShader` so shader hooks chain cleanly.
  */
 export function attachWorldMacroGrime(
@@ -334,9 +438,10 @@ export function attachWorldMacroGrime(
   { mapId = null, role = null, scale, strength, dustTop, drips, enabled = true } = {}
 ) {
   if (!material || !isMacroGrimeEligible(mapId, role)) return material;
-  const defaults = defaultMacroGrimeParams(mapId, role);
+  const canonical = typeof mapId === 'string' ? (SURFACE_MAP_ALIASES[mapId] || mapId) : mapId;
+  const defaults = defaultMacroGrimeParams(canonical, role);
   const spec = {
-    mapId,
+    mapId: canonical,
     role,
     scale: Number.isFinite(scale) ? scale : defaults.scale,
     strength: Number.isFinite(strength) ? strength : defaults.strength,

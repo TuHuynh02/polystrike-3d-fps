@@ -14,7 +14,7 @@ import {
 } from '../shared/lagCompensation.js';
 import { RoomManager } from '../server/roomManager.js';
 
-const MAP_ID = 'cyber_citadel';
+const MAP_ID = 'de_dust2';
 
 function createHarness() {
   const emitted = [];
