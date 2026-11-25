@@ -183,6 +183,24 @@ export const FPS_ARMS_WEAPON_PRESETS = Object.freeze({
     reloadMagRot: Object.freeze([0.0, 0.0, 0.0]),
     reloadBoltPos: Object.freeze([0.0, 0.0, 0.0]),
     reloadBoltRot: Object.freeze([0.0, 0.0, 0.0])
+  }),
+  glock: Object.freeze({
+    modelPath: FPS_ARMS_RIGGED_PATH,
+    anchorKind: 'rigged_gsh18',
+    useRiggedGsh18Arms: true,
+    useLeftArm: true,
+    useRightArm: true,
+    // Aligned to gsh18.glb PrimaryGripSocket [0, -0.0401, 0.2258] in 1x gsh18 space (-Z forward, +Y up)
+    leftScale: 1.0,
+    leftPos: Object.freeze([0.0, -0.0401, 0.2258]),
+    leftRot: Object.freeze([0.0, 0.0, 0.0]),
+    rightScale: 1.0,
+    rightPos: Object.freeze([0.0, -0.0401, 0.2258]),
+    rightRot: Object.freeze([0.0, 0.0, 0.0]),
+    reloadMagPos: Object.freeze([-0.024, -0.145, 0.205]),
+    reloadMagRot: Object.freeze([-0.18, 0.10, -0.08]),
+    reloadBoltPos: Object.freeze([-0.031, -0.015, 0.240]),
+    reloadBoltRot: Object.freeze([-0.12, -0.10, -0.14])
   })
 });
 
@@ -214,6 +232,7 @@ export function stripBakedCs2Arms(root) {
 const FPS_ARMS_MAT_CACHE = new Map();
 const FPS_ARMS_ENV_MATERIALS = new Set();
 const BAKED_KNIFE_ARM_GEO_CACHE = new Map();
+const BAKED_GSH18_ARM_GEO_CACHE = new Map();
 const PROCEDURAL_ARMS_GEO_CACHE = new Map();
 const PROCEDURAL_ARMS_MAT_CACHE = new Map();
 
@@ -272,7 +291,7 @@ function getSharedDressedArmMaterial(origMat, envMap) {
   markTextureShared(origMat.metalnessMap, false);
   markTextureShared(origMat.aoMap, false);
 
-  const envIntensity = isSleeve ? 0.56 : 0.78;
+  const envIntensity = isSleeve ? 0.48 : 0.62;
   const mat = new THREE.MeshStandardMaterial({
     name: `cs2_fps_arms_${slotKey}`,
     map: origMat.map || null,
@@ -281,10 +300,10 @@ function getSharedDressedArmMaterial(origMat, envMap) {
     metalnessMap: origMat.metalnessMap || null,
     aoMap: origMat.aoMap || null,
     aoMapIntensity: isSleeve ? 0.68 : 0.74,
-    // Gentle linear lift so dark tactical charcoal cloth & stitched suede palms remain crisp in daylight & shadow
-    color: isSleeve ? new THREE.Color().setRGB(1.32, 1.32, 1.28) : new THREE.Color().setRGB(1.24, 1.22, 1.18),
-    roughness: isSleeve ? 0.96 : 0.92,
-    metalness: isSleeve ? 0.16 : 0.22,
+    // Rich dark tactical charcoal fabric & suede without pale color wash
+    color: isSleeve ? new THREE.Color().setRGB(1.04, 1.04, 1.02) : new THREE.Color().setRGB(1.04, 1.02, 1.00),
+    roughness: isSleeve ? 0.94 : 0.90,
+    metalness: isSleeve ? 0.08 : 0.12,
     normalScale: new THREE.Vector2(isSleeve ? 1.05 : 1.15, isSleeve ? 1.05 : 1.15),
     envMap: envMap || null,
     envMapIntensity: envIntensity
@@ -629,6 +648,293 @@ function buildBakedRiggedKnifeRightArm(riggedScene, envMap) {
   return pivot;
 }
 
+/**
+ * Helper to CPU-bake a filtered subset of skinned vertices from a posed SkinnedMesh into a static BufferGeometry
+ * centered at `RightGripFrame` in `-Z` forward space.
+ */
+function bakeSkinnedSubsetToStaticGeo(riggedScene, skinnedMesh, rightGripNode, keepVertexFn) {
+  const skeleton = skinnedMesh.skeleton;
+  const bones = skeleton.bones;
+  const boneInverses = skeleton.boneInverses;
+  const srcGeo = skinnedMesh.geometry;
+  const posAttr = srcGeo.attributes.position;
+  const normAttr = srcGeo.attributes.normal;
+  const uvAttr = srcGeo.attributes.uv;
+  const skinIdxAttr = srcGeo.attributes.skinIndex;
+  const skinWtAttr = srcGeo.attributes.skinWeight;
+  if (!posAttr || !skinIdxAttr || !skinWtAttr) return null;
+
+  riggedScene.updateMatrixWorld(true);
+  skeleton.update();
+
+  const bindMat = skinnedMesh.bindMatrix;
+  const gripPos = rightGripNode
+    ? new THREE.Vector3().setFromMatrixPosition(rightGripNode.matrixWorld)
+    : new THREE.Vector3(0, 0.0962, 0.1321);
+  const flipY = new THREE.Matrix4().makeRotationY(Math.PI);
+  const transNegGrip = new THREE.Matrix4().makeTranslation(-gripPos.x, -gripPos.y, -gripPos.z);
+  const worldToGrip = new THREE.Matrix4().multiplyMatrices(flipY, transNegGrip);
+
+  const skinMats = new Array(bones.length);
+  for (let bi = 0; bi < bones.length; bi++) {
+    const m = new THREE.Matrix4();
+    m.multiplyMatrices(bones[bi].matrixWorld, boneInverses[bi]);
+    m.multiply(bindMat);
+    m.premultiply(worldToGrip);
+    skinMats[bi] = m;
+  }
+
+  const keepVert = new Uint8Array(posAttr.count);
+  for (let v = 0; v < posAttr.count; v++) {
+    if (keepVertexFn(v, skinIdxAttr, skinWtAttr)) keepVert[v] = 1;
+  }
+
+  const srcIndex = srcGeo.index;
+  const triCount = srcIndex ? Math.floor(srcIndex.count / 3) : Math.floor(posAttr.count / 3);
+  const remap = new Int32Array(posAttr.count).fill(-1);
+  const keptVerts = [];
+  const keptIndices = [];
+
+  for (let t = 0; t < triCount; t++) {
+    const a = srcIndex ? srcIndex.getX(t * 3) : t * 3;
+    const b = srcIndex ? srcIndex.getX(t * 3 + 1) : t * 3 + 1;
+    const c = srcIndex ? srcIndex.getX(t * 3 + 2) : t * 3 + 2;
+    if (!keepVert[a] || !keepVert[b] || !keepVert[c]) continue;
+    for (const vi of [a, b, c]) {
+      let nv = remap[vi];
+      if (nv === -1) {
+        nv = keptVerts.length;
+        remap[vi] = nv;
+        keptVerts.push(vi);
+      }
+      keptIndices.push(nv);
+    }
+  }
+  if (keptVerts.length === 0 || keptIndices.length === 0) return null;
+
+  const outPos = new Float32Array(keptVerts.length * 3);
+  const outNorm = new Float32Array(keptVerts.length * 3);
+  const outUv = new Float32Array(keptVerts.length * 2);
+
+  const pSrc = new THREE.Vector3();
+  const nSrc = new THREE.Vector3();
+  const pAcc = new THREE.Vector3();
+  const nAcc = new THREE.Vector3();
+  const pTmp = new THREE.Vector3();
+  const nTmp = new THREE.Vector3();
+
+  for (let ni = 0; ni < keptVerts.length; ni++) {
+    const vi = keptVerts[ni];
+    pSrc.fromBufferAttribute(posAttr, vi);
+    if (normAttr) nSrc.fromBufferAttribute(normAttr, vi);
+    else nSrc.set(0, 1, 0);
+
+    const j0 = skinIdxAttr.getX(vi);
+    const j1 = skinIdxAttr.getY(vi);
+    const j2 = skinIdxAttr.getZ(vi);
+    const j3 = skinIdxAttr.getW(vi);
+    const w0 = skinWtAttr.getX(vi);
+    const w1 = skinWtAttr.getY(vi);
+    const w2 = skinWtAttr.getZ(vi);
+    const w3 = skinWtAttr.getW(vi);
+    const wSum = w0 + w1 + w2 + w3;
+    const invW = wSum > 1e-6 ? 1 / wSum : 1;
+
+    pAcc.set(0, 0, 0);
+    nAcc.set(0, 0, 0);
+
+    if (w0 > 0 && skinMats[j0]) {
+      const w = w0 * invW;
+      pAcc.addScaledVector(pTmp.copy(pSrc).applyMatrix4(skinMats[j0]), w);
+      nAcc.addScaledVector(nTmp.copy(nSrc).transformDirection(skinMats[j0]), w);
+    }
+    if (w1 > 0 && skinMats[j1]) {
+      const w = w1 * invW;
+      pAcc.addScaledVector(pTmp.copy(pSrc).applyMatrix4(skinMats[j1]), w);
+      nAcc.addScaledVector(nTmp.copy(nSrc).transformDirection(skinMats[j1]), w);
+    }
+    if (w2 > 0 && skinMats[j2]) {
+      const w = w2 * invW;
+      pAcc.addScaledVector(pTmp.copy(pSrc).applyMatrix4(skinMats[j2]), w);
+      nAcc.addScaledVector(nTmp.copy(nSrc).transformDirection(skinMats[j2]), w);
+    }
+    if (w3 > 0 && skinMats[j3]) {
+      const w = w3 * invW;
+      pAcc.addScaledVector(pTmp.copy(pSrc).applyMatrix4(skinMats[j3]), w);
+      nAcc.addScaledVector(nTmp.copy(nSrc).transformDirection(skinMats[j3]), w);
+    }
+
+    if (nAcc.lengthSq() > 1e-10) nAcc.normalize();
+    else nAcc.set(0, 1, 0);
+
+    outPos[ni * 3] = pAcc.x;
+    outPos[ni * 3 + 1] = pAcc.y;
+    outPos[ni * 3 + 2] = pAcc.z;
+    outNorm[ni * 3] = nAcc.x;
+    outNorm[ni * 3 + 1] = nAcc.y;
+    outNorm[ni * 3 + 2] = nAcc.z;
+    if (uvAttr) {
+      outUv[ni * 2] = uvAttr.getX(vi);
+      outUv[ni * 2 + 1] = uvAttr.getY(vi);
+    }
+  }
+
+  const bakedGeo = new THREE.BufferGeometry();
+  bakedGeo.setAttribute('position', new THREE.BufferAttribute(outPos, 3));
+  bakedGeo.setAttribute('normal', new THREE.BufferAttribute(outNorm, 3));
+  bakedGeo.setAttribute('uv', new THREE.BufferAttribute(outUv, 2));
+  bakedGeo.setIndex(
+    keptVerts.length > 65535
+      ? new THREE.Uint32BufferAttribute(keptIndices, 1)
+      : new THREE.Uint16BufferAttribute(keptIndices, 1)
+  );
+  bakedGeo.computeBoundingBox();
+  bakedGeo.computeBoundingSphere();
+  bakedGeo.userData = { shared: true, isFpsArmsGeo: true };
+  return bakedGeo;
+}
+
+/**
+ * Poses `fps_arms_rigged.glb` using `reload_gsh18_empty` at t=0 and CPU-bakes a 2-hand pistol grip
+ * (split cleanly into independent `FpsArmL` and `FpsArmR` static BufferGeometries centered on `RightGripFrame`
+ * in `-Z` forward space) so the support hand wraps cleanly under the slide & trigger guard without clipping.
+ */
+function buildBakedRiggedGsh18Arms(riggedScene, animations, envMap) {
+  if (!riggedScene) return null;
+
+  let fullMesh = null;
+  let sidearmLeftMesh = null;
+  let rightGripNode = null;
+  riggedScene.traverse((obj) => {
+    if (obj.name === 'FullReloadArmsAuditMesh' && obj.isSkinnedMesh) fullMesh = obj;
+    else if (obj.name === 'SidearmReloadForearmsMesh' && obj.isSkinnedMesh) sidearmLeftMesh = obj;
+    if (obj.name === 'RightGripFrame') rightGripNode = obj;
+  });
+  const srcRightMesh = fullMesh || sidearmLeftMesh;
+  const srcLeftMesh = sidearmLeftMesh || fullMesh;
+  if (!srcRightMesh?.skeleton || !srcLeftMesh?.skeleton) return null;
+
+  const sceneKey = riggedScene.uuid || 'rigged';
+  const leftKey = `${sceneKey}:gsh18_left_arm_v1`;
+  const rightKey = `${sceneKey}:gsh18_right_arm_v1`;
+  let leftGeo = BAKED_GSH18_ARM_GEO_CACHE.get(leftKey) || null;
+  let rightGeo = BAKED_GSH18_ARM_GEO_CACHE.get(rightKey) || null;
+
+  if (!leftGeo || !rightGeo) {
+    const gshClip = Array.isArray(animations)
+      ? animations.find((a) => a.name === 'reload_gsh18_empty') || animations.find((a) => a.name === 'reload_gsh18_tactical')
+      : null;
+
+    // Snapshot bone transforms so the cached rigged GLB template remains unmodified
+    const savedBones = [];
+    riggedScene.traverse((obj) => {
+      if (obj.isBone) {
+        savedBones.push([obj, obj.position.clone(), obj.quaternion.clone(), obj.scale.clone()]);
+      }
+    });
+
+    let mixer = null;
+    try {
+      if (gshClip) {
+        mixer = new THREE.AnimationMixer(riggedScene);
+        const action = mixer.clipAction(gshClip);
+        action.play();
+        mixer.update(0);
+      }
+
+      const buildRightSet = (skeleton) => {
+        const set = new Set();
+        for (let bi = 0; bi < skeleton.bones.length; bi++) {
+          let cur = skeleton.bones[bi];
+          while (cur) {
+            if (cur.name === 'R_arm_024' || /^R_/i.test(cur.name || '')) {
+              set.add(bi);
+              break;
+            }
+            cur = cur.parent;
+          }
+        }
+        return set;
+      };
+
+      if (!rightGeo) {
+        const rightSet = buildRightSet(srcRightMesh.skeleton);
+        if (rightSet.size > 0) {
+          rightGeo = bakeSkinnedSubsetToStaticGeo(riggedScene, srcRightMesh, rightGripNode, (v, si, sw) => {
+            const rw =
+              (rightSet.has(si.getX(v)) ? sw.getX(v) : 0) +
+              (rightSet.has(si.getY(v)) ? sw.getY(v) : 0) +
+              (rightSet.has(si.getZ(v)) ? sw.getZ(v) : 0) +
+              (rightSet.has(si.getW(v)) ? sw.getW(v) : 0);
+            return rw >= 0.5;
+          });
+          if (rightGeo) {
+            rightGeo.userData.isBakedGsh18Arm = true;
+            BAKED_GSH18_ARM_GEO_CACHE.set(rightKey, rightGeo);
+          }
+        }
+      }
+
+      if (!leftGeo) {
+        const leftRightSet = buildRightSet(srcLeftMesh.skeleton);
+        leftGeo = bakeSkinnedSubsetToStaticGeo(riggedScene, srcLeftMesh, rightGripNode, (v, si, sw) => {
+          const rw =
+            (leftRightSet.has(si.getX(v)) ? sw.getX(v) : 0) +
+            (leftRightSet.has(si.getY(v)) ? sw.getY(v) : 0) +
+            (leftRightSet.has(si.getZ(v)) ? sw.getZ(v) : 0) +
+            (leftRightSet.has(si.getW(v)) ? sw.getW(v) : 0);
+          return rw < 0.5;
+        });
+        if (leftGeo) {
+          leftGeo.userData.isBakedGsh18Arm = true;
+          BAKED_GSH18_ARM_GEO_CACHE.set(leftKey, leftGeo);
+        }
+      }
+    } finally {
+      if (mixer) mixer.stopAllAction();
+      for (let i = 0; i < savedBones.length; i++) {
+        const [bone, p, q, s] = savedBones[i];
+        bone.position.copy(p);
+        bone.quaternion.copy(q);
+        bone.scale.copy(s);
+      }
+      riggedScene.updateMatrixWorld(true);
+      srcRightMesh.skeleton.update();
+      if (srcLeftMesh !== srcRightMesh) srcLeftMesh.skeleton.update();
+    }
+  }
+
+  if (!leftGeo && !rightGeo) return null;
+  const origMat = Array.isArray(srcRightMesh.material) ? srcRightMesh.material[0] : srcRightMesh.material;
+  const sharedMat = getSharedDressedArmMaterial(origMat, envMap);
+
+  let armLGroup = null;
+  if (leftGeo) {
+    armLGroup = new THREE.Group();
+    armLGroup.name = 'FpsArmL';
+    const meshL = new THREE.Mesh(leftGeo, sharedMat);
+    meshL.name = 'LeftGsh18ArmBakedMesh';
+    meshL.frustumCulled = false;
+    meshL.castShadow = false;
+    meshL.receiveShadow = false;
+    armLGroup.add(meshL);
+  }
+
+  let armRGroup = null;
+  if (rightGeo) {
+    armRGroup = new THREE.Group();
+    armRGroup.name = 'FpsArmR';
+    const meshR = new THREE.Mesh(rightGeo, sharedMat);
+    meshR.name = 'RightGsh18ArmBakedMesh';
+    meshR.frustumCulled = false;
+    meshR.castShadow = false;
+    meshR.receiveShadow = false;
+    armRGroup.add(meshR);
+  }
+
+  return { armLGroup, armRGroup };
+}
+
 // ---------------------------------------------------------------- Headless / offline sculpted tactical fallback
 function getCachedFallbackGeo(key, factoryFn) {
   let geo = PROCEDURAL_ARMS_GEO_CACHE.get(key);
@@ -948,7 +1254,37 @@ export async function attachFpsArmsToViewmodel(weaponId, modelScene, assets = nu
   }
 
   let rig = null;
-  if (gltf?.scene && preset.useRiggedKnifeFist) {
+  if (gltf?.scene && preset.useRiggedGsh18Arms) {
+    const baked = buildBakedRiggedGsh18Arms(gltf.scene, gltf.animations || opts.armsAnimations, envMap);
+    if (baked && (baked.armLGroup || baked.armRGroup)) {
+      const armsRoot = new THREE.Group();
+      armsRoot.name = 'cs2FpsArmsRig';
+      const { armLGroup, armRGroup } = baked;
+      if (armLGroup) {
+        armLGroup.scale.setScalar(preset.leftScale);
+        armLGroup.position.set(preset.leftPos[0], preset.leftPos[1], preset.leftPos[2]);
+        armLGroup.rotation.set(preset.leftRot[0], preset.leftRot[1], preset.leftRot[2]);
+        armsRoot.add(armLGroup);
+      }
+      if (armRGroup) {
+        armRGroup.scale.setScalar(preset.rightScale);
+        armRGroup.position.set(preset.rightPos[0], preset.rightPos[1], preset.rightPos[2]);
+        armRGroup.rotation.set(preset.rightRot[0], preset.rightRot[1], preset.rightRot[2]);
+        armsRoot.add(armRGroup);
+      }
+      rig = {
+        armsRoot,
+        armLGroup,
+        armRGroup,
+        armLHomePos: armLGroup ? armLGroup.position.clone() : null,
+        armLHomeRot: armLGroup ? armLGroup.rotation.clone() : null,
+        armRHomePos: armRGroup ? armRGroup.position.clone() : null,
+        armRHomeRot: armRGroup ? armRGroup.rotation.clone() : null,
+        preset,
+        source: 'glb'
+      };
+    }
+  } else if (gltf?.scene && preset.useRiggedKnifeFist) {
     const armRGroup = buildBakedRiggedKnifeRightArm(gltf.scene, envMap);
     if (armRGroup) {
       const armsRoot = new THREE.Group();

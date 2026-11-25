@@ -94,7 +94,9 @@ export function loadUserPrefs() {
     ? raw.primaryWeapon
     : (DEFAULT_LOADOUT.primary || 'rifle');
 
-  const secondaryWeapon = DEFAULT_LOADOUT.secondary || 'pistol';
+  const secondaryWeapon = SECONDARY_WEAPONS.includes(raw.secondaryWeapon)
+    ? raw.secondaryWeapon
+    : (DEFAULT_LOADOUT.secondary || 'pistol');
 
   const parsedColor = Number(raw.operatorColor);
   const operatorColor = VALID_OPERATOR_COLORS.includes(parsedColor)
@@ -131,7 +133,9 @@ export function saveUserPrefs(partial = {}) {
   if (typeof userPrefs.selectedMap === 'string' && userPrefs.selectedMap) {
     userPrefs.selectedMap = resolveMapId(userPrefs.selectedMap);
   }
-  userPrefs.secondaryWeapon = DEFAULT_LOADOUT.secondary || 'pistol';
+  if (!SECONDARY_WEAPONS.includes(userPrefs.secondaryWeapon)) {
+    userPrefs.secondaryWeapon = DEFAULT_LOADOUT.secondary || 'pistol';
+  }
   try {
     localStorage.setItem(USER_PREFS_STORAGE_KEY, JSON.stringify(userPrefs));
     if (userPrefs.playerName) {

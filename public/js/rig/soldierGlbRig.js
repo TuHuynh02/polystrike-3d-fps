@@ -81,40 +81,97 @@ const RIGID_EYE_MESHES = new Set(['0']);
 
 const DEG = Math.PI / 180;
 
-// Exact measured Mixamo RightHand weapon anchors & rifle-space grip geometry
+// Exact measured Mixamo RightHand weapon anchors & normalized 1:1m weapon-space grip geometry
 // Universal hand mount frame: hX = -palmOut (back of right hand), hY = thumb/index top, hZ = -fdir (wrist)
-// Rifle model (`ak47.glb` / `awp.glb`): origin at pistol grip, barrel along -Z, +Y up.
+// Normalized world weapons (`createCs2WorldWeaponMesh`): (0,0,0) = RightHand grip center, -Z = muzzle, +Y = up.
+const PISTOL_HAND_ANCHOR = Object.freeze({
+  pos: [-0.034, 0.105, 0.068],
+  rot: [Math.PI * 0.5, 0, 0],
+  extraRot: [0, 0, 0],
+  scale: 1.0,
+  buttLocal: null,
+  gripLocal: [0.034, -0.068, 0.105],
+  handguard: [-0.015, -0.025, 0.02],
+  handguardCarry: 0.02
+});
+
 export const CS2_HAND_ANCHORS = Object.freeze({
   rifle: Object.freeze({
     pos: [-0.036, 0.108, 0.072],
     rot: [Math.PI * 0.5, 0, 0],
     extraRot: [0, 0, 0],
     scale: 0.96,
-    buttLocal: [0, -0.03, 0.32],
+    buttLocal: [0, -0.03, 0.27],
     gripLocal: [0.036, -0.072, 0.108],
-    handguard: [-0.006, -0.043, -0.255],
-    handguardCarry: -0.220
+    handguard: [0.0, 0.042, -0.314],
+    handguardCarry: -0.255
   }),
-  sniper: Object.freeze({
+  m4a1: Object.freeze({
     pos: [-0.036, 0.108, 0.072],
     rot: [Math.PI * 0.5, 0, 0],
     extraRot: [0, 0, 0],
-    scale: 0.86,
-    buttLocal: [0, -0.03, 0.32],
+    scale: 0.98,
+    buttLocal: [0, -0.03, 0.28],
     gripLocal: [0.036, -0.072, 0.108],
-    handguard: [-0.006, -0.046, -0.285],
-    handguardCarry: -0.235
+    handguard: [0.0, 0.019, -0.278],
+    handguardCarry: -0.230
+  }),
+  scar: Object.freeze({
+    pos: [-0.036, 0.108, 0.072],
+    rot: [Math.PI * 0.5, 0, 0],
+    extraRot: [0, 0, 0],
+    scale: 0.96,
+    buttLocal: [0, -0.03, 0.31],
+    gripLocal: [0.036, -0.072, 0.108],
+    handguard: [0.0, 0.030, -0.256],
+    handguardCarry: -0.215
   }),
   smg: Object.freeze({
     pos: [-0.036, 0.108, 0.072],
     rot: [Math.PI * 0.5, 0, 0],
     extraRot: [0, 0, 0],
-    scale: 0.90,
-    buttLocal: [0, -0.03, 0.27],
+    scale: 0.96,
+    buttLocal: [0, -0.03, 0.28],
     gripLocal: [0.036, -0.072, 0.108],
-    handguard: [-0.006, -0.043, -0.220],
-    handguardCarry: -0.185
+    handguard: [-0.008, 0.024, -0.270],
+    handguardCarry: -0.220
   }),
+  shotgun: Object.freeze({
+    pos: [-0.036, 0.108, 0.072],
+    rot: [Math.PI * 0.5, 0, 0],
+    extraRot: [0, 0, 0],
+    scale: 0.95,
+    buttLocal: [0, -0.03, 0.26],
+    gripLocal: [0.036, -0.072, 0.108],
+    handguard: [-0.013, 0.017, -0.371],
+    handguardCarry: -0.305
+  }),
+  sniper: Object.freeze({
+    pos: [-0.036, 0.108, 0.072],
+    rot: [Math.PI * 0.5, 0, 0],
+    extraRot: [0, 0, 0],
+    scale: 0.92,
+    buttLocal: [0, -0.03, 0.31],
+    gripLocal: [0.036, -0.072, 0.108],
+    handguard: [0.0, -0.001, -0.362],
+    handguardCarry: -0.295
+  }),
+  lmg: Object.freeze({
+    pos: [-0.036, 0.108, 0.072],
+    rot: [Math.PI * 0.5, 0, 0],
+    extraRot: [0, 0, 0],
+    scale: 1.0,
+    buttLocal: [0, -0.03, 0.28],
+    gripLocal: [0.036, -0.072, 0.108],
+    handguard: [0.0, 0.042, -0.314],
+    handguardCarry: -0.255
+  }),
+  pistol: PISTOL_HAND_ANCHOR,
+  deagle: Object.freeze({
+    ...PISTOL_HAND_ANCHOR,
+    scale: 1.02
+  }),
+  glock: PISTOL_HAND_ANCHOR,
   knife: Object.freeze({
     pos: [-0.026, 0.095, 0.014],
     rot: [Math.PI * 0.5 - 0.14, 0, -0.08],
@@ -728,9 +785,8 @@ function isSniperWeapon(wId) {
 }
 
 function getCs2AnchorKey(wId) {
-  if (wId === 'knife') return 'knife';
+  if (wId && CS2_HAND_ANCHORS[wId]) return wId;
   if (isSniperWeapon(wId)) return 'sniper';
-  if (wId === 'smg') return 'smg';
   return 'rifle';
 }
 
@@ -962,7 +1018,7 @@ function dressFallbackCs2Weapon(root, weaponId, envMap) {
 }
 
 async function buildCs2WorldWeaponMesh(weaponId, assetMgr, envMap, opts = {}) {
-  if (!weaponId || isPistolWeapon(weaponId)) return null;
+  if (!weaponId) return null;
 
   const mod = await loadCs2WeaponModule();
   if (typeof mod?.createCs2WorldWeaponMesh === 'function') {
@@ -1109,7 +1165,7 @@ export async function syncSoldierCs2Weapon(rig, weaponId) {
   rig._soldierCs2TargetWeaponId = wId;
   const reqId = (rig._soldierWeaponReqId = (rig._soldierWeaponReqId || 0) + 1);
 
-  if (isPistolWeapon(wId) || !canUseSoldierGlb()) {
+  if (!canUseSoldierGlb()) {
     if (rig._soldierCs2Weapon) {
       disposeCs2WorldWeaponObj(rig._soldierCs2Weapon);
       rig._soldierCs2Weapon = null;
@@ -1196,13 +1252,13 @@ export async function syncSoldierCs2Weapon(rig, weaponId) {
         flashMat.userData = { shared: false };
         const sprite = new THREE.Sprite(flashMat);
         sprite.name = 'cs2SoldierMuzzleFlash';
-        sprite.scale.setScalar(isSniperWeapon(wId) ? 0.34 : 0.24);
+        sprite.scale.setScalar(isSniperWeapon(wId) ? 0.34 : isPistolWeapon(wId) ? 0.16 : 0.24);
         sprite.visible = false;
         sprite.userData = { isMuzzleFlash: true, noShadow: true, isOutline: false, isHitbox: false };
         if (muzzleNode) {
           muzzleNode.add(sprite);
         } else {
-          sprite.position.set(0, 0.01, -0.74);
+          sprite.position.set(0, 0.04, isPistolWeapon(wId) ? -0.18 : -0.74);
           worldWep.add(sprite);
         }
         flashMesh = sprite;
@@ -1954,12 +2010,12 @@ export function updateSoldierGlbAnimation(
         ik2(B.RightArm, B.RightForeArm, B.RightHand, knifeWrist, rPole);
         applyFingerGripPose(rig, 'Right', 0.9);
       } else if (isPistol) {
-        // Two-handed tactical pistol ready stance anchored off RightArm
+        // Two-handed tactical pistol ready stance anchored off RightArm (compact 2-hand cup, zero floating left arm)
         B.RightArm.getWorldPosition(_h7);
         const pistolWrist = _h8
           .copy(_h7)
           .addScaledVector(_rightW, -0.06)
-          .addScaledVector(_upW, THREE.MathUtils.lerp(-0.22, -0.05, ab))
+          .addScaledVector(_upW, THREE.MathUtils.lerp(-0.20, -0.04, ab))
           .addScaledVector(_fwdW, THREE.MathUtils.lerp(0.36, 0.46, ab));
         const rp = CS2_RIG.rightPole;
         const rPole = _h9
@@ -1978,25 +2034,42 @@ export function updateSoldierGlbAnimation(
         const Y = _h6.crossVectors(Z, X);
         _m4.makeBasis(X, Y, Z);
         const qr = _qr.setFromRotationMatrix(_m4);
-        setRightHandMountQuatInv(rig, null, _qc);
+        setRightHandMountQuatInv(rig, anchor.extraRot, _qc);
         B.RightHand.parent.getWorldQuaternion(_qa).invert();
         B.RightHand.quaternion.copy(_qa.multiply(_qb.copy(qr).multiply(_qc)));
         B.RightHand.updateWorldMatrix(false, false);
 
         if (B.LeftArm && B.LeftForeArm && B.LeftHand) {
-          B.RightHand.getWorldPosition(_h7);
-          const support = _h8
-            .copy(_h7)
-            .addScaledVector(_rightW, -0.03)
-            .addScaledVector(_upW, -0.025)
-            .addScaledVector(_fwdW, 0.02);
+          const hgArr = anchor.handguard || [-0.015, -0.025, 0.02];
+          if (weaponObj) {
+            weaponObj.updateWorldMatrix(true, false);
+            _h8.set(hgArr[0], hgArr[1], hgArr[2]).applyMatrix4(weaponObj.matrixWorld);
+          } else {
+            B.RightHand.getWorldPosition(_h7);
+            _h8
+              .copy(_h7)
+              .addScaledVector(_rightW, -0.03)
+              .addScaledVector(_upW, -0.025)
+              .addScaledVector(_fwdW, 0.02);
+          }
           const lp = CS2_RIG.leftPole;
           const lPole = _h9
             .copy(_rightW)
             .multiplyScalar(lp[0])
             .addScaledVector(_upW, lp[1])
             .addScaledVector(_fwdW, lp[2]);
-          ik2(B.LeftArm, B.LeftForeArm, B.LeftHand, support, lPole);
+          ik2(B.LeftArm, B.LeftForeArm, B.LeftHand, _h8, lPole);
+
+          const G = rig._soldierGrip?.Left;
+          if (G) {
+            const pw = _g2.set(0.65, 0.76, 0).applyQuaternion(qr).normalize();
+            const fw = _g3.set(0.72, -0.62, -0.30).applyQuaternion(qr);
+            fw.addScaledVector(pw, -pw.dot(fw)).normalize();
+            _m4.makeBasis(fw, pw, _g1.crossVectors(fw, pw));
+            B.LeftHand.parent.getWorldQuaternion(_qa).invert();
+            B.LeftHand.quaternion.copy(_qa.multiply(_qb.setFromRotationMatrix(_m4).multiply(G.qGrip)));
+            B.LeftHand.updateWorldMatrix(false, false);
+          }
         }
         applyFingerGripPose(rig, 'Right', 1);
         applyFingerGripPose(rig, 'Left', 0.85);

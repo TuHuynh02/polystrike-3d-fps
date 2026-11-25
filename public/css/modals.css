@@ -279,7 +279,32 @@
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
+}
+
+.loadout-secondary-bar {
+  margin-top: 4px;
+  margin-bottom: 8px;
+}
+
+.loadout-secondary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.loadout-secondary-card {
+  min-height: 86px;
+  padding: 7px 10px;
+}
+
+.loadout-secondary-card .weapon-silhouette {
+  height: 40px;
+}
+
+.loadout-secondary-card .weapon-silhouette-svg {
+  height: 32px;
 }
 
 .loadout-weapon-card {
@@ -832,7 +857,8 @@
 }
 
 @media (max-width: 720px) {
-  .loadout-primary-grid {
+  .loadout-primary-grid,
+  .loadout-secondary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .team-columns-grid {

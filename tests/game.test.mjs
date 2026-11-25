@@ -2291,16 +2291,20 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
     assert.ok(!html.includes('GUNSMITH ARMORY // 3-SLOT TACTICAL LOADOUT'), 'Old verbose loadout title must be removed');
     assert.ok(!html.includes('COMBAT TELEMETRY // BẢNG XẾP HẠNG TÁC CHIẾN'), 'Old verbose scoreboard title must be removed');
 
-    // Verify [B] Loadout Modal shows only primary weapon silhouette cards (no secondary/melee options, no stat bars/numbers)
-    assert.ok(!html.includes('id="loadout-secondary-grid"'), 'Secondary/melee grid must be removed from [B] Loadout Modal');
-    assert.ok(!html.includes('VŨ KHÍ PHỤ [2]'), 'Secondary weapon label must be removed from [B] Loadout Modal');
+    // Verify [B] Loadout Modal shows primary weapon + secondary pistol silhouette cards (no melee options, no stat bars/numbers)
+    assert.ok(html.includes('id="loadout-primary-grid"'), 'Primary grid must exist in [B] Loadout Modal');
+    assert.ok(html.includes('id="loadout-secondary-grid"'), 'Secondary pistol grid must exist in [B] Loadout Modal');
+    assert.ok(html.includes('VŨ KHÍ PHỤ [2]'), 'Secondary pistol section label must appear in [B] Loadout Modal');
     const loadoutModalStart = html.indexOf('id="loadout-modal"');
     const pauseModalStart = html.indexOf('id="pause-modal"');
     const loadoutModalHtml = html.slice(loadoutModalStart, pauseModalStart);
     assert.ok(loadoutModalHtml.includes('weapon-silhouette-svg'), '[B] Loadout Modal must render SVG weapon silhouettes');
     assert.ok(!loadoutModalHtml.includes('weapon-spec-bars'), '[B] Loadout Modal must not render stat bars');
     assert.ok(!loadoutModalHtml.includes('weapon-dmg-pill'), '[B] Loadout Modal must not render damage/ammo stat pills');
-    assert.ok(!loadoutModalHtml.includes('data-loadout-slot="2"'), '[B] Loadout Modal must not include secondary weapon options');
+    assert.ok(loadoutModalHtml.includes('data-loadout-slot="2"'), '[B] Loadout Modal must include secondary pistol options');
+    for (const secId of SECONDARY_WEAPONS) {
+      assert.ok(loadoutModalHtml.includes(`data-loadout-weapon="${secId}"`), `[B] Loadout Modal HTML must include secondary ${secId}`);
+    }
     assert.ok(!loadoutModalHtml.includes('data-loadout-slot="3"'), '[B] Loadout Modal must not include melee/knife options');
 
     // Verify CSS hides 2D HTML holo/red-dot overlay rings so 3D weapon optic reticle is unobstructed
@@ -2308,22 +2312,26 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
     assert.match(css, /\.optic-center-dot\s*\{\s*display:\s*none;/);
   });
 
-  it('renders [B] Loadout Modal dynamically with distinct primary weapon SVG silhouettes and standardized secondary/melee set', async () => {
+  it('renders [B] Loadout Modal dynamically with distinct primary + secondary SVG silhouettes and persists pistol selection', async () => {
     const { renderLoadoutModal, getWeaponSilhouetteSvg, applySelectedLoadoutAndNotify } = await import('../public/js/ui/lobbyAndModals.js');
-    const { loadoutPrimaryGrid, hotbarSlot1, hotbarSlot2, hotbarSlot3 } = await import('../public/js/ui/domElements.js');
-    const { appState } = await import('../public/js/ui/userPrefsAndKeys.js');
+    const { loadoutPrimaryGrid, loadoutSecondaryGrid, hotbarSlot1, hotbarSlot2, hotbarSlot3 } = await import('../public/js/ui/domElements.js');
+    const { appState, userPrefs } = await import('../public/js/ui/userPrefsAndKeys.js');
     if (hotbarSlot1) hotbarSlot1.dataset ||= {};
     if (hotbarSlot2) hotbarSlot2.dataset ||= {};
     if (hotbarSlot3) hotbarSlot3.dataset ||= {};
 
     const seenSvgs = new Set();
-    for (const wId of PRIMARY_WEAPONS) {
+    for (const wId of [...PRIMARY_WEAPONS, ...SECONDARY_WEAPONS]) {
       const svg = getWeaponSilhouetteSvg(wId);
       assert.ok(svg.includes('<svg class="weapon-silhouette-svg"'), `${wId} must have an SVG silhouette`);
       assert.ok(svg.includes('<path '), `${wId} SVG silhouette must contain vector path geometry`);
       seenSvgs.add(svg);
     }
-    assert.equal(seenSvgs.size, PRIMARY_WEAPONS.length, 'Each primary weapon must have a distinct visual SVG silhouette');
+    assert.equal(
+      seenSvgs.size,
+      PRIMARY_WEAPONS.length + SECONDARY_WEAPONS.length,
+      'Each primary and secondary weapon must have a distinct visual SVG silhouette'
+    );
 
     appState.selectedLoadout.primary = 'sniper';
     appState.selectedLoadout.secondary = 'deagle';
@@ -2337,19 +2345,72 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
       assert.ok(rendered.includes(`data-loadout-weapon="${wId}"`), `Rendered [B] modal must include primary weapon ${wId}`);
       assert.ok(rendered.includes(`data-weapon-silhouette="${wId}"`), `Rendered [B] modal must include silhouette container for ${wId}`);
     }
-    assert.ok(!rendered.includes('weapon-spec-bars'), 'Rendered [B] modal must not contain stat bars');
-    assert.ok(!rendered.includes('weapon-dmg-pill'), 'Rendered [B] modal must not contain stat numbers');
-    assert.ok(!rendered.includes('data-loadout-slot="2"'), 'Rendered [B] modal must not contain secondary weapons');
-    assert.ok(!rendered.includes('data-loadout-slot="3"'), 'Rendered [B] modal must not contain melee weapons');
+    const renderedSecondary = loadoutSecondaryGrid.innerHTML;
+    for (const wId of SECONDARY_WEAPONS) {
+      assert.ok(renderedSecondary.includes(`data-loadout-weapon="${wId}"`), `Rendered [B] modal must include secondary weapon ${wId}`);
+      assert.ok(renderedSecondary.includes(`data-weapon-silhouette="${wId}"`), `Rendered [B] modal must include silhouette container for ${wId}`);
+    }
+    assert.ok(!rendered.includes('weapon-spec-bars') && !renderedSecondary.includes('weapon-spec-bars'), 'Rendered [B] modal must not contain stat bars');
+    assert.ok(!rendered.includes('weapon-dmg-pill') && !renderedSecondary.includes('weapon-dmg-pill'), 'Rendered [B] modal must not contain stat numbers');
+    assert.ok(!rendered.includes('data-loadout-slot="3"') && !renderedSecondary.includes('data-loadout-slot="3"'), 'Rendered [B] modal must not contain melee weapons');
 
     applySelectedLoadoutAndNotify();
-    assert.equal(appState.selectedLoadout.secondary, DEFAULT_LOADOUT.secondary, 'Loadout secondary must standardize to DEFAULT_LOADOUT.secondary');
+    assert.equal(appState.selectedLoadout.secondary, 'deagle', 'Valid secondary pistol selection must be preserved');
+    assert.equal(userPrefs.secondaryWeapon, 'deagle', 'Valid secondary pistol selection must persist to userPrefs');
     assert.equal(appState.selectedLoadout.melee, DEFAULT_LOADOUT.melee, 'Loadout melee must standardize to DEFAULT_LOADOUT.melee');
     assert.deepEqual(emittedLoadout, {
       primary: 'sniper',
-      secondary: DEFAULT_LOADOUT.secondary,
+      secondary: 'deagle',
       melee: DEFAULT_LOADOUT.melee,
     });
+
+    appState.selectedLoadout.secondary = 'invalid_pistol';
+    applySelectedLoadoutAndNotify();
+    assert.equal(appState.selectedLoadout.secondary, DEFAULT_LOADOUT.secondary, 'Invalid secondary falls back to DEFAULT_LOADOUT.secondary');
+
+    // Verify pending mid-life loadoutUpdated keeps pending pick in appState & userPrefs so confirming [B] does not revert it
+    const { bindGameSocketListeners } = await import('../public/js/ui/socketEvents.js');
+    const socketHandlersMap = new Map();
+    const mockSocket = {
+      id: 'sock_loadout_test',
+      connected: true,
+      on(evt, fn) { socketHandlersMap.set(evt, fn); },
+      off() {},
+      emit() {}
+    };
+    const appliedGameLoadouts = [];
+    appState.activeRoomCode = 'RM1234';
+    appState.socket = mockSocket;
+    appState.game = {
+      inMatch: true,
+      currentWeapon: 'pistol',
+      ammoByWeapon: {},
+      reserveAmmoByWeapon: {},
+      setLoadout(lo, activeWep) { appliedGameLoadouts.push({ lo: { ...lo }, activeWep }); }
+    };
+    bindGameSocketListeners(mockSocket);
+    const onLoadoutUpdated = socketHandlersMap.get('loadoutUpdated');
+    assert.equal(typeof onLoadoutUpdated, 'function', 'loadoutUpdated handler bound');
+
+    onLoadoutUpdated({
+      loadout: {
+        primary: 'rifle',
+        secondary: 'pistol',
+        melee: 'knife',
+        pending: { primary: 'lmg', secondary: 'deagle', melee: 'knife' }
+      }
+    });
+    assert.deepEqual(appState.selectedLoadout, { primary: 'lmg', secondary: 'deagle', melee: 'knife' }, 'pendingLoadout preserved in appState.selectedLoadout');
+    assert.equal(userPrefs.secondaryWeapon, 'deagle', 'pendingLoadout secondary persisted to userPrefs');
+    assert.equal(appliedGameLoadouts[appliedGameLoadouts.length - 1].activeWep, null, 'pendingLoadout does not force mid-life weapon swap');
+
+    onLoadoutUpdated({
+      loadout: { primary: 'lmg', secondary: 'deagle', melee: 'knife' }
+    });
+    assert.equal(appliedGameLoadouts[appliedGameLoadouts.length - 1].activeWep, 'deagle', 'immediate slot-2 swap equips new secondary pistol');
+    appState.activeRoomCode = '';
+    appState.socket = null;
+    appState.game = null;
   });
 
   it('renders TacticalMinimap across all 4 maps and updates sector coordinates, map label, and 30 FPS throttle', () => {

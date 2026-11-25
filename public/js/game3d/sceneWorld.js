@@ -60,7 +60,12 @@ import {
   revertPbrSlots,
   surfaceSetsForMap
 } from '../surfaceMaterials.js';
-import { CRATE_MODEL_NAMES, isPropOverrideEnabled } from '../arenaProps.js';
+import {
+  CRATE_MODEL_NAMES,
+  canLoadBrowserPolyhavenProps,
+  isPropOverrideEnabled,
+  preparePolyhavenGltf
+} from '../arenaProps.js';
 import { applyWeaponAssetOverride, isWeaponOverrideEnabled, measureWeaponGroup } from '../weaponAssetOverrides.js';
 import { getSharedSmokeTex } from './combatEffects.js';
 
@@ -75,12 +80,68 @@ export const DEATH_BODY_MAX_MS = 1500;
 // Arid/Mediterranean CS:GO maps use muted amber jump pads and 0.28x damped floor wetness
 const ARID_CSGO_MAPS = new Set(['de_dust2', 'de_mirage', 'de_inferno']);
 
-// Preload hero 3P tactical operator, its Mixamo clip donor, and primary rifle at boot; secondary weapons load lazily on demand
+// Preload hero 3P tactical operator, its Mixamo clip donor, primary FP rifle, and shared optics at boot; secondary weapons load lazily on demand
 const CS2_GLB_PRELOAD_PATHS = [
   'models/characters/tactical_operator.glb',
   'models/characters/Soldier.glb',
-  'models/cs2/ak47.glb'
+  'models/fp/ak47.glb',
+  'models/weapons/optics.glb'
 ];
+
+function getSharedBarrelHazardMaterial(gltf, srcMat) {
+  if (!srcMat || typeof srcMat.clone !== 'function') return srcMat;
+  if (gltf.userData?.__hazardCrimsonMat) return gltf.userData.__hazardCrimsonMat;
+  const hazardMat = srcMat.clone();
+  hazardMat.color = new THREE.Color(0xdc4438);
+  hazardMat.userData = { ...(hazardMat.userData || {}), shared: true };
+  if ('envMapIntensity' in hazardMat) hazardMat.envMapIntensity = 0.9;
+  hazardMat.needsUpdate = true;
+  gltf.userData = { ...(gltf.userData || {}), __hazardCrimsonMat: hazardMat };
+  return hazardMat;
+}
+
+function disposeNonSharedMeshes(root) {
+  if (!root?.traverse) return;
+  const geos = new Set();
+  const mats = new Set();
+  root.traverse((obj) => {
+    if (!obj.isMesh) return;
+    if (obj.geometry && !obj.geometry.userData?.shared) geos.add(obj.geometry);
+    if (Array.isArray(obj.material)) {
+      for (let i = 0; i < obj.material.length; i++) {
+        const m = obj.material[i];
+        if (m && !m.userData?.shared) mats.add(m);
+      }
+    } else if (obj.material && !obj.material.userData?.shared) {
+      mats.add(obj.material);
+    }
+  });
+  for (const geo of geos) geo.dispose?.();
+  for (const mat of mats) mat.dispose?.();
+}
+
+function disposeDroppedWeaponGroup(root) {
+  if (!root?.traverse) return;
+  const geos = new Set();
+  const mats = new Set();
+  root.traverse((obj) => {
+    if (obj.userData) {
+      obj.userData._disposed = true;
+    }
+    if (!obj.isMesh && !obj.isSprite) return;
+    if (obj.geometry && !obj.geometry.userData?.shared) geos.add(obj.geometry);
+    if (Array.isArray(obj.material)) {
+      for (let i = 0; i < obj.material.length; i++) {
+        const m = obj.material[i];
+        if (m && !m.userData?.shared) mats.add(m);
+      }
+    } else if (obj.material && !obj.material.userData?.shared) {
+      mats.add(obj.material);
+    }
+  });
+  for (const geo of geos) geo.dispose?.();
+  for (const mat of mats) mat.dispose?.();
+}
 
 export class SceneWorldMethods {
   _getEffectiveShadowMapSize(q = this.quality) {
@@ -106,9 +167,9 @@ export class SceneWorldMethods {
     if (mapSize <= 0) return (this.arenaHalfSize || 60) + 4;
     const arenaCap = (this.arenaHalfSize || 38) + 2;
     if (this.inMatch) {
-      return Math.min(mapSize >= 2048 ? 28 : 24, arenaCap);
+      return Math.min(mapSize >= 2048 ? 22 : 20, arenaCap);
     }
-    return Math.min(mapSize >= 2048 ? 36 : 32, arenaCap);
+    return Math.min(mapSize >= 2048 ? 34 : 30, arenaCap);
   }
 
   _configureDirectionalShadowFrustum(atmo) {
@@ -145,7 +206,7 @@ export class SceneWorldMethods {
 
     this.dirLight.shadow.bias = -0.00006;
     this.dirLight.shadow.normalBias = 0.016;
-    this.dirLight.shadow.radius = 1.6;
+    this.dirLight.shadow.radius = 2.2;
     this.dirLight.target.position.set(0, 0, 0);
     this.dirLight.position.copy(this._shadowSunDir).multiplyScalar(this._shadowDistance);
     this.dirLight.target.updateMatrixWorld();
@@ -199,8 +260,9 @@ export class SceneWorldMethods {
     if (isRealWebGL) {
       const isSoftwareGl = isSoftwareWebGLRenderer(this.renderer);
       if (!isSoftwareGl) {
-        installStablePCF({ taps: 8, maxSlope: 3.0, extent: 30, depthRange: 200 });
+        installStablePCF({ taps: 8, maxSlope: 3.0, extent: 24, depthRange: 200 });
       } else {
+        installStablePCF({ taps: 4, maxSlope: 3.0, extent: 24, depthRange: 200 });
         // Runtime-only VRAM cap on software rasterizers without mutating QUALITY presets
         this.maxPixelRatio = this._getEffectiveMaxPixelRatio(this.quality);
         this.currentPixelRatio = Math.min(this.currentPixelRatio || this.maxPixelRatio, this.maxPixelRatio);
@@ -507,23 +569,11 @@ export class SceneWorldMethods {
   }
 
   clearPickups() {
-    const geos = new Set();
-    const mats = new Set();
+    this._pickupSyncToken = (this._pickupSyncToken || 0) + 1;
     for (const item of this.pickupMeshes.values()) {
       this.scene.remove(item.group);
-      item.group.traverse((obj) => {
-        if (obj.isMesh) {
-          if (obj.geometry) geos.add(obj.geometry);
-          if (Array.isArray(obj.material)) {
-            for (let i = 0; i < obj.material.length; i++) mats.add(obj.material[i]);
-          } else if (obj.material) {
-            mats.add(obj.material);
-          }
-        }
-      });
+      disposeNonSharedMeshes(item.group);
     }
-    for (const geo of geos) geo.dispose?.();
-    for (const mat of mats) mat.dispose?.();
     this.pickupMeshes.clear();
   }
 
@@ -1106,6 +1156,7 @@ export class SceneWorldMethods {
         this.clearPickups();
       }
     }
+    const ammoUpgradeItems = [];
     for (let i = 0; i < pickupsData.length; i++) {
       const p = pickupsData[i];
       let item = this.pickupMeshes.get(p.id);
@@ -1239,8 +1290,11 @@ export class SceneWorldMethods {
         holoRing.visible = isActive;
         padMat.emissiveIntensity = isActive ? 0.55 : 0.05;
         this.scene.add(group);
-        item = { group, crossGroup, padMat, holoRing, type: pType, x: p.x, y: p.y, z: p.z, active: isActive };
+        item = { id: p.id, group, crossGroup, padMat, holoRing, type: pType, x: p.x, y: p.y, z: p.z, active: isActive };
         this.pickupMeshes.set(p.id, item);
+        if (pType === 'armor' || pType === 'speed' || pType === 'damage') {
+          ammoUpgradeItems.push(item);
+        }
       } else {
         if (item.x !== p.x || item.y !== p.y || item.z !== p.z) {
           item.x = p.x;
@@ -1256,6 +1310,68 @@ export class SceneWorldMethods {
           item.padMat.emissiveIntensity = isActive ? 0.55 : 0.05;
         }
       }
+    }
+    if (
+      ammoUpgradeItems.length > 0 &&
+      canLoadBrowserPolyhavenProps(this) &&
+      typeof this.assets?.loadAssetGltf === 'function'
+    ) {
+      void this._upgradePickupsWithPolyhaven(ammoUpgradeItems, this._pickupSyncToken || 0);
+    }
+  }
+
+  async _upgradePickupsWithPolyhaven(items, token) {
+    const gltf = await this.assets.loadAssetGltf('models/polyhaven_glb/ammo_box.glb');
+    if (!gltf?.scene || token !== (this._pickupSyncToken || 0)) return;
+    const effAniso = this.quality?.anisotropy || 4;
+    const maxTex = isSoftwareWebGLRenderer(this.renderer) ? 512 : 1024;
+    preparePolyhavenGltf(gltf, effAniso, this.assets?.maxAnisotropy || 8, { maxTextureSize: maxTex });
+
+    const scale = 1.6;
+    const groundOffsetY = -0.0017 * scale;
+    for (let i = 0; i < items.length; i++) {
+      if (token !== (this._pickupSyncToken || 0)) return;
+      const item = items[i];
+      if (!item?.crossGroup || item.hasPolyhavenVisual || this.pickupMeshes.get(item.id) !== item) continue;
+
+      const oldChildren = item.crossGroup.children.slice();
+      for (let c = 0; c < oldChildren.length; c++) {
+        const child = oldChildren[c];
+        item.crossGroup.remove(child);
+        disposeNonSharedMeshes(child);
+      }
+
+      const layouts =
+        item.type === 'speed'
+          ? [
+              { x: -0.12, z: 0.01, rotY: 0.28 },
+              { x: 0.12, z: -0.01, rotY: -0.22 }
+            ]
+          : item.type === 'damage'
+            ? [
+                { x: -0.15, z: 0.03, rotY: -0.18 },
+                { x: 0.02, z: -0.03, rotY: 0.08 },
+                { x: 0.18, z: 0.02, rotY: 0.32 }
+              ]
+            : [
+                { x: -0.16, z: -0.02, rotY: 0.06 },
+                { x: 0.01, z: 0.02, rotY: -0.04 },
+                { x: 0.18, z: -0.01, rotY: 0.14 }
+              ];
+      for (let k = 0; k < layouts.length; k++) {
+        const slot = layouts[k];
+        const crate = gltf.scene.clone(true);
+        crate.scale.setScalar(scale);
+        crate.position.set(slot.x, groundOffsetY, slot.z);
+        crate.rotation.y = slot.rotY;
+        crate.traverse((obj) => {
+          if (!obj.isMesh) return;
+          obj.castShadow = true;
+          obj.receiveShadow = true;
+        });
+        item.crossGroup.add(crate);
+      }
+      item.hasPolyhavenVisual = true;
     }
   }
 
@@ -1403,15 +1519,45 @@ export class SceneWorldMethods {
     }
   }
 
+  _getSharedBarrelResources() {
+    if (!this._sharedBarrelHitboxMat) {
+      const mat = new THREE.MeshBasicMaterial({
+        transparent: true,
+        opacity: 0,
+        depthWrite: false
+      });
+      mat.userData = { ...(mat.userData || {}), shared: true };
+      this._sharedBarrelHitboxMat = mat;
+    }
+    if (!this._sharedBarrelBandGeo) {
+      const geo = new THREE.CylinderGeometry(0.436, 0.436, 0.075, 24, 1, true);
+      geo.userData = { ...(geo.userData || {}), shared: true };
+      this._sharedBarrelBandGeo = geo;
+    }
+    if (!this._sharedBarrelBandMat) {
+      const mat = new THREE.MeshStandardMaterial({
+        color: 0xd9a11e,
+        roughness: 0.62,
+        metalness: 0.18,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1
+      });
+      mat.userData = { ...(mat.userData || {}), shared: true };
+      this._sharedBarrelBandMat = mat;
+    }
+    return {
+      hitboxMat: this._sharedBarrelHitboxMat,
+      bandGeo: this._sharedBarrelBandGeo,
+      bandMat: this._sharedBarrelBandMat
+    };
+  }
+
   clearBarrels() {
+    this._barrelSyncToken = (this._barrelSyncToken || 0) + 1;
     for (const item of this.barrelMeshes.values()) {
       this.scene.remove(item.group);
-      item.group.traverse((obj) => {
-        if (obj.isMesh) {
-          obj.geometry?.dispose();
-          obj.material?.dispose();
-        }
-      });
+      disposeNonSharedMeshes(item.group);
     }
     this.barrelMeshes.clear();
   }
@@ -1432,6 +1578,7 @@ export class SceneWorldMethods {
       this.clearBarrels();
       changed = true;
     }
+    const barrelUpgradeItems = [];
     for (let i = 0; i < barrelsData.length; i++) {
       const b = barrelsData[i];
       let item = this.barrelMeshes.get(b.id);
@@ -1445,14 +1592,15 @@ export class SceneWorldMethods {
 
         const padGeo = new THREE.CylinderGeometry(0.68, 0.76, 0.08, 16);
         const padMat = new THREE.MeshStandardMaterial({
-          color: 0x1e293b,
-          emissive: 0xef4444,
-          emissiveIntensity: isActive ? 0.55 : 0.06,
-          roughness: 0.4,
-          metalness: 0.6
+          color: 0x262b32,
+          emissive: 0x451a1a,
+          emissiveIntensity: isActive ? 0.12 : 0.03,
+          roughness: 0.78,
+          metalness: 0.45
         });
         const padMesh = new THREE.Mesh(padGeo, padMat);
         padMesh.position.y = 0.04;
+        padMesh.receiveShadow = true;
         group.add(padMesh);
 
         const bodyGroup = new THREE.Group();
@@ -1495,6 +1643,7 @@ export class SceneWorldMethods {
           hitboxMesh,
           barrelMat,
           padMat,
+          proceduralParts: [stripeLow, stripeHigh],
           x: bx,
           y: by,
           z: bz,
@@ -1502,6 +1651,7 @@ export class SceneWorldMethods {
           active: isActive
         };
         this.barrelMeshes.set(b.id, item);
+        barrelUpgradeItems.push(item);
         changed = true;
       } else {
         if (item.x !== bx || item.y !== by || item.z !== bz) {
@@ -1515,13 +1665,81 @@ export class SceneWorldMethods {
         if (item.active !== isActive) {
           item.active = isActive;
           item.bodyGroup.visible = isActive;
-          item.padMat.emissiveIntensity = isActive ? 0.55 : 0.06;
+          item.padMat.emissiveIntensity = isActive ? 0.12 : 0.03;
           changed = true;
         }
       }
     }
     if (changed) {
       this.rebuildHitboxList();
+    }
+    if (
+      barrelUpgradeItems.length > 0 &&
+      canLoadBrowserPolyhavenProps(this) &&
+      typeof this.assets?.loadAssetGltf === 'function'
+    ) {
+      void this._upgradeBarrelsWithPolyhaven(barrelUpgradeItems, this._barrelSyncToken || 0);
+    }
+  }
+
+  async _upgradeBarrelsWithPolyhaven(items, token) {
+    const gltf = await this.assets.loadAssetGltf('models/polyhaven_glb/Barrel_01.glb');
+    if (!gltf?.scene || token !== (this._barrelSyncToken || 0)) return;
+    const effAniso = this.quality?.anisotropy || 4;
+    const maxTex = isSoftwareWebGLRenderer(this.renderer) ? 512 : 1024;
+    preparePolyhavenGltf(gltf, effAniso, this.assets?.maxAnisotropy || 8, { maxTextureSize: maxTex });
+
+    const { hitboxMat, bandGeo, bandMat } = this._getSharedBarrelResources();
+    const scale = 1.35 / 0.8789;
+    const baseY = 0.04 - -0.0066 * scale;
+
+    for (let i = 0; i < items.length; i++) {
+      if (token !== (this._barrelSyncToken || 0)) return;
+      const item = items[i];
+      if (!item?.bodyGroup || item.hasPolyhavenVisual || this.barrelMeshes.get(item.id) !== item) continue;
+
+      const visual = gltf.scene.clone(true);
+      visual.scale.setScalar(scale);
+      visual.position.set(0, baseY, 0);
+      visual.traverse((obj) => {
+        if (!obj.isMesh) return;
+        obj.castShadow = true;
+        obj.receiveShadow = true;
+        if (obj.geometry) {
+          obj.geometry.userData = { ...(obj.geometry.userData || {}), shared: true };
+        }
+        if (Array.isArray(obj.material)) {
+          obj.material = obj.material.map((m) => getSharedBarrelHazardMaterial(gltf, m));
+        } else if (obj.material) {
+          obj.material = getSharedBarrelHazardMaterial(gltf, obj.material);
+        }
+      });
+
+      const bandMesh = new THREE.Mesh(bandGeo, bandMat);
+      bandMesh.position.y = 0.72;
+      bandMesh.castShadow = false;
+      bandMesh.receiveShadow = true;
+
+      if (Array.isArray(item.proceduralParts)) {
+        for (let k = 0; k < item.proceduralParts.length; k++) {
+          const part = item.proceduralParts[k];
+          item.bodyGroup.remove(part);
+          disposeNonSharedMeshes(part);
+        }
+        item.proceduralParts.length = 0;
+      }
+
+      if (item.hitboxMesh) {
+        const oldMat = item.hitboxMesh.material;
+        item.hitboxMesh.material = hitboxMat;
+        item.hitboxMesh.castShadow = false;
+        item.hitboxMesh.receiveShadow = false;
+        item.barrelMat = hitboxMat;
+        if (oldMat && !oldMat.userData?.shared) oldMat.dispose?.();
+      }
+
+      item.bodyGroup.add(visual, bandMesh);
+      item.hasPolyhavenVisual = true;
     }
   }
 
@@ -1533,7 +1751,7 @@ export class SceneWorldMethods {
     if (typeof data.active === 'boolean' && item.active !== data.active) {
       item.active = data.active;
       item.bodyGroup.visible = data.active;
-      item.padMat.emissiveIntensity = data.active ? 0.55 : 0.06;
+      item.padMat.emissiveIntensity = data.active ? 0.12 : 0.03;
       this.rebuildHitboxList();
     }
   }
@@ -1555,13 +1773,10 @@ export class SceneWorldMethods {
   clearDroppedWeapons() {
     for (const item of this.droppedWeaponMeshes.values()) {
       this.scene.remove(item.group);
-      item.group.traverse((obj) => {
-        if (obj.isMesh) {
-          if (!obj.geometry?.userData?.shared) obj.geometry?.dispose();
-          if (Array.isArray(obj.material)) obj.material.forEach((m) => !m.userData?.shared && m.dispose());
-          else if (!obj.material?.userData?.shared) obj.material?.dispose();
-        }
-      });
+      if (item.gunMesh) {
+        item.gunMesh.userData = { ...(item.gunMesh.userData || {}), _disposed: true };
+      }
+      disposeDroppedWeaponGroup(item.group);
     }
     this.droppedWeaponMeshes.clear();
     if (this.nearbyDrop) {
@@ -1654,6 +1869,7 @@ export class SceneWorldMethods {
       z: drop.z || 0,
       group,
       gunSpinGroup,
+      gunMesh,
       ringMat,
       localExpiresAt: now + ttlMs
     });
@@ -1663,13 +1879,10 @@ export class SceneWorldMethods {
     const item = this.droppedWeaponMeshes.get(dropId);
     if (!item) return;
     this.scene.remove(item.group);
-    item.group.traverse((obj) => {
-      if (obj.isMesh) {
-        if (!obj.geometry?.userData?.shared) obj.geometry?.dispose();
-        if (Array.isArray(obj.material)) obj.material.forEach((m) => !m.userData?.shared && m.dispose());
-        else if (!obj.material?.userData?.shared) obj.material?.dispose();
-      }
-    });
+    if (item.gunMesh) {
+      item.gunMesh.userData = { ...(item.gunMesh.userData || {}), _disposed: true };
+    }
+    disposeDroppedWeaponGroup(item.group);
     this.droppedWeaponMeshes.delete(dropId);
     if (this.nearbyDrop && this.nearbyDrop.id === dropId) {
       this.nearbyDrop = null;

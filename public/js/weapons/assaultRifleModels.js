@@ -37,7 +37,7 @@ export function buildAssaultRifleGeometry(weaponId, group, mats) {
   let muzzleZ = -0.78;
 
   if (weaponId === 'rifle') {
-    // ==================== VANDAL-AK (SALTLINE AK-103 / ZENITCO MODERNIZED) ====================
+    // ==================== AK-47 (SALTLINE AK-103 / ZENITCO MODERNIZED) ====================
     // Stamped steel chamfered receiver hull (width 0.068 -> x in [-0.034, +0.034])
     const lowerReceiver = new THREE.Mesh(
       createChamferedBlockGeometry(0.068, 0.066, 0.38, 0.008, 0.008, 0.008, 0.010),
@@ -243,7 +243,7 @@ export function buildAssaultRifleGeometry(weaponId, group, mats) {
     );
     muzzleZ = -0.88;
   } else if (weaponId === 'm4a1') {
-    // ==================== PHANTOM-M4 (SALTLINE URG-I / MK18 MOD 1 SUPPRESSED) ====================
+    // ==================== M4A1-S (SALTLINE URG-I / MK18 MOD 1 SUPPRESSED) ====================
     // Forged Billet Upper Receiver (chamfered octagonal crown) + Forged Lower Receiver (width 0.068 -> x in [-0.034, +0.034])
     const upperReceiver = new THREE.Mesh(
       createChamferedBlockGeometry(0.068, 0.062, 0.27, 0.016, 0.016, 0.006, 0.006),

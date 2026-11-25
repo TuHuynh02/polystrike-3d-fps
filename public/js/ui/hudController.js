@@ -146,10 +146,11 @@ import {
 import { appState } from './userPrefsAndKeys.js';
 
 export function showToast(msg) {
+  if (!toastEl) return;
   toastEl.textContent = msg;
-  toastEl.classList.remove('hidden');
+  toastEl.classList?.remove?.('hidden');
   setTimeout(() => {
-    toastEl.classList.add('hidden');
+    toastEl.classList?.add?.('hidden');
   }, 2600);
 }
 

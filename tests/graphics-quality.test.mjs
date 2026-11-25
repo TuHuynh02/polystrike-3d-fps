@@ -664,11 +664,26 @@ describe('server/index.js serves the graphics assets with correct content types'
     return { res, body, type: res.headers.get('content-type') || '' };
   }
 
-  it('.glb -> model/gltf-binary with a valid glTF magic', async () => {
-    const { res, body, type } = await head('/assets/models/kenney-blaster-kit/crate-wide.glb');
-    assert.equal(res.status, 200);
-    assert.match(type, /^model\/gltf-binary/);
-    assert.equal(body.slice(0, 4).toString(), 'glTF');
+  it('.glb -> model/gltf-binary with a valid glTF magic; FP arm .webp -> image/webp with valid RIFF/WEBP magic', async () => {
+    for (const relPath of [
+      'models/kenney-blaster-kit/crate-wide.glb',
+      'models/fp/ak47.glb',
+      'models/weapons/optics.glb',
+      'models/weapons/gsh18.glb',
+      'models/polyhaven_glb/Barrel_01.glb'
+    ]) {
+      const { res, body, type } = await head(`/assets/${relPath}`);
+      assert.equal(res.status, 200, relPath);
+      assert.match(type, /^model\/gltf-binary/, relPath);
+      assert.equal(body.slice(0, 4).toString(), 'glTF', relPath);
+    }
+    for (const relPath of ['models/fp/arms_basecolor.webp', 'models/fp/arms_normal.webp']) {
+      const { res, body, type } = await head(`/assets/${relPath}`);
+      assert.equal(res.status, 200, relPath);
+      assert.match(type, /^image\/webp/, relPath);
+      assert.equal(body.slice(0, 4).toString('ascii'), 'RIFF', `${relPath} RIFF header`);
+      assert.equal(body.slice(8, 12).toString('ascii'), 'WEBP', `${relPath} WEBP header`);
+    }
   });
 
   it('.jpg -> image/jpeg (JPEG magic) for every texture of every set', async () => {
@@ -1820,6 +1835,316 @@ describe('Visual polish, grounded props, soft ambient particles & 1P knife grip'
     assert.ok(Math.abs(bladeDir.x) > 0.15, `knife blade must angle inward/horizontally (dir.x=${bladeDir.x.toFixed(3)})`);
     assert.ok(Math.abs(knifePreset.knifeLocalRot[0] - Math.PI / 2) > 0.25, 'knifeLocalRot pitch is not straight vertical 90 deg');
     assert.ok(Math.abs(knifePreset.knifeLocalRot[2]) > 0.1, 'knifeLocalRot includes roll to expose blade bevel');
+  });
+});
+
+// ---------------------------------------------------------------- Realism Overhaul: 11 Weapons, 18 Poly Haven GLBs, Smooth Shadows & Barrel/Map Disposal
+describe('Realism Overhaul: 11 weapon names/GLBs, 18 Poly Haven GLB props, smooth shadows & barrel/map disposal', () => {
+  it('validates all 11 weapon display names, zero legacy names/emojis in index.html, CS2_WEAPON_SPECS GLBs & CREDITS.md', async () => {
+    const { WEAPON_ORDER } = await import('../shared/constants.js');
+    const { WEAPONS } = await import('../shared/weapons.js');
+    const { CS2_WEAPON_SPECS, isCs2WeaponSupported } = await import('../public/js/weapons/cs2WeaponGlb.js');
+
+    const expectedNames = {
+      rifle: 'AK-47',
+      m4a1: 'M4A1-S',
+      scar: 'FN SCAR',
+      smg: 'MP5A5',
+      shotgun: 'M870 MCS',
+      sniper: 'AWM .338',
+      lmg: 'RPK-74',
+      pistol: 'SIG P226',
+      deagle: 'M1911A1',
+      glock: 'GSH-18',
+      knife: 'KARAMBIT-X'
+    };
+
+    assert.equal(WEAPON_ORDER.length, 11, 'WEAPON_ORDER has all 11 weapons');
+    for (const wId of WEAPON_ORDER) {
+      assert.equal(WEAPONS[wId]?.name, expectedNames[wId], `WEAPONS.${wId}.name matches ${expectedNames[wId]}`);
+      assert.equal(isCs2WeaponSupported(wId), true, `isCs2WeaponSupported('${wId}') === true`);
+    }
+
+    const html = fs.readFileSync(path.join(ROOT_DIR, 'public/index.html'), 'utf8');
+    const staleNames = [
+      'VANDAL-AK',
+      'PHANTOM-M4',
+      'VECTOR-KRISS',
+      'BUCKSHOT-8',
+      'AWP-PHANTOM',
+      'ODIN-M249',
+      'PULSE-P9',
+      'SHERIFF .50',
+      'FRENZY-G18'
+    ];
+    for (const stale of staleNames) {
+      assert.equal(html.includes(stale), false, `public/index.html contains zero stale weapon name "${stale}"`);
+    }
+    const emojiRegex = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u;
+    assert.equal(emojiRegex.test(html), false, 'public/index.html contains zero Unicode emojis');
+
+    const credits = fs.readFileSync(path.join(ROOT_DIR, 'public/assets/CREDITS.md'), 'utf8');
+    const glbPaths = new Set(Object.values(CS2_WEAPON_SPECS).map((s) => s.model));
+    glbPaths.add('models/weapons/optics.glb');
+    for (const relPath of glbPaths) {
+      assert.ok(relPath.endsWith('.glb'), `${relPath} is a .glb asset`);
+      const fullPath = path.join(ROOT_DIR, 'public/assets', relPath);
+      assert.ok(fs.existsSync(fullPath), `GLB exists on disk: ${relPath}`);
+      const buf = fs.readFileSync(fullPath);
+      assert.ok(buf.length > 10_000, `${relPath} is non-trivial (>10KB, got ${buf.length}B)`);
+      assert.equal(buf.slice(0, 4).toString('utf8'), 'glTF', `${relPath} has valid glTF magic header`);
+      assert.equal(buf.readUInt32LE(8), buf.length, `${relPath} GLB header byteLength matches file size`);
+      const baseName = path.basename(relPath);
+      assert.ok(credits.includes(baseName), `CREDITS.md attributes ${baseName}`);
+    }
+  });
+
+  it('validates all 18 new Poly Haven GLB props, legacy 6 props, CREDITS.md & >=30 valid placements across all 6 maps', async () => {
+    const {
+      POLYHAVEN_LEGACY_PROP_IDS,
+      POLYHAVEN_GLB_PROP_IDS,
+      POLYHAVEN_PROP_IDS,
+      MAP_POLYHAVEN_PLACEMENTS
+    } = await import('../public/js/arenaProps.js');
+
+    assert.equal(POLYHAVEN_GLB_PROP_IDS.length, 18, '18 new Poly Haven GLB props');
+    assert.equal(POLYHAVEN_LEGACY_PROP_IDS.length, 6, '6 legacy Poly Haven props');
+    assert.equal(POLYHAVEN_PROP_IDS.length, 24, '24 total Poly Haven prop IDs');
+
+    const glbSet = new Set(POLYHAVEN_GLB_PROP_IDS);
+    const credits = fs.readFileSync(path.join(ROOT_DIR, 'public/assets/CREDITS.md'), 'utf8');
+
+    for (const id of POLYHAVEN_PROP_IDS) {
+      assert.ok(credits.includes(id), `CREDITS.md attributes Poly Haven prop ${id}`);
+      if (glbSet.has(id)) {
+        const glbPath = path.join(ROOT_DIR, 'public/assets/models/polyhaven_glb', `${id}.glb`);
+        assert.ok(fs.existsSync(glbPath), `Poly Haven GLB exists: ${id}.glb`);
+        const buf = fs.readFileSync(glbPath);
+        assert.ok(buf.length > 10_000, `${id}.glb size > 10KB (got ${buf.length}B)`);
+        assert.equal(buf.slice(0, 4).toString('utf8'), 'glTF', `${id}.glb has valid glTF magic header`);
+        assert.equal(buf.readUInt32LE(8), buf.length, `${id}.glb GLB header byteLength matches file size`);
+      } else {
+        const gltfPath = path.join(ROOT_DIR, 'public/assets/models/polyhaven', id, `${id}_1k.gltf`);
+        assert.ok(fs.existsSync(gltfPath), `Legacy Poly Haven glTF exists: ${id}_1k.gltf`);
+        const json = JSON.parse(fs.readFileSync(gltfPath, 'utf8'));
+        assert.ok(json?.asset?.version, `${id}_1k.gltf has valid glTF asset.version`);
+      }
+    }
+
+    for (const mapId of MAPS) {
+      const mapSpec = MAP_POLYHAVEN_PLACEMENTS[mapId];
+      assert.ok(mapSpec && typeof mapSpec === 'object', `${mapId} has MAP_POLYHAVEN_PLACEMENTS entry`);
+      let count = 0;
+      for (const [propKey, entries] of Object.entries(mapSpec)) {
+        assert.ok(Array.isArray(entries), `${mapId}.${propKey} placements is an array`);
+        for (const p of entries) {
+          assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z), `${mapId}.${propKey} finite xyz`);
+          assert.ok(Number.isFinite(p.scale) && p.scale > 0, `${mapId}.${propKey} finite positive scale`);
+          assert.ok(Number.isFinite(p.yaw), `${mapId}.${propKey} finite yaw`);
+          if (p.pitch !== undefined) assert.ok(Number.isFinite(p.pitch), `${mapId}.${propKey} finite pitch`);
+          if (p.roll !== undefined) assert.ok(Number.isFinite(p.roll), `${mapId}.${propKey} finite roll`);
+          count++;
+        }
+      }
+      assert.ok(count >= 30, `${mapId} has >= 30 Poly Haven prop placements (got ${count})`);
+    }
+  });
+
+  it('tightens in-match high-tier shadow extent <= 24 (22) with radius >= 2.0, preserves barrel hitbox raycasting & disposes 2x6 map switches leak-free', async () => {
+    const game = await createTestGame3D({ qualityChoice: 'high' });
+    game.loadMap('de_dust2');
+    game.inMatch = true;
+
+    const matchExtent = game._getShadowExtent(QUALITY.high);
+    assert.ok(matchExtent <= 24, `in-match high-tier _getShadowExtent=${matchExtent} <= 24`);
+    assert.equal(matchExtent, 22, 'in-match high-tier _getShadowExtent === 22');
+    assert.ok(game.dirLight.shadow.radius >= 2.0, `dirLight.shadow.radius=${game.dirLight.shadow.radius} >= 2.0`);
+
+    // Barrel sync preserves exact hitboxMesh (userData.barrelId) for shooting/raycasting & clearBarrels() disposes cleanly
+    const barrels = [
+      { id: 'barrel_1', x: 0, y: 0, z: -8, hp: 60, active: true },
+      { id: 'barrel_2', x: 4, y: 0, z: -12, hp: 60, active: true }
+    ];
+    game.syncBarrels(barrels);
+    assert.equal(game.barrelMeshes.size, 2);
+
+    const b1 = game.barrelMeshes.get('barrel_1');
+    const b2 = game.barrelMeshes.get('barrel_2');
+    assert.ok(b1?.hitboxMesh && b1.hitboxMesh.userData.barrelId === 'barrel_1', 'barrel_1 hitboxMesh carries userData.barrelId');
+    assert.ok(b2?.hitboxMesh && b2.hitboxMesh.userData.barrelId === 'barrel_2', 'barrel_2 hitboxMesh carries userData.barrelId');
+    assert.ok(game.rayTargets.includes(b1.hitboxMesh), 'barrel_1 hitboxMesh is registered in game.rayTargets');
+    assert.ok(game.rayTargets.includes(b2.hitboxMesh), 'barrel_2 hitboxMesh is registered in game.rayTargets');
+
+    b1.group.updateMatrixWorld(true);
+    const raycaster = new THREE.Raycaster(new THREE.Vector3(0, 0.7, -6.5), new THREE.Vector3(0, 0, -1));
+    const hits = raycaster.intersectObjects(game.rayTargets, false);
+    const barrelHit = hits.find((h) => h.object === b1.hitboxMesh);
+    assert.ok(barrelHit && barrelHit.object.userData.barrelId === 'barrel_1', 'Raycaster hits barrel_1 hitboxMesh cleanly');
+
+    // Updating barrel state preserves hitboxMesh identity; clearBarrels() disposes without throwing
+    game.syncBarrels([
+      { id: 'barrel_1', x: 0, y: 0, z: -8, hp: 20, active: false },
+      { id: 'barrel_2', x: 4, y: 0, z: -12, hp: 60, active: true }
+    ]);
+    assert.equal(game.barrelMeshes.get('barrel_1').hitboxMesh, b1.hitboxMesh, 'syncBarrels preserves hitboxMesh instance');
+    assert.equal(b1.hitboxMesh.userData.barrelId, 'barrel_1');
+    assert.equal(game.rayTargets.includes(b1.hitboxMesh), false, 'inactive barrel removed from active rayTargets');
+
+    game.clearBarrels();
+    game.rebuildHitboxList();
+    assert.equal(game.barrelMeshes.size, 0, 'clearBarrels() empties barrelMeshes cleanly');
+
+    // 2x6 sequential map-switch disposal check across all 6 CS:GO maps
+    game.inMatch = false;
+    const pass1 = {};
+    for (const mapId of MAPS) {
+      game.loadMap(mapId);
+      pass1[mapId] = sceneStats(game);
+    }
+    for (const mapId of MAPS) {
+      game.loadMap(mapId);
+      const pass2 = sceneStats(game);
+      assert.equal(pass2.drawCalls, pass1[mapId].drawCalls, `2x6 switch ${mapId}: 0 leaked drawCalls`);
+      assert.equal(pass2.triangles, pass1[mapId].triangles, `2x6 switch ${mapId}: 0 leaked triangles`);
+    }
+    game.disposeMapResources();
+    assert.equal(game.arenaGeometries.size, 0, '2x6 final disposeMapResources leaves 0 arenaGeometries');
+    assert.equal(game.arenaMaterials.size, 0, '2x6 final disposeMapResources leaves 0 arenaMaterials');
+    assert.equal(game.arenaTextures.size, 0, '2x6 final disposeMapResources leaves 0 arenaTextures');
+  });
+
+  it('Round 2 QA: validates FP arm WebP textures on disk/CREDITS.md and morph-target stripping in preparePolyhavenGltf & PolyhavenInstancedBatcher.flush', async () => {
+    const { preparePolyhavenGltf, PolyhavenInstancedBatcher } = await import('../public/js/arenaProps.js');
+    const credits = fs.readFileSync(path.join(ROOT_DIR, 'public/assets/CREDITS.md'), 'utf8');
+
+    for (const fileName of ['arms_basecolor.webp', 'arms_normal.webp']) {
+      const fullPath = path.join(ROOT_DIR, 'public/assets/models/fp', fileName);
+      assert.ok(fs.existsSync(fullPath), `${fileName} exists on disk`);
+      const buf = fs.readFileSync(fullPath);
+      assert.ok(buf.length > 1024, `${fileName} size > 1KB (got ${buf.length}B)`);
+      assert.equal(buf.slice(0, 4).toString('ascii'), 'RIFF', `${fileName} has RIFF header`);
+      assert.equal(buf.slice(8, 12).toString('ascii'), 'WEBP', `${fileName} has WEBP header`);
+      assert.ok(credits.includes(fileName), `CREDITS.md credits ${fileName}`);
+    }
+
+    const makeMorphScene = () => {
+      const geo = new THREE.BoxGeometry(0.6, 0.6, 0.6);
+      const posAttr = geo.attributes.position;
+      geo.morphAttributes.position = [posAttr.clone()];
+      geo.morphTargetsRelative = true;
+      const mat = new THREE.MeshStandardMaterial();
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.morphTargetInfluences = [0.25];
+      mesh.morphTargetDictionary = { deform: 0 };
+      const scene = new THREE.Group();
+      scene.add(mesh);
+      return { scene, mesh, geo, mat };
+    };
+
+    const g1 = makeMorphScene();
+    preparePolyhavenGltf({ scene: g1.scene }, 4, 8, { maxTextureSize: 1024 });
+    assert.deepEqual(Object.keys(g1.geo.morphAttributes), [], 'preparePolyhavenGltf strips geo.morphAttributes');
+    assert.equal(g1.geo.morphTargetsRelative, false, 'preparePolyhavenGltf clears geo.morphTargetsRelative');
+    assert.equal(g1.mesh.morphTargetInfluences, undefined, 'preparePolyhavenGltf deletes mesh.morphTargetInfluences');
+    assert.equal(g1.mesh.morphTargetDictionary, undefined, 'preparePolyhavenGltf deletes mesh.morphTargetDictionary');
+    g1.geo.dispose();
+    g1.mat.dispose();
+
+    const g2 = makeMorphScene();
+    const game = await createTestGame3D({ qualityChoice: 'high' });
+    const batcher = new PolyhavenInstancedBatcher(g2.scene, { name: 'morph_strip_test' });
+    assert.equal(batcher.groundAt(1, 0, 1, { scale: 1, yaw: 0 }), true);
+    const instMeshes = batcher.flush(game, { castShadow: false, receiveShadow: true });
+    assert.equal(instMeshes.length, 1);
+    const inst = instMeshes[0];
+    assert.deepEqual(Object.keys(g2.geo.morphAttributes), [], 'PolyhavenInstancedBatcher.flush strips source morphAttributes');
+    assert.equal(g2.geo.morphTargetsRelative, false);
+    assert.equal(g2.mesh.morphTargetInfluences, undefined);
+    assert.equal(g2.mesh.morphTargetDictionary, undefined);
+    assert.equal(inst.morphTargetInfluences, undefined, 'InstancedMesh has no morphTargetInfluences');
+    assert.equal(inst.morphTargetDictionary, undefined, 'InstancedMesh has no morphTargetDictionary');
+    assert.deepEqual(Object.keys(inst.geometry.morphAttributes), [], 'InstancedMesh geometry has empty morphAttributes');
+    game.disposeMapResources();
+    g2.geo.dispose();
+    g2.mat.dispose();
+  });
+
+  it('Final Review Fixes: lazy-loads non-equipped viewmodels, prevents dropped-weapon SpriteMaterial leak, bounds deagle_nickel albedo, and dims barrel pads', async () => {
+    const game = await createTestGame3D({ qualityChoice: 'high' });
+
+    // 1. _primeCs2Viewmodels only queues the active 3-slot loadout instead of all 11 WEAPON_ORDER GLBs
+    const origWindow = globalThis.window;
+    const origDoc = globalThis.document;
+    const origWebGL2 = globalThis.WebGL2RenderingContext;
+    const requested = [];
+    try {
+      globalThis.window = origWindow || {};
+      globalThis.document = origDoc || {};
+      globalThis.WebGL2RenderingContext = origWebGL2 || function DummyWebGL2() {};
+      game.assetsEnabled = true;
+      game._ensureCs2ViewmodelLoaded = (wId) => {
+        requested.push(wId);
+        return Promise.resolve(null);
+      };
+      game.currentWeapon = 'rifle';
+      game.loadout = { primary: 'rifle', secondary: 'pistol', melee: 'knife' };
+      game._primeCs2Viewmodels();
+      assert.deepEqual(requested, ['rifle', 'pistol', 'knife'], '_primeCs2Viewmodels preloads only active loadout slots');
+    } finally {
+      if (origWindow === undefined) delete globalThis.window;
+      else globalThis.window = origWindow;
+      if (origDoc === undefined) delete globalThis.document;
+      else globalThis.document = origDoc;
+      if (origWebGL2 === undefined) delete globalThis.WebGL2RenderingContext;
+      else globalThis.WebGL2RenderingContext = origWebGL2;
+    }
+
+    // 2. removeDroppedWeapon & clearDroppedWeapons mark gunMesh _disposed=true and dispose non-shared SpriteMaterial
+    const makeDroppedSpriteTest = (id) => {
+      game.addDroppedWeapon({ id, weapon: 'rifle', x: 1, y: 0, z: 1, ammo: 30, reserveAmmo: 90 });
+      const item = game.droppedWeaponMeshes.get(id);
+      let spriteDisposed = false;
+      const spriteMat = new THREE.SpriteMaterial({ color: 0xffffff });
+      spriteMat.userData = { shared: false };
+      spriteMat.dispose = () => {
+        spriteDisposed = true;
+      };
+      const sprite = new THREE.Sprite(spriteMat);
+      item.gunMesh.add(sprite);
+      return { item, isSpriteDisposed: () => spriteDisposed };
+    };
+    const d1 = makeDroppedSpriteTest('drop_test_1');
+    game.removeDroppedWeapon('drop_test_1');
+    assert.equal(d1.item.gunMesh.userData._disposed, true, 'removeDroppedWeapon sets gunMesh._disposed');
+    assert.equal(d1.isSpriteDisposed(), true, 'removeDroppedWeapon disposes non-shared SpriteMaterial');
+
+    const d2 = makeDroppedSpriteTest('drop_test_2');
+    game.clearDroppedWeapons();
+    assert.equal(d2.item.gunMesh.userData._disposed, true, 'clearDroppedWeapons sets gunMesh._disposed');
+    assert.equal(d2.isSpriteDisposed(), true, 'clearDroppedWeapons disposes non-shared SpriteMaterial');
+
+    // 3. deagle_nickel calibrated <= 1.0 albedo & explosive barrel pad glow toned down
+    const { dressCs2WeaponMaterials } = await import('../public/js/weapons/cs2WeaponGlb.js');
+    const slideMat = new THREE.MeshStandardMaterial({ name: 'set1' });
+    const frameMat = new THREE.MeshStandardMaterial({ name: 'set2' });
+    const dummyGun = new THREE.Group();
+    dummyGun.add(new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), slideMat));
+    dummyGun.add(new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), frameMat));
+    dressCs2WeaponMaterials(dummyGun, null, 'deagle_nickel');
+    dummyGun.traverse((o) => {
+      if (o.isMesh && o.material?.color) {
+        assert.ok(o.material.color.r <= 1.0 && o.material.color.g <= 1.0 && o.material.color.b <= 1.0,
+          `deagle_nickel ${o.material.name} RGB <= 1.0 (got ${o.material.color.r}, ${o.material.color.g}, ${o.material.color.b})`);
+      }
+      o.geometry?.dispose?.();
+    });
+
+    game.syncBarrels([{ id: 'b_review_1', x: 2, y: 0, z: 2, hp: 60, active: true }]);
+    const bItem = game.barrelMeshes.get('b_review_1');
+    assert.ok(bItem?.padMat && bItem.padMat.emissiveIntensity <= 0.15,
+      `Explosive barrel padMat.emissiveIntensity <= 0.15 (got ${bItem?.padMat?.emissiveIntensity})`);
+    game.clearBarrels();
+    game.disposeMapResources();
   });
 });
 

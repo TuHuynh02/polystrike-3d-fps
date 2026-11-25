@@ -59,7 +59,7 @@ export class TacticalMinimap {
 
   /**
    * Records an enemy gunfire blip on the radar for unsuppressed weapons.
-   * Suppressed weapons (`m4a1` PHANTOM-M4) and melee (`knife`) remain stealthy and do not trigger a gunfire sonar ring.
+   * Suppressed weapons (`m4a1` M4A1-S) and melee (`knife`) remain stealthy and do not trigger a gunfire sonar ring.
    */
   recordGunfireBlip(shooterId, x, z, weaponId = 'rifle', now = (typeof performance !== 'undefined' ? performance.now() : Date.now())) {
     if (!shooterId || weaponId === 'm4a1' || weaponId === 'knife') return false;

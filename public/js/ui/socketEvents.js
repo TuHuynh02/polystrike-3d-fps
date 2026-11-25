@@ -172,6 +172,7 @@ import {
 import {
   fetchActiveRooms,
   leaveActiveRoom,
+  renderLoadoutModal,
   renderTeamWaitingLobby,
   resetDeathRespawnUi,
   startLanGuestInPlace,
@@ -481,29 +482,51 @@ onActiveSocket('roomJoined', (data) => {
 
 onActiveSocket('loadoutUpdated', (data) => {
   if (!appState.game.inMatch && !appState.activeRoomCode) return;
-  if (data?.loadout?.pending) {
-    // Mid-life loadout swaps are applied on the next respawn (prefs below keep the pending pick)
+  const pendingLoadout = data?.loadout?.pending || null;
+  if (pendingLoadout) {
+    // Mid-life loadout swaps apply on next respawn: keep pending pick selected in appState & modal so closing [B] never wipes it
     showToast('TRANG BỊ MỚI ÁP DỤNG KHI HỒI SINH');
   }
   if (data?.loadout) {
-    appState.selectedLoadout = {
+    const activeLoadout = {
       primary: data.loadout.primary || appState.selectedLoadout.primary,
       secondary: data.loadout.secondary || appState.selectedLoadout.secondary,
       melee: data.loadout.melee || appState.selectedLoadout.melee
     };
-    appState.selectedStartingWeapon = appState.selectedLoadout.primary;
+    const desiredLoadout = pendingLoadout
+      ? {
+          primary: pendingLoadout.primary || activeLoadout.primary,
+          secondary: pendingLoadout.secondary || activeLoadout.secondary,
+          melee: pendingLoadout.melee || activeLoadout.melee
+        }
+      : activeLoadout;
+    appState.selectedLoadout = desiredLoadout;
+    appState.selectedStartingWeapon = desiredLoadout.primary;
     const activeSlot = WEAPONS[appState.game.currentWeapon]?.slot || 1;
-    const nextActiveWep = (!data.loadout.pending && activeSlot === 1) ? appState.selectedLoadout.primary : null;
+    const nextActiveWep = pendingLoadout
+      ? null
+      : (activeSlot === 1
+          ? activeLoadout.primary
+          : activeSlot === 2
+            ? activeLoadout.secondary
+            : null);
     if (nextActiveWep && WEAPONS[nextActiveWep] && appState.game.ammoByWeapon) {
       appState.game.ammoByWeapon[nextActiveWep] = WEAPONS[nextActiveWep].magSize;
-      appState.game.reserveAmmoByWeapon[nextActiveWep] = WEAPONS[nextActiveWep].reserveAmmo ?? 90;
+      appState.game.reserveAmmoByWeapon[nextActiveWep] = WEAPONS[nextActiveWep].reserveAmmo ?? (activeSlot === 2 ? 36 : 90);
     }
-    appState.game.setLoadout(appState.selectedLoadout, nextActiveWep);
+    appState.game.setLoadout(activeLoadout, nextActiveWep);
+    if (pendingLoadout) {
+      appState.game?._ensureCs2ViewmodelLoaded?.(desiredLoadout.primary);
+      appState.game?._ensureCs2ViewmodelLoaded?.(desiredLoadout.secondary);
+    }
     syncLobbyWeaponSelectionUi(appState.selectedStartingWeapon);
     syncHotbarSlotsHud();
+    if (loadoutModal?.classList && !loadoutModal.classList.contains('hidden')) {
+      renderLoadoutModal();
+    }
     saveUserPrefs({
-      primaryWeapon: data.loadout.pending?.primary || appState.selectedLoadout.primary,
-      secondaryWeapon: data.loadout.pending?.secondary || appState.selectedLoadout.secondary
+      primaryWeapon: desiredLoadout.primary,
+      secondaryWeapon: desiredLoadout.secondary
     });
   }
 });
@@ -974,6 +997,10 @@ onActiveSocket('playerRespawned', (data) => {
         secondary: data.loadout.secondary || appState.selectedLoadout.secondary,
         melee: data.loadout.melee || appState.selectedLoadout.melee
       };
+      appState.selectedStartingWeapon = appState.selectedLoadout.primary;
+      appState.game.setLoadout(appState.selectedLoadout, data.weapon || appState.selectedLoadout.primary);
+      syncLobbyWeaponSelectionUi(appState.selectedStartingWeapon);
+      syncHotbarSlotsHud();
     }
     appState.game.spawnLocalPlayer(data);
     updateHpHud(data.hp);
@@ -1256,6 +1283,17 @@ onActiveSocket('matchStarted', (data) => {
   appState.game.setTeamState?.(appState.currentRoomGameMode, appState.currentLocalTeam);
   appState.game.syncPlayersState(appState.latestPlayers);
   if (me) {
+    if (me.loadout) {
+      appState.selectedLoadout = {
+        primary: me.loadout.primary || appState.selectedLoadout.primary,
+        secondary: me.loadout.secondary || appState.selectedLoadout.secondary,
+        melee: me.loadout.melee || appState.selectedLoadout.melee
+      };
+      appState.selectedStartingWeapon = appState.selectedLoadout.primary;
+      appState.game.setLoadout(appState.selectedLoadout, me.weapon || appState.selectedLoadout.primary);
+      syncLobbyWeaponSelectionUi(appState.selectedStartingWeapon);
+      syncHotbarSlotsHud();
+    }
     appState.game.spawnLocalPlayer(me);
     updateHpHud(me.hp);
     updateGrenadeHud(me.grenades ?? me.grenadeCount ?? 1);

@@ -1642,6 +1642,10 @@ export class PhysicsAndNetcodeMethods {
     const handLNode = ud.handLNode;
     const armLNode = ud.armLNode;
     const boltNode = ud.boltNode;
+    const pumpNode = ud.pumpNode;
+    const ikLeftNode = ud.ikLeftNode;
+    const forearmLNode = ud.forearmLNode;
+    const animScale = ud.reloadAnimScale || 1.0;
 
     if (isReloading) {
       const reloadPct = Math.max(0, Math.min(1, 1 - (this.reloadingUntil - now) / (this.reloadDuration || 1600)));
@@ -1656,6 +1660,15 @@ export class PhysicsAndNetcodeMethods {
         tY -= 0.03;
         if (ud.fpsArms) {
           updateFpsArmsReloadPose(ud, reloadPct, 0, 0, shellPulse, true);
+        } else if (ikLeftNode && ud.ikLeftHomePos) {
+          ikLeftNode.position.set(
+            ud.ikLeftHomePos.x,
+            ud.ikLeftHomePos.y - 0.04 * shellPulse,
+            ud.ikLeftHomePos.z + 0.05 * shellPulse
+          );
+          if (forearmLNode && ud.forearmLHomeRot) {
+            forearmLNode.rotation.x = ud.forearmLHomeRot.x + 0.10 * shellPulse;
+          }
         } else if (handLNode && ud.handLHomePos) {
           handLNode.position.set(
             ud.handLHomePos.x,
@@ -1677,7 +1690,7 @@ export class PhysicsAndNetcodeMethods {
         tRotX += 0.12 * tilt;
         tRotY += 0.14 * tilt;
         tX -= 0.025 * tilt;
-        tY -= 0.012 * tilt;
+        tY -= 0.015 * tilt;
 
         const outPhase = cs2Smoothstep(0.16, 0.36, reloadPct);
         const backPhase = cs2Smoothstep(0.50, 0.72, reloadPct);
@@ -1687,14 +1700,24 @@ export class PhysicsAndNetcodeMethods {
         if (magNode && ud.magHomePos) {
           magNode.position.set(
             ud.magHomePos.x,
-            ud.magHomePos.y - 0.28 * magDrop,
-            ud.magHomePos.z + 0.04 * magDrop
+            ud.magHomePos.y - 0.26 * animScale * magDrop,
+            ud.magHomePos.z + 0.04 * animScale * magDrop
           );
-          magNode.rotation.set(-0.6 * magDrop, 0, 0.25 * magDrop);
+          magNode.rotation.set(-0.45 * magDrop, 0, 0.18 * magDrop);
           magNode.visible = !(reloadPct > 0.36 && reloadPct < 0.50);
         }
         if (ud.fpsArms) {
           updateFpsArmsReloadPose(ud, reloadPct, magDrop, charge, 0, false);
+        } else if (ikLeftNode && ud.ikLeftHomePos) {
+          const hf = cs2Smoothstep(0.08, 0.20, reloadPct) * (1 - cs2Smoothstep(0.72, 0.85, reloadPct));
+          ikLeftNode.position.set(
+            ud.ikLeftHomePos.x + 0.02 * hf,
+            ud.ikLeftHomePos.y - 0.08 * magDrop - 0.02 * hf,
+            ud.ikLeftHomePos.z + 0.08 * hf + 0.02 * magDrop
+          );
+          if (forearmLNode && ud.forearmLHomeRot) {
+            forearmLNode.rotation.x = ud.forearmLHomeRot.x + 0.12 * hf + 0.06 * magDrop;
+          }
         } else if (handLNode && ud.handLHomePos) {
           const hf = cs2Smoothstep(0.08, 0.18, reloadPct) * (1 - cs2Smoothstep(0.72, 0.84, reloadPct));
           handLNode.position.set(
@@ -1720,7 +1743,7 @@ export class PhysicsAndNetcodeMethods {
         tRotX -= 0.105 * charge;
         tZ -= 0.02 * charge;
         if (boltNode && ud.boltHomePos) {
-          boltNode.position.z = ud.boltHomePos.z + 0.06 * charge;
+          boltNode.position.z = ud.boltHomePos.z + 0.065 * animScale * charge;
         }
       }
     } else {
@@ -1729,6 +1752,13 @@ export class PhysicsAndNetcodeMethods {
         if (ud.magHomeRot) magNode.rotation.copy(ud.magHomeRot);
         else magNode.rotation.set(0, 0, 0);
         magNode.visible = true;
+      }
+      if (ikLeftNode && ud.ikLeftHomePos) {
+        ikLeftNode.position.copy(ud.ikLeftHomePos);
+        if (ud.ikLeftHomeRot) ikLeftNode.rotation.copy(ud.ikLeftHomeRot);
+      }
+      if (forearmLNode && ud.forearmLHomeRot) {
+        forearmLNode.rotation.copy(ud.forearmLHomeRot);
       }
       if (ud.fpsArms) {
         resetFpsArmsPose(ud);
@@ -1773,11 +1803,19 @@ export class PhysicsAndNetcodeMethods {
         tRotX += 0.105 * tiltA * boltRotScale;
         tY -= 0.04 * tiltA * boltRotScale;
         tX += 0.02 * tiltA * boltRotScale;
-        if (boltNode && ud.boltHomePos) {
-          boltNode.position.z = ud.boltHomePos.z + 0.06 * boltPull;
+        if (pumpNode && ud.pumpHomePos) {
+          pumpNode.position.z = ud.pumpHomePos.z + 0.12 * animScale * boltPull;
         }
-      } else if (boltNode && ud.boltHomePos) {
-        boltNode.position.z = ud.boltHomePos.z + this.boltKickOffset * 0.04 * (useAdsPose ? 0.25 : 1.0);
+        if (boltNode && ud.boltHomePos) {
+          boltNode.position.z = ud.boltHomePos.z + 0.065 * animScale * boltPull;
+        }
+      } else {
+        if (pumpNode && ud.pumpHomePos) {
+          pumpNode.position.copy(ud.pumpHomePos);
+        }
+        if (boltNode && ud.boltHomePos) {
+          boltNode.position.z = ud.boltHomePos.z + this.boltKickOffset * 0.045 * animScale * (useAdsPose ? 0.35 : 1.0);
+        }
       }
     }
 

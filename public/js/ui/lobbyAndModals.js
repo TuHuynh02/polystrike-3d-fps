@@ -2,6 +2,7 @@ import {
   DEFAULT_LOADOUT,
   DEFAULT_MAP_ID,
   PRIMARY_WEAPONS,
+  SECONDARY_WEAPONS,
   WEAPONS,
   buildLanCreateUrl,
   buildLanHostUrl,
@@ -241,6 +242,27 @@ const WEAPON_SILHOUETTE_SVGS = {
     <path fill="currentColor" opacity="0.95" d="M88,44 L128,44 L128,74 L88,74 Z" />
     <path fill="currentColor" d="M132,22 L182,22 L182,41 L132,41 Z M146,41 L190,46 L190,50 L146,45 Z" />
     <path fill="currentColor" d="M182,25 L218,25 L218,31 L182,31 Z M182,33 L208,33 L208,37 L182,37 Z M218,23.5 L229,23.5 L229,32.5 L218,32.5 Z" />
+  </svg>`,
+  pistol: `<svg class="weapon-silhouette-svg" viewBox="0 0 240 84" xmlns="http://www.w3.org/2000/svg" focusable="false" aria-hidden="true">
+    <path fill="currentColor" d="M56,22 L172,22 L176,28 L174,39 L56,39 Z" />
+    <path fill="currentColor" opacity="0.92" d="M64,16 L76,16 L76,22 L64,22 Z M160,16 L170,16 L170,22 L160,22 Z" />
+    <path fill="currentColor" opacity="0.9" d="M56,39 L166,39 L164,47 L58,47 Z" />
+    <path fill="currentColor" d="M66,47 L94,47 L84,78 L54,74 Z" />
+    <path fill="currentColor" opacity="0.82" d="M94,47 L118,47 L116,59 L90,59 Z M101,47 L107,47 L105,56 L99,56 Z" />
+  </svg>`,
+  deagle: `<svg class="weapon-silhouette-svg" viewBox="0 0 240 84" xmlns="http://www.w3.org/2000/svg" focusable="false" aria-hidden="true">
+    <path fill="currentColor" d="M46,24 L182,24 L182,36 L46,36 Z M172,26 L190,26 L190,34 L172,34 Z" />
+    <path fill="currentColor" opacity="0.92" d="M52,18 L62,18 L62,24 L52,24 Z M172,18 L180,18 L180,24 L172,24 Z" />
+    <path fill="currentColor" opacity="0.9" d="M48,36 L146,36 L142,45 L56,45 Z" />
+    <path fill="currentColor" d="M62,45 L90,45 L80,77 L50,74 Z" />
+    <path fill="currentColor" opacity="0.82" d="M90,45 L114,45 L112,58 L86,58 Z" />
+  </svg>`,
+  glock: `<svg class="weapon-silhouette-svg" viewBox="0 0 240 84" xmlns="http://www.w3.org/2000/svg" focusable="false" aria-hidden="true">
+    <path fill="currentColor" opacity="0.92" d="M84,12 L108,12 L110,23 L82,23 Z M164,17 L172,17 L172,23 L164,23 Z" />
+    <path fill="currentColor" d="M56,23 L176,23 L176,38 L56,38 Z" />
+    <path fill="currentColor" opacity="0.88" d="M60,38 L168,38 L164,47 L62,47 Z" />
+    <path fill="currentColor" d="M64,47 L92,47 L81,78 L52,75 Z" />
+    <path fill="currentColor" opacity="0.82" d="M92,47 L116,47 L114,59 L88,59 Z" />
   </svg>`
 };
 
@@ -254,15 +276,19 @@ export function renderLoadoutModal() {
   const activePrimary = PRIMARY_WEAPONS.includes(appState.selectedLoadout?.primary)
     ? appState.selectedLoadout.primary
     : (DEFAULT_LOADOUT?.primary || 'rifle');
+  const activeSecondary = SECONDARY_WEAPONS.includes(appState.selectedLoadout?.secondary)
+    ? appState.selectedLoadout.secondary
+    : (DEFAULT_LOADOUT?.secondary || 'pistol');
 
-  const buildPrimaryWeaponCardHtml = (wId, isSelected) => {
+  const buildWeaponCardHtml = (wId, isSelected, extraClass = '') => {
     const w = WEAPONS[wId];
     if (!w) return '';
     const categoryTag = escapeHtml(w.category || 'PRI');
     const safeName = escapeHtml(w.name);
     const silhouetteSvg = getWeaponSilhouetteSvg(w.id);
+    const cardClass = extraClass ? `loadout-weapon-card ${ extraClass }` : 'loadout-weapon-card';
     return `
-      <button type="button" class="weapon-option loadout-weapon-card ${ isSelected ? 'active' : '' }" data-loadout-weapon="${ w.id }" data-loadout-slot="${ w.slot }" aria-pressed="${ isSelected ? 'true' : 'false' }">
+      <button type="button" class="weapon-option ${ cardClass } ${ isSelected ? 'active' : '' }" data-loadout-weapon="${ w.id }" data-loadout-slot="${ w.slot }" aria-pressed="${ isSelected ? 'true' : 'false' }">
         <div class="weapon-opt-top">
           <span class="weapon-key">${ categoryTag }</span>
         </div>
@@ -275,12 +301,14 @@ export function renderLoadoutModal() {
   };
 
   loadoutPrimaryGrid.innerHTML = PRIMARY_WEAPONS.map((wId) =>
-    buildPrimaryWeaponCardHtml(wId, activePrimary === wId)
+    buildWeaponCardHtml(wId, activePrimary === wId)
   ).join('');
 
   if (loadoutSecondaryGrid) {
-    loadoutSecondaryGrid.innerHTML = '';
-    loadoutSecondaryGrid.classList?.add('hidden');
+    loadoutSecondaryGrid.classList?.remove('hidden');
+    loadoutSecondaryGrid.innerHTML = SECONDARY_WEAPONS.map((wId) =>
+      buildWeaponCardHtml(wId, activeSecondary === wId, 'loadout-secondary-card')
+    ).join('');
   }
 }
 
@@ -480,10 +508,12 @@ export function applySelectedLoadoutAndNotify() {
   const activePrimary = PRIMARY_WEAPONS.includes(appState.selectedLoadout?.primary)
     ? appState.selectedLoadout.primary
     : (DEFAULT_LOADOUT?.primary || 'rifle');
-  const standardSecondary = DEFAULT_LOADOUT?.secondary || 'pistol';
+  const activeSecondary = SECONDARY_WEAPONS.includes(appState.selectedLoadout?.secondary)
+    ? appState.selectedLoadout.secondary
+    : (DEFAULT_LOADOUT?.secondary || 'pistol');
   const standardMelee = DEFAULT_LOADOUT?.melee || 'knife';
   appState.selectedLoadout.primary = activePrimary;
-  appState.selectedLoadout.secondary = standardSecondary;
+  appState.selectedLoadout.secondary = activeSecondary;
   appState.selectedLoadout.melee = standardMelee;
   appState.selectedStartingWeapon = activePrimary;
   appState.game?.setLoadout?.(appState.selectedLoadout);
@@ -491,7 +521,7 @@ export function applySelectedLoadoutAndNotify() {
   syncLobbyWeaponSelectionUi(activePrimary);
   saveUserPrefs({
     primaryWeapon: activePrimary,
-    secondaryWeapon: standardSecondary
+    secondaryWeapon: activeSecondary
   });
   appState.socket?.emit?.('updateLoadout', appState.selectedLoadout);
   renderLoadoutModal();
@@ -508,14 +538,16 @@ export function applyRestoredUserPrefs() {
       showcaseOperatorName.textContent = (userPrefs.playerName.trim() || 'STRIKER').toUpperCase();
     }
 
-    // 2. Primary Weapon & Standardized Secondary/Melee Loadout (Lobby Grid, 3D Showcase, Hotbar & Loadout Modal)
-    const standardSecondary = DEFAULT_LOADOUT?.secondary || 'pistol';
+    // 2. Primary + Secondary Weapons & Standardized Melee Loadout (Lobby Grid, 3D Showcase, Hotbar & Loadout Modal)
+    const activeSecondary = SECONDARY_WEAPONS.includes(userPrefs.secondaryWeapon)
+      ? userPrefs.secondaryWeapon
+      : (DEFAULT_LOADOUT?.secondary || 'pistol');
     const standardMelee = DEFAULT_LOADOUT?.melee || 'knife';
     appState.selectedStartingWeapon = userPrefs.primaryWeapon;
     appState.selectedLoadout.primary = userPrefs.primaryWeapon;
-    appState.selectedLoadout.secondary = standardSecondary;
+    appState.selectedLoadout.secondary = activeSecondary;
     appState.selectedLoadout.melee = standardMelee;
-    userPrefs.secondaryWeapon = standardSecondary;
+    userPrefs.secondaryWeapon = activeSecondary;
     syncLobbyWeaponSelectionUi(appState.selectedStartingWeapon);
     appState.game.setLoadout(appState.selectedLoadout, appState.selectedStartingWeapon);
     appState.game.setLobbyWeapon(appState.selectedStartingWeapon);
@@ -579,15 +611,17 @@ export function requestJoinRoom({ mode = 'public', roomCode = '' }) {
   }
   const name = getLobbyPlayerName();
 
-  const standardSecondary = DEFAULT_LOADOUT?.secondary || 'pistol';
+  const activeSecondary = SECONDARY_WEAPONS.includes(appState.selectedLoadout?.secondary)
+    ? appState.selectedLoadout.secondary
+    : (SECONDARY_WEAPONS.includes(userPrefs.secondaryWeapon) ? userPrefs.secondaryWeapon : (DEFAULT_LOADOUT?.secondary || 'pistol'));
   const standardMelee = DEFAULT_LOADOUT?.melee || 'knife';
   appState.selectedLoadout.primary = appState.selectedStartingWeapon;
-  appState.selectedLoadout.secondary = standardSecondary;
+  appState.selectedLoadout.secondary = activeSecondary;
   appState.selectedLoadout.melee = standardMelee;
   saveUserPrefs({
     playerName: name,
     primaryWeapon: appState.selectedStartingWeapon,
-    secondaryWeapon: standardSecondary,
+    secondaryWeapon: activeSecondary,
     operatorColor: appState.selectedOperatorColor,
     selectedMap: appState.selectedMapId
   });
@@ -1024,11 +1058,25 @@ if (loadoutPrimaryGrid) {
   });
 }
 
+if (loadoutSecondaryGrid) {
+  loadoutSecondaryGrid.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-loadout-weapon]');
+    if (!btn) return;
+    const wId = btn.dataset.loadoutWeapon;
+    if (WEAPONS[wId]?.slot === 2) {
+      appState.selectedLoadout.secondary = wId;
+      applySelectedLoadoutAndNotify();
+    }
+  });
+}
+
 if (btnSaveLoadout) {
   btnSaveLoadout.addEventListener('click', () => {
     applySelectedLoadoutAndNotify();
     toggleLoadoutModal(false);
-    showToast(`TRANG BỊ // ${ WEAPONS[appState.selectedLoadout.primary]?.name || appState.selectedLoadout.primary }`);
+    const pName = WEAPONS[appState.selectedLoadout.primary]?.name || appState.selectedLoadout.primary;
+    const sName = WEAPONS[appState.selectedLoadout.secondary]?.name || appState.selectedLoadout.secondary;
+    showToast(`TRANG BỊ // ${ pName } · ${ sName }`);
     requestManualRespawnIfReady();
   });
 }
@@ -1125,11 +1173,13 @@ weaponGrid.addEventListener('click', (e) => {
   if (!btn) return;
   const wId = btn.dataset.weapon;
   if (!PRIMARY_WEAPONS.includes(wId)) return;
-  const standardSecondary = DEFAULT_LOADOUT?.secondary || 'pistol';
+  const activeSecondary = SECONDARY_WEAPONS.includes(appState.selectedLoadout?.secondary)
+    ? appState.selectedLoadout.secondary
+    : (DEFAULT_LOADOUT?.secondary || 'pistol');
   const standardMelee = DEFAULT_LOADOUT?.melee || 'knife';
   appState.selectedStartingWeapon = wId;
   appState.selectedLoadout.primary = wId;
-  appState.selectedLoadout.secondary = standardSecondary;
+  appState.selectedLoadout.secondary = activeSecondary;
   appState.selectedLoadout.melee = standardMelee;
   syncLobbyWeaponSelectionUi(appState.selectedStartingWeapon);
   appState.game?.setLoadout?.(appState.selectedLoadout);
@@ -1139,7 +1189,7 @@ weaponGrid.addEventListener('click', (e) => {
   renderLoadoutModal();
   saveUserPrefs({
     primaryWeapon: appState.selectedStartingWeapon,
-    secondaryWeapon: standardSecondary
+    secondaryWeapon: activeSecondary
   });
 });
 

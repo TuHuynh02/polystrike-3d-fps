@@ -67,6 +67,9 @@ export class AssetManager {
     this.loadImage = opts.loadImage || defaultLoadImage;
     this.importGltfLoader =
       opts.importGltfLoader || (async () => (await import('three/addons/loaders/GLTFLoader.js')).GLTFLoader);
+    this.importMeshoptDecoder =
+      opts.importMeshoptDecoder ||
+      (async () => (await import('three/addons/libs/meshopt_decoder.module.js')).MeshoptDecoder);
     this.importRgbeLoader =
       opts.importRgbeLoader || (async () => (await import('three/addons/loaders/RGBELoader.js')).RGBELoader);
     this.models = new Map(); // name -> Promise<gltf|null>
@@ -110,7 +113,22 @@ export class AssetManager {
 
   async _getLoader() {
     if (!this._loaderPromise) {
-      this._loaderPromise = this.importGltfLoader().then((Cls) => new Cls());
+      this._loaderPromise = (async () => {
+        const Cls = await this.importGltfLoader();
+        const loader = new Cls();
+        if (typeof loader?.setMeshoptDecoder === 'function') {
+          try {
+            const decoder = await this.importMeshoptDecoder();
+            if (decoder) {
+              if (decoder.ready) await decoder.ready;
+              loader.setMeshoptDecoder(decoder);
+            }
+          } catch {
+            // Optional Meshopt decoder fallback (Node headless tests / environments without wasm)
+          }
+        }
+        return loader;
+      })();
     }
     return this._loaderPromise;
   }

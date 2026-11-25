@@ -195,7 +195,7 @@ export class WeaponAndMovementSfxMethods {
       mechGain.gain.setValueAtTime(0.18 * vol, now);
       mechGain.gain.exponentialRampToValueAtTime(0.001, now + 0.03);
     } else {
-      // Rifle (VANDAL-AK)
+      // Rifle (AK-47)
       filter.type = 'bandpass';
       filter.frequency.setValueAtTime(1050, now);
       filter.Q.setValueAtTime(0.9, now);

@@ -56,6 +56,7 @@ import { applyWeaponAssetOverride, isWeaponOverrideEnabled, measureWeaponGroup }
 import {
   canUseCs2WeaponGlb,
   createCs2WorldWeaponMesh,
+  disposeCs2WeaponSkeletons,
   isCs2WeaponSupported,
   loadCs2ViewmodelGlb,
   refreshAllCs2WeaponEnvMaps,
@@ -79,14 +80,48 @@ export class WeaponsAndShowcaseMethods {
   }
 
   /**
-   * World-space weapon (dropped pickups + lobby showcase). Procedural body first; when the opt-in glTF override
-   * (weaponAssetOverrides.js, ?glbWeapons=1) is enabled and loads, its visual replaces the body (contracts are untouched).
+   * World-space weapon (dropped pickups + lobby showcase). Procedural body first; upgrades asynchronously to
+   * real PBR GLB world weapon (or opt-in Kenney ?glbWeapons=1 override) while preserving group contracts.
    */
-  createShowcaseWeaponMesh(weaponId) {
+  createShowcaseWeaponMesh(weaponId, opts = {}) {
     const mesh = this.createWeaponMesh(weaponId, false);
     if (this.assetsEnabled && isWeaponOverrideEnabled()) {
       const procBox = measureWeaponGroup(mesh);
       applyWeaponAssetOverride(mesh, weaponId, this.assets, procBox);
+    } else if (!opts.skipCs2Upgrade && this.assetsEnabled && canUseCs2WeaponGlb() && isCs2WeaponSupported(weaponId)) {
+      const procBox = measureWeaponGroup(mesh);
+      void createCs2WorldWeaponMesh(weaponId, this.assets, this.scene?.environment || null, {
+        castShadow: false,
+        receiveShadow: false
+      })
+        .then((cs2Mesh) => {
+          if (!cs2Mesh || mesh.userData?._disposed) return;
+          if (this.quality?.envMapSize === 0) {
+            applyMetalnessCap(cs2Mesh, 0.35);
+          }
+          const latestEnv = this.scene?.environment || null;
+          refreshCs2WeaponEnvMap(cs2Mesh, latestEnv);
+          cs2Mesh.userData._boundEnvMap = latestEnv;
+
+          cs2Mesh.updateMatrixWorld(true);
+          const cs2Box = new THREE.Box3();
+          cs2Mesh.traverse((c) => {
+            if (c.isMesh && !c.userData?.isMuzzleFlash) {
+              cs2Box.expandByObject(c);
+            }
+          });
+          if (!cs2Box.isEmpty() && !procBox.isEmpty()) {
+            const pCtr = procBox.getCenter(new THREE.Vector3());
+            const cCtr = cs2Box.getCenter(new THREE.Vector3());
+            cs2Mesh.position.set(pCtr.x - cCtr.x, pCtr.y - cCtr.y, pCtr.z - cCtr.z);
+          }
+          for (let i = 0; i < mesh.children.length; i++) {
+            mesh.children[i].visible = false;
+          }
+          mesh.add(cs2Mesh);
+          mesh.userData.cs2WorldUpgrade = cs2Mesh;
+        })
+        .catch(() => {});
     }
     return mesh;
   }
@@ -134,8 +169,8 @@ export class WeaponsAndShowcaseMethods {
     const priority = [
       this.currentWeapon,
       this.loadout?.primary,
-      this.loadout?.melee,
-      ...WEAPON_ORDER
+      this.loadout?.secondary,
+      this.loadout?.melee
     ];
     const seen = new Set();
     for (let i = 0; i < priority.length; i++) {
@@ -171,6 +206,7 @@ export class WeaponsAndShowcaseMethods {
         if (prevVm && prevVm !== cs2Vm) {
           prevVm.visible = false;
           this.viewmodelRig.remove(prevVm);
+          disposeCs2WeaponSkeletons(prevVm);
           disposeObject3D(prevVm);
         }
         this.viewmodelMeshes[weaponId] = cs2Vm;
@@ -422,10 +458,11 @@ export class WeaponsAndShowcaseMethods {
     const token = (this._lobbyInspectToken = (this._lobbyInspectToken || 0) + 1);
     if (this.lobbyWeaponInspectMesh) {
       this.lobbyWeaponInspectSpin.remove(this.lobbyWeaponInspectMesh);
+      disposeCs2WeaponSkeletons(this.lobbyWeaponInspectMesh);
       disposeObject3D(this.lobbyWeaponInspectMesh);
       this.lobbyWeaponInspectMesh = null;
     }
-    const wMesh = this.createShowcaseWeaponMesh(weaponId);
+    const wMesh = this.createShowcaseWeaponMesh(weaponId, { skipCs2Upgrade: true });
     wMesh.traverse((child) => {
       if (child.isMesh) {
         child.castShadow = false;
@@ -437,7 +474,8 @@ export class WeaponsAndShowcaseMethods {
     const sizeY = Math.max(0.08, box.max.y - box.min.y);
     const sizeZ = Math.max(0.12, box.max.z - box.min.z);
     const longest = Math.max(sizeX, sizeY, sizeZ);
-    const targetSpan = longest < 0.45 ? 0.56 : 0.92;
+    const isCompact = longest < 0.36;
+    const targetSpan = isCompact ? 0.44 : longest < 0.55 ? 0.62 : 0.92;
     const scale = Math.max(0.75, Math.min(2.1, targetSpan / longest));
     const cx = (box.min.x + box.max.x) * 0.5;
     const cy = (box.min.y + box.max.y) * 0.5;
@@ -484,7 +522,8 @@ export class WeaponsAndShowcaseMethods {
           const sy = Math.max(0.08, solidBox.max.y - solidBox.min.y);
           const sz = Math.max(0.12, solidBox.max.z - solidBox.min.z);
           const maxDim = Math.max(sx, sy, sz);
-          const span = maxDim < 0.45 ? 0.54 : 0.92;
+          const compact = maxDim < 0.36;
+          const span = compact ? 0.44 : maxDim < 0.55 ? 0.62 : 0.92;
           const scl = Math.max(0.75, Math.min(2.1, span / maxDim));
           const mcx = (solidBox.min.x + solidBox.max.x) * 0.5;
           const mcy = (solidBox.min.y + solidBox.max.y) * 0.5;
@@ -492,12 +531,13 @@ export class WeaponsAndShowcaseMethods {
 
           if (this.lobbyWeaponInspectMesh) {
             this.lobbyWeaponInspectSpin.remove(this.lobbyWeaponInspectMesh);
+            disposeCs2WeaponSkeletons(this.lobbyWeaponInspectMesh);
             disposeObject3D(this.lobbyWeaponInspectMesh);
             this.lobbyWeaponInspectMesh = null;
           }
           const cs2Holder = new THREE.Group();
           cs2Mesh.scale.setScalar(scl);
-          cs2Mesh.position.set(-mcx * scl, -mcy * scl - 0.055, -mcz * scl);
+          cs2Mesh.position.set(-mcx * scl, -mcy * scl + (compact ? -0.025 : -0.055), -mcz * scl);
           cs2Holder.add(cs2Mesh);
           cs2Holder.userData.weaponMesh = cs2Mesh;
           this.lobbyWeaponInspectMesh = cs2Holder;
@@ -659,6 +699,7 @@ export class WeaponsAndShowcaseMethods {
     if (loadout.melee && WEAPONS[loadout.melee]?.slot === 3) {
       this.loadout.melee = loadout.melee;
     }
+    this._primeCs2Viewmodels?.();
     if (activeWeapon && WEAPONS[activeWeapon]) {
       this.switchWeapon(activeWeapon);
     }
