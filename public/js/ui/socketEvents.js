@@ -176,7 +176,8 @@ import {
   renderTeamWaitingLobby,
   resetDeathRespawnUi,
   startLanGuestInPlace,
-  syncLobbyWeaponSelectionUi
+  syncLobbyWeaponSelectionUi,
+  syncPauseModalTacticalControls
 } from './lobbyAndModals.js';
 
 export const SHOT_REJECT_MESSAGES = {
@@ -378,6 +379,9 @@ onActiveSocket('roomJoined', (data) => {
   appState.currentRoomGameMode = data.gameMode === 'tdm' ? 'tdm' : 'ffa';
   appState.currentRoomState = data.state || 'PLAYING';
   appState.currentRoomHostId = data.hostId || null;
+  if (typeof data.matchDurationSec === 'number') {
+    appState.currentRoomDurationSec = data.matchDurationSec;
+  }
   appState.currentLocalTeam = data.player?.team || null;
   appState.currentLocalReady = Boolean(data.player?.ready);
   const isWaitingTeamLobby = appState.currentRoomGameMode === 'tdm' && appState.currentRoomState === 'WAITING';
@@ -410,7 +414,9 @@ onActiveSocket('roomJoined', (data) => {
   hudKillLimit.textContent = String(data.killLimit || (appState.currentRoomGameMode === 'tdm' ? 30 : 20));
   appState.hudCache.leaderText = '';
   appState.hudCache.leaderId = null;
-  hudTimer.textContent = formatTime(data.timeRemaining || 300);
+  hudTimer.textContent = formatTime(data.timeRemaining || appState.currentRoomDurationSec || 300);
+  appState.currentRoomTimeRemaining = data.timeRemaining || appState.currentRoomDurationSec || 300;
+  syncPauseModalTacticalControls?.();
   updateTeamScoreHud(data.teamScores || { alpha: 0, bravo: 0 });
 
   // Set starting 3-slot loadout & spawn position
@@ -593,8 +599,61 @@ onActiveSocket('hostChanged', (data) => {
     if (appState.currentRoomGameMode === 'tdm' && appState.currentRoomState === 'WAITING') {
       renderTeamWaitingLobby({ hostId: data.hostId, players: appState.latestPlayers });
     }
+    syncPauseModalTacticalControls?.();
   }
   showToast(`CHỦ PHÒNG MỚI // ${ data.name }`);
+});
+
+onActiveSocket('teamSwitched', (data) => {
+  if ((!appState.game.inMatch && !appState.activeRoomCode) || !data?.playerId) return;
+  if (Array.isArray(appState.latestPlayers)) {
+    const existing = appState.latestPlayers.find((p) => p.id === data.playerId);
+    if (existing) {
+      existing.team = data.team;
+      if (data.color !== undefined) existing.color = data.color;
+    }
+  }
+  const teamLabel = data.team === 'bravo' ? 'ĐỘI BRAVO' : 'ĐỘI ALPHA';
+  if (data.playerId === appState.game.localId) {
+    appState.currentLocalTeam = data.team;
+    appState.game.setTeamState?.(appState.currentRoomGameMode || 'tdm', appState.currentLocalTeam);
+    pauseModal?.classList?.add('hidden');
+    syncPauseModalTacticalControls?.();
+    if (appState.currentRoomState === 'PLAYING') {
+      showToast(`ĐÃ CHUYỂN SANG ${ teamLabel }`);
+    }
+  } else {
+    appState.game.applyRemoteTeamSwitch?.(data.playerId, data.team, data.color);
+    if (appState.currentRoomState === 'PLAYING' && data.name) {
+      showToast(`${ data.name } CHUYỂN SANG ${ teamLabel }`);
+    }
+  }
+});
+
+onActiveSocket('matchTimeUpdated', (data) => {
+  if ((!appState.game.inMatch && !appState.activeRoomCode) || !data) return;
+  if (typeof data.matchDurationSec === 'number') {
+    appState.currentRoomDurationSec = data.matchDurationSec;
+  }
+  if (typeof data.timeRemaining === 'number' && Number.isFinite(data.timeRemaining)) {
+    appState.currentRoomTimeRemaining = Math.max(0, Math.floor(data.timeRemaining));
+    if (hudTimer) hudTimer.textContent = formatTime(appState.currentRoomTimeRemaining);
+  }
+  if (data.hostId) {
+    appState.currentRoomHostId = data.hostId;
+  }
+  if (appState.currentRoomGameMode === 'tdm' && appState.currentRoomState === 'WAITING') {
+    renderTeamWaitingLobby({
+      hostId: appState.currentRoomHostId,
+      matchDurationSec: appState.currentRoomDurationSec,
+      players: appState.latestPlayers
+    });
+  }
+  if (Number(data.addedSec) > 0) {
+    const mins = Math.max(1, Math.round(Number(data.addedSec) / 60));
+    showToast(`CHỦ PHÒNG CỘNG THÊM +${ mins } PHÚT`);
+  }
+  syncPauseModalTacticalControls?.();
 });
 
 // Authoritative movement state for the commands the server has simulated (sent to this player only):
@@ -829,6 +888,9 @@ onActiveSocket('damageDealt', (data) => {
       appState.sfx.playHitmarker?.(false);
     }
     updateHpHud(data.hp);
+    if (Number(data.taggedMs) > 0) {
+      appState.game.applyTagging?.(data.taggedMs);
+    }
     appState.game.applyDamageFlinch(data.damage);
     damageOverlay.style.opacity = '0.88';
     setTimeout(() => {
@@ -1003,6 +1065,7 @@ onActiveSocket('playerRespawned', (data) => {
       syncHotbarSlotsHud();
     }
     appState.game.spawnLocalPlayer(data);
+    updateArmorHud(data.armor || 0);
     updateHpHud(data.hp);
     updateGrenadeHud(data.grenades ?? data.grenadeCount ?? 1);
     triggerSpawnProtectionHud(data.spawnProtectionMs || MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500);
@@ -1300,6 +1363,13 @@ onActiveSocket('matchStarted', (data) => {
     triggerSpawnProtectionHud(MATCH_CONFIG.SPAWN_PROTECTION_MS || 1500);
   }
   showCenterBanner(appState.currentRoomGameMode === 'tdm' ? 'ĐẤU ĐỘI BẮT ĐẦU' : 'BẮT ĐẦU TRẬN');
+  if (data.hostId) appState.currentRoomHostId = data.hostId;
+  if (typeof data.matchDurationSec === 'number') appState.currentRoomDurationSec = data.matchDurationSec;
+  if (typeof data.timeRemaining === 'number' && hudTimer) {
+    appState.currentRoomTimeRemaining = Math.max(0, Math.floor(data.timeRemaining));
+    hudTimer.textContent = formatTime(appState.currentRoomTimeRemaining);
+  }
+  syncPauseModalTacticalControls?.();
   appState.game.requestPointerLock();
   syncLanHostMeta({ state: 'PLAYING' });
   for (const delay of [200, 600]) setTimeout(measurePing, delay);

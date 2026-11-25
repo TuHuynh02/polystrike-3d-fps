@@ -1244,18 +1244,21 @@ describe('4. Weapon Shooting, Hit Detection, Kill/Respawn, Grenades & Match Win'
     assert.equal(computeDistanceFalloff(WEAPONS.smg, 100), WEAPONS.smg.minFalloffMult);
     assert.ok(computeDistanceFalloff(WEAPONS.rifle, 36) > computeDistanceFalloff(WEAPONS.smg, 36));
 
-    // Halved weapon damage & 2-headshot kill checks (rifle, scar, deagle require 2 headshots on 100 HP)
+    // CS2 Tactical Gunfight weapon damage, armorPen & helmet 1-tap / 2-tap checks
     const expectedDamages = {
-      rifle: 17, m4a1: 15, scar: 20, smg: 11, shotgun: 9, sniper: 54,
-      lmg: 13, pistol: 14, deagle: 26, glock: 9, knife: 28
+      rifle: 34, m4a1: 33, scar: 38, smg: 24, shotgun: 18, sniper: 112,
+      lmg: 28, pistol: 28, deagle: 54, glock: 17, knife: 50
     };
     for (const [id, dmg] of Object.entries(expectedDamages)) {
-      assert.equal(WEAPONS[id].damage, dmg, `Expected halved damage ${dmg} for ${id}`);
+      assert.equal(WEAPONS[id].damage, dmg, `Expected CS2 damage ${dmg} for ${id}`);
+      assert.ok(WEAPONS[id].armorPen > 0 && WEAPONS[id].armorPen <= 1, `Expected valid armorPen for ${id}`);
     }
-    for (const twoTapId of ['rifle', 'scar', 'deagle']) {
-      const hsDmg = Math.round(WEAPONS[twoTapId].damage * WEAPONS[twoTapId].headshotMult);
-      assert.ok(hsDmg >= 50 && hsDmg < 100, `${twoTapId} headshot (${hsDmg}) must kill 100 HP in 2 shots`);
-    }
+    const akHs = Math.round(WEAPONS.rifle.damage * WEAPONS.rifle.headshotMult);
+    const akHpLoss = akHs - Math.min(50, Math.round(akHs * (1 - WEAPONS.rifle.armorPen)));
+    assert.ok(akHpLoss >= 100, `AK-47 helmet headshot (${akHpLoss}) must 1-tap through Kevlar`);
+    const m4Hs = Math.round(WEAPONS.m4a1.damage * WEAPONS.m4a1.headshotMult);
+    const m4HpLoss = m4Hs - Math.min(50, Math.round(m4Hs * (1 - WEAPONS.m4a1.armorPen)));
+    assert.ok(m4HpLoss < 100 && m4HpLoss >= 80, `M4A1 helmet headshot (${m4HpLoss}) must leave armored target alive`);
 
     // Valorant-grade recoil climb, horizontal spray oscillation, 144Hz pre-shot aim preservation & recovery
     const game = createTestGame3D();
@@ -1326,8 +1329,9 @@ describe('4. Weapon Shooting, Hit Detection, Kill/Respawn, Grenades & Match Win'
       return { x: dx / len, y: dy / len, z: dz / len };
     };
 
-    // 1. Headshot test (aimed at head box y = 1.71; M4A1: 29 * 2.7 = 78 DMG even if client claims isHeadshot: false)
+    // 1. Headshot test against Kevlar (aimed at head box y = 1.71; M4A1: 116 raw * (1-0.75)=29 absorbed, 87 HP loss => 13 HP)
     target.hp = 100;
+    target.armor = 50;
     rm.handleShoot(room, shooter, {
       weapon: 'm4a1',
       origin: { x: 99, y: 99, z: 99 }, // spoofed origin ignored
@@ -1335,7 +1339,9 @@ describe('4. Weapon Shooting, Hit Detection, Kill/Respawn, Grenades & Match Win'
       targetId: target.id,
       isHeadshot: false,
     });
-    assert.equal(target.hp, 100 - Math.round(WEAPONS.m4a1.damage * WEAPONS.m4a1.headshotMult));
+    assert.equal(target.hp, 13);
+    assert.equal(target.armor, 21);
+    assert.equal(target.alive, true);
     assert.equal(shooter.ammo, 29);
 
     // 2. Immediate rapid-fire before cooldown must be rejected
@@ -1348,8 +1354,9 @@ describe('4. Weapon Shooting, Hit Detection, Kill/Respawn, Grenades & Match Win'
     });
     assert.equal(target.hp, hpAfterFirstShot, 'Shot before fireRateMs cooldown must be ignored');
 
-    // 3. Bodyshot test (aimed at torso box y = 1.20: 29 DMG even if client claims isHeadshot: true)
+    // 3. Bodyshot test (aimed at torso box y = 1.20: WEAPONS.m4a1.damage even if client claims isHeadshot: true)
     shooter.lastShotAt = 0;
+    target.armor = 0;
     target.hp = 100;
     rm.handleShoot(room, shooter, {
       weapon: 'm4a1',
@@ -1474,7 +1481,8 @@ describe('4. Weapon Shooting, Hit Detection, Kill/Respawn, Grenades & Match Win'
       return fireCmd;
     };
 
-    // 1. Aim at victim's head box (pitch = 0 from standing eye y = 1.62 hits head [1.47..1.95] at 6m) and fire M4A1
+    // 1. Aim at victim's head box with Kevlar armor so shot 1 leaves victim alive (13 HP, 21 armor)
+    victim.armor = 50;
     game.onGround = true;
     game.isAiming = true;
     game.velocity.set(0, 0, 0);
@@ -1484,12 +1492,14 @@ describe('4. Weapon Shooting, Hit Detection, Kill/Respawn, Grenades & Match Win'
     const fireCmd1 = stepAndFlushFire(0);
     assert.equal(localShots.length, 1, 'Game3D.attemptShoot should trigger local shot feedback');
     assert.equal(fireCmd1.ss, 1);
-    assert.equal(victim.hp, 100 - Math.round(WEAPONS.m4a1.damage * WEAPONS.m4a1.headshotMult)); // 100 - 78 = 22 HP
+    assert.equal(victim.hp, 13);
+    assert.equal(victim.armor, 21);
     assert.equal(victim.alive, true);
 
     // 2. Aim at victim's torso center (y = 1.21 at 6m from eye y = 1.62 => pitch ≈ -0.068) to finish off the victim
     game.pitch = Math.atan2(1.21 - 1.62, 6);
     game.yaw = 0;
+    victim.armor = 0;
     victim.hp = WEAPONS.m4a1.damage;
     human.hp = 80; // Injure human to verify +25 HP Kill Adrenaline on victim kill
 
@@ -2594,13 +2604,19 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
     assert.equal(p2.alive, true);
     assert.ok(ioEvents.some((e) => e.event === 'matchStarted' && e.data.gameMode === 'tdm'));
 
-    // 4b. Switching team during PLAYING is forbidden (prevents instant respawn / full HP heal exploit)
+    // 4b. In-match TDM team switching succeeds, respawns player at target team base, and enforces 2s cooldown
     p1.hp = 25;
     const midMatchSwitch = rm.handleSwitchTeam(room, p1, { team: 'bravo' });
-    assert.equal(midMatchSwitch.ok, false, 'Switching teams during PLAYING must be rejected');
-    assert.equal(midMatchSwitch.error, 'match_in_progress');
+    assert.equal(midMatchSwitch.ok, true, 'Switching teams during PLAYING TDM must succeed');
+    assert.equal(p1.team, 'bravo');
+    assert.equal(p1.hp, 100, 'In-match team switch respawns player with full HP');
+    assert.ok(ioEvents.some((e) => e.event === 'teamSwitched' && e.data.playerId === p1.id && e.data.team === 'bravo'));
+    const blockedCooldown = rm.handleSwitchTeam(room, p1, { team: 'alpha' });
+    assert.equal(blockedCooldown.ok, false, 'Immediate repeat team switch must hit 2s cooldown');
+    assert.equal(blockedCooldown.error, 'cooldown');
+    p1.lastTeamSwitchAt = Date.now() - 2500;
+    assert.equal(rm.handleSwitchTeam(room, p1, { team: 'alpha' }).ok, true);
     assert.equal(p1.team, 'alpha');
-    assert.equal(p1.hp, 25, 'Rejected team switch must not heal or respawn player');
 
     // 5. Late joiner during PLAYING state joins smaller/balanced team and spawns immediately
     const join3 = rm.addHumanPlayer(sock3, { name: 'AlphaAlly', mode: 'private', roomCode: room.code, gameMode: 'tdm' });
@@ -2758,13 +2774,18 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
     assert.equal(p1.armor, 50, 'Armor pickup must grant 50 Kevlar armor');
     assert.equal(armorPack.active, false, 'Picked armor pack must enter cooldown');
 
-    // Verify Kevlar armor absorbs damage before HP
-    rm.applyDamageWithArmor(p1, 35);
-    assert.equal(p1.armor, 15, 'Armor must absorb initial 35 damage');
-    assert.equal(p1.hp, 100, 'HP must remain 100 while armor absorbs damage');
-    rm.applyDamageWithArmor(p1, 30);
-    assert.equal(p1.armor, 0, 'Remaining 15 armor depleted');
-    assert.equal(p1.hp, 85, 'Overflow 15 damage applied to HP');
+    // Verify CS2 proportional Kevlar armor mitigation (absorbed + hpLoss === totalDamage)
+    rm.applyDamageWithArmor(p1, 35); // default armorPen = 0.65 => 12 absorbed, 23 HP loss
+    assert.equal(p1.armor, 38, 'Proportional armor absorbs round(35 * 0.35) = 12');
+    assert.equal(p1.hp, 77, 'Remaining 23 damage penetrates Kevlar into HP');
+    rm.applyDamageWithArmor(p1, 30, 0.70); // 9 absorbed, 21 HP loss
+    assert.equal(p1.armor, 29, 'Armor drops by 9 under armorPen = 0.70');
+    assert.equal(p1.hp, 56, 'Remaining 21 damage penetrates to HP');
+    const brkTarget = { hp: 100, armor: 10 };
+    const brkRes = rm.applyDamageWithArmor(brkTarget, 100, 0.65);
+    assert.equal(brkRes.armorBroken, true, 'Breaking remaining armor reports armorBroken = true');
+    assert.equal(brkTarget.armor, 0);
+    assert.equal(brkTarget.hp, 10);
 
     // Speed & Damage pickups
     p1.x = speedPack.x;
@@ -2831,9 +2852,9 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
     assert.ok(ioEvents.some((e) => e.event === 'streakEvent' && e.data.type === 'shutdown'));
 
     // 5. Gunfight Overhaul: Armor hit & Armor break telemetry, Sprint-while-reloading & Armor hit audio
-    const breakRes = rm.applyDamageWithArmor(p2, 40);
+    const breakRes = rm.applyDamageWithArmor(p2, 80); // 80 * 0.35 = 28 -> capped at 25 armor, 55 HP loss
     assert.equal(breakRes.absorbed, 25);
-    assert.equal(breakRes.hpLoss, 15);
+    assert.equal(breakRes.hpLoss, 55);
     assert.equal(breakRes.armorBroken, true, 'Depleting armor from >0 to 0 must flag armorBroken=true');
 
     const game = createTestGame3D();
@@ -3287,6 +3308,216 @@ describe('7. UI Elements, Decluttered Text, Tactical Minimap Rendering & 3D Spat
       appState.game = prevGame;
       appState.socket = prevSocket;
     }
+  });
+});
+
+// ============================================================================
+// 8. ĐỢT 2: TDM TEAM SWITCHING, MATCH TIMER PRESETS/ADD-TIME & CS2 GUNFIGHT
+// ============================================================================
+describe('8. Dot 2: TDM Team Switch, Match Timer Presets/AddTime, Recoil Pull-Down, Tagging & CS2 Kevlar', () => {
+  it('AC-01/02: allows >6 players on one TDM team, supports in-match switch preserving stats/teamScores with 2s cooldown', () => {
+    const { rm, io } = createTestRoomManager();
+    const socks = Array.from({ length: 8 }, (_, i) => ({ id: `t_sw_${i}` }));
+    const res0 = rm.addHumanPlayer(socks[0], { name: 'AlphaLead', mode: 'private', gameMode: 'tdm', team: 'alpha' });
+    const room = res0.room;
+    const joined = [res0.player];
+    for (let i = 1; i < 8; i++) {
+      const r = rm.addHumanPlayer(socks[i], { name: `P${i}`, mode: 'private', roomCode: room.code, gameMode: 'tdm' });
+      joined.push(r.player);
+    }
+
+    // Move first 7 players onto alpha in WAITING (no 6-player balance cap)
+    for (let i = 0; i < 7; i++) {
+      const sw = rm.handleSwitchTeam(room, joined[i], { team: 'alpha' });
+      assert.equal(sw.ok, true, `Player ${i} must be allowed to stack onto alpha`);
+      assert.equal(joined[i].team, 'alpha');
+    }
+    const bravoSw = rm.handleSwitchTeam(room, joined[7], { team: 'bravo' });
+    assert.equal(bravoSw.ok, true);
+    assert.equal(rm.getTeamCounts(room).alpha, 7);
+    assert.equal(rm.getTeamCounts(room).bravo, 1);
+
+    // Host starts match; check in-match team switch preserves stats & teamScores, respawns cleanly & enforces 2s cooldown
+    const startRes = rm.handleStartTeamMatch(room, joined[0]);
+    assert.equal(startRes.ok, true);
+    assert.equal(room.state, 'PLAYING');
+
+    const mover = joined[1];
+    mover.kills = 4;
+    mover.deaths = 2;
+    mover.streak = 3;
+    mover.hp = 18;
+    mover.ammo = 2;
+    room.teamScores = { alpha: 9, bravo: 5 };
+    const epochBefore = mover.moveEpoch;
+
+    const inMatchSw = rm.handleSwitchTeam(room, mover, { team: 'bravo' });
+    assert.equal(inMatchSw.ok, true);
+    assert.equal(mover.team, 'bravo');
+    assert.equal(mover.kills, 4, 'kills must be preserved across team switch');
+    assert.equal(mover.deaths, 2, 'deaths must be preserved across team switch');
+    assert.equal(mover.streak, 3, 'streak must be preserved across team switch');
+    assert.deepEqual(room.teamScores, { alpha: 9, bravo: 5 }, 'teamScores must remain unchanged');
+    assert.equal(mover.hp, 100, 'in-match team switch must respawn at full HP');
+    assert.equal(mover.alive, true);
+    assert.ok(mover.moveEpoch > epochBefore, 'moveEpoch must increment on respawn');
+    assert.ok(mover.invulnerableUntil > Date.now(), 'respawn protection must activate');
+
+    const teamSwitchedEvt = io.roomEmitted.find((e) => e.event === 'teamSwitched' && e.payload.playerId === mover.id);
+    assert.ok(teamSwitchedEvt, 'teamSwitched must be broadcast');
+    assert.equal(teamSwitchedEvt.payload.team, 'bravo');
+
+    const rapidRepeat = rm.handleSwitchTeam(room, mover, { team: 'alpha' });
+    assert.equal(rapidRepeat.ok, false);
+    assert.equal(rapidRepeat.error, 'cooldown');
+
+    // Ended match & FFA reject team switching
+    room.state = 'ENDED';
+    mover.lastTeamSwitchAt = 0;
+    assert.equal(rm.handleSwitchTeam(room, mover, { team: 'alpha' }).error, 'match_ended');
+
+    const ffaJoin = rm.addHumanPlayer({ id: 'ffa_only' }, { name: 'FfaP', mode: 'private', gameMode: 'ffa' });
+    assert.equal(rm.handleSwitchTeam(ffaJoin.room, ffaJoin.player, { team: 'bravo' }).error, 'invalid_mode');
+  });
+
+  it('AC-03/04: validates room match duration presets (180/300/600/900), LAN URL duration round-trip, and host-only live addMatchTime', async () => {
+    const { buildLanCreateUrl, parseCreateParams, buildLanHostUrl, parseLanHostParams } = await import('../shared/lanUrl.js');
+    const createUrl = buildLanCreateUrl('http://192.168.1.10:3000', { name: 'Host', mapId: 'de_mirage', gameMode: 'tdm', matchDurationSec: 900 });
+    const parsedCreate = parseCreateParams(new URL(createUrl).search);
+    assert.equal(parsedCreate.matchDurationSec, 900);
+    const hostUrl = buildLanHostUrl('http://192.168.1.10:3000', { code: 'AB12CD', name: 'Host', mapId: 'de_dust2', gameMode: 'tdm', matchDurationSec: 600 });
+    const parsedHost = parseLanHostParams(new URL(hostUrl).search);
+    assert.equal(parsedHost.matchDurationSec, 600);
+    const fallbackUrl = buildLanCreateUrl('http://192.168.1.10:3000', { matchDurationSec: 99999 });
+    assert.equal(parseCreateParams(new URL(fallbackUrl).search).matchDurationSec, undefined);
+
+    const { rm, io } = createTestRoomManager();
+    const { room, player: host } = rm.addHumanPlayer({ id: 'h1' }, { name: 'Host', mode: 'private', gameMode: 'tdm', matchDurationSec: 600 });
+    const { player: guest } = rm.addHumanPlayer({ id: 'g1' }, { name: 'Guest', mode: 'private', roomCode: room.code, gameMode: 'tdm', team: 'bravo' });
+    assert.equal(room.matchDurationSec, 600);
+
+    // Non-host cannot change preset or add time
+    assert.equal(rm.handleSetMatchDuration(room, guest, { durationSec: 180 }).error, 'not_host');
+    // Invalid duration rejected
+    assert.equal(rm.handleSetMatchDuration(room, host, { durationSec: 450 }).error, 'invalid_duration');
+    // Host updates duration in WAITING
+    assert.equal(rm.handleSetMatchDuration(room, host, { durationSec: 180 }).ok, true);
+    assert.equal(room.matchDurationSec, 180);
+    assert.equal(rm.getTeamLobbyState(room).matchDurationSec, 180);
+    // addMatchTime rejected before PLAYING
+    assert.equal(rm.handleAddMatchTime(room, host, { addSec: 60 }).error, 'not_playing');
+
+    rm.handleStartTeamMatch(room, host);
+    assert.equal(rm.handleSetMatchDuration(room, host, { durationSec: 300 }).error, 'match_in_progress');
+    assert.equal(rm.handleAddMatchTime(room, guest, { addSec: 60 }).error, 'not_host');
+    assert.equal(rm.handleAddMatchTime(room, host, { addSec: 120 }).error, 'invalid_add_time');
+
+    const beforeEnds = room.matchEndsAt;
+    const addRes = rm.handleAddMatchTime(room, host, { addSec: 300 });
+    assert.equal(addRes.ok, true);
+    assert.equal(addRes.addedSec, 300);
+    assert.ok(room.matchEndsAt >= beforeEnds + 299_000 && room.matchEndsAt <= beforeEnds + 301_000);
+    assert.ok(io.roomEmitted.some((e) => e.event === 'matchTimeUpdated' && e.payload.addedSec === 300));
+
+    // Cap remaining time at MAX_MATCH_REMAINING_SEC (3600s)
+    room.matchEndsAt = Date.now() + 3500 * 1000;
+    const capRes = rm.handleAddMatchTime(room, host, { addSec: 300 });
+    assert.equal(capRes.ok, true);
+    assert.ok(capRes.timeRemaining <= MATCH_CONFIG.MAX_MATCH_REMAINING_SEC);
+  });
+
+  it('AC-05: recoil pull-down compensation drains pendingRecoilPitch then accumulatedRecoilPitch 1:1 without upward pull cancellation', () => {
+    const game = createTestGame3D();
+    game.inMatch = true;
+    game.alive = true;
+    game.isPointerLocked = true;
+    game.sensitivity = 1.0;
+    game.isAiming = false;
+    game.pitch = 0.25;
+    game.pendingRecoilPitch = 0.04;
+    game.accumulatedRecoilPitch = 0.08;
+
+    // Pull mouse down (movementY > 0 => dy < 0): rad = 25 * 0.0021 = 0.0525 rad down
+    window.dispatchEvent({ type: 'mousemove', movementX: 0, movementY: 25 });
+    // 0.0525 drains 0.04 pending first, leaving 0.0125 to cut accumulatedRecoilPitch from 0.08 to 0.0675
+    assert.ok(Math.abs(game.pendingRecoilPitch - 0) < 1e-6, 'pendingRecoilPitch must drain first');
+    assert.ok(Math.abs(game.accumulatedRecoilPitch - 0.0675) < 1e-6, 'remaining downward pull cancels accumulatedRecoilPitch 1:1');
+
+    // Flick mouse UP (movementY < 0 => dy > 0): must NOT drain accumulatedRecoilPitch
+    window.dispatchEvent({ type: 'mousemove', movementX: 0, movementY: -30 });
+    assert.ok(Math.abs(game.accumulatedRecoilPitch - 0.0675) < 1e-6, 'upward pull must not cancel recoil recovery');
+  });
+
+  it('AC-06/07: enforces server-authoritative bullet tagging, proportional Kevlar armor & tightened head hitbox', async () => {
+    const { BTN, buildInputCommand, commandToMovementInput } = await import('../shared/netcode.js');
+    const { rm, io } = createTestRoomManager();
+    const s1 = { id: 'tag_atk' };
+    const s2 = { id: 'tag_vic' };
+    const { room, player: atk } = rm.addHumanPlayer(s1, { name: 'Atk', mode: 'private', weapon: 'm4a1' });
+    const { player: vic } = rm.addHumanPlayer(s2, { name: 'Vic', mode: 'private', roomCode: room.code });
+    atk.invulnerableUntil = 0;
+    vic.invulnerableUntil = 0;
+    vic.armor = 50;
+    vic.hp = 100;
+    placeServerSide(atk, 0, 0, -13.5);
+    placeServerSide(vic, 0, 0, -21.5);
+    vic.yaw = 0;
+    recordPlayerSnapshot(vic, Date.now());
+
+    // Grazing shot outside tightened 0.14m + 0.03m = 0.17m padded head half-width misses completely
+    const grazing = raycastPlayerHitbox({ x: 0.21, y: 1.74, z: -13.5 }, { x: 0, y: 0, z: -1 }, vic, 50);
+    assert.equal(grazing, null, 'Tightened head hitbox must reject 0.21m grazing ray');
+
+    // Bullet torso hit sets taggedUntil & emits taggedMs > 0
+    rm.handleShoot(room, atk, { weapon: 'm4a1', dir: { x: 0, y: -0.052, z: -1 } });
+    assert.ok(vic.taggedUntil > Date.now(), 'Ranged hit on live target must apply server taggedUntil');
+    const dmgEvt = io.roomEmitted.find((e) => e.event === 'damageDealt' && e.payload.targetId === vic.id);
+    assert.ok(dmgEvt && dmgEvt.payload.taggedMs > 0, 'damageDealt must include taggedMs');
+
+    // Client tries to spoof tagged: false & sprint: true, but applyInputCommand enforces server BTN.TAGGED (cancels sprint & scales speed to 0.58x)
+    const { player: ctrl } = rm.addHumanPlayer({ id: 'tag_ctrl' }, { name: 'Ctrl', mode: 'private', roomCode: room.code });
+    ctrl.invulnerableUntil = 0;
+    const stepNow = Date.now();
+    placeServerSide(vic, 0, 0, -15);
+    placeServerSide(ctrl, 2, 0, -15);
+    rm.resetPlayerMovement(vic, stepNow);
+    rm.resetPlayerMovement(ctrl, stepNow);
+    const openMapCfg = { obstacles: [], arenaHalfSize: 80, jumpPads: [] };
+    for (let s = 1; s <= 30; s++) {
+      const spoofCmd = buildInputCommand(s, { moveForward: 1, wantsSprint: true, weapon: 'rifle', tagged: false });
+      rm.applyInputCommand(vic, spoofCmd, openMapCfg, stepNow);
+      rm.applyInputCommand(ctrl, spoofCmd, openMapCfg, stepNow);
+    }
+    const taggedSpeed = Math.hypot(vic.vx, vic.vz);
+    const ctrlSpeed = Math.hypot(ctrl.vx, ctrl.vz);
+    assert.ok(ctrlSpeed > 0 && taggedSpeed > 0, 'Both players must accelerate');
+    assert.ok(taggedSpeed < ctrlSpeed * 0.6,
+      `Tagged movement speed (${taggedSpeed.toFixed(2)}) must be much slower than untagged sprint (${ctrlSpeed.toFixed(2)})`);
+
+    // Direct stepPlayerMovement comparison: tagged vs untagged sprint
+    const cleanIn = commandToMovementInput(buildInputCommand(2, { moveForward: 1, wantsSprint: true, weapon: 'rifle', tagged: false }), {});
+    const taggedIn = commandToMovementInput(buildInputCommand(3, { moveForward: 1, wantsSprint: true, weapon: 'rifle', tagged: true }), {});
+    assert.equal(cleanIn.tagged, false);
+    assert.equal(taggedIn.tagged, true);
+    assert.ok((BTN.TAGGED & 256) === 256);
+
+    // Respawn clears taggedUntil, and knife does not apply bullet tagging
+    rm.respawnPlayer(room, vic);
+    assert.equal(vic.taggedUntil, 0);
+    placeServerSide(atk, 0, 0, -20.0);
+    placeServerSide(vic, 0, 0, -21.5);
+    vic.yaw = 0;
+    atk.lastShotAt = 0;
+    vic.invulnerableUntil = 0;
+    recordPlayerSnapshot(vic, Date.now());
+    rm.handleShoot(room, atk, { weapon: 'knife', dir: { x: 0, y: -0.1, z: -1 } });
+    assert.equal(vic.taggedUntil, 0, 'Melee knife hit must not apply bullet tagging');
+
+    // Sniper (AWM) 1-taps armored body (112 dmg, armorPen 0.975 => 3 absorbed, 109 HP loss >= 100)
+    const armoredTarget = { hp: 100, armor: 50 };
+    const awmBody = rm.applyDamageWithArmor(armoredTarget, WEAPONS.sniper.damage, WEAPONS.sniper.armorPen);
+    assert.equal(awmBody.hpLoss, 109);
+    assert.equal(armoredTarget.hp, 0);
   });
 });
 

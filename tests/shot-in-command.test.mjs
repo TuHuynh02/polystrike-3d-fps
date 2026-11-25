@@ -305,7 +305,8 @@ describe('(c) & (d) FIRE command authority: smuggled fields ignored, spread cann
     shooter.moveCredit = 1;
     rm.handleInputBatch(room, shooter, { e: shooter.moveEpoch, cmds: [hitCmd] }, now0 + 250);
     rm.processPlayerInputs(room, shooter, now0 + 250);
-    assert.equal(target.hp, 100 - Math.round(WEAPONS.m4a1.damage * WEAPONS.m4a1.headshotMult));
+    assert.equal(target.hp, Math.max(0, 100 - Math.round(WEAPONS.m4a1.damage * WEAPONS.m4a1.headshotMult)));
+    assert.equal(target.alive, false);
   });
 
   it('computes non-zero spread from server movement/airborne state regardless of client claims', () => {

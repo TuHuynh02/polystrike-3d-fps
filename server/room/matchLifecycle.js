@@ -69,6 +69,7 @@ import {
   sanitizeGameMode,
   sanitizeLoadout,
   sanitizeMapId,
+  sanitizeMatchDuration,
   sanitizeName,
   sanitizeRoomCode,
   sanitizeTeam
@@ -166,9 +167,11 @@ export class MatchLifecycleMethods {
   startNewMatch(room) {
     const now = Date.now();
     const isTdm = room.gameMode === 'tdm';
+    const durSec = sanitizeMatchDuration(room.matchDurationSec);
+    room.matchDurationSec = durSec;
     room.state = 'PLAYING';
     room.matchStartedAt = now;
-    room.matchEndsAt = now + MATCH_CONFIG.MATCH_DURATION_SEC * 1000;
+    room.matchEndsAt = now + durSec * 1000;
     room.nextMatchAt = 0;
     room.killLimit = isTdm ? (MATCH_CONFIG.TDM_KILL_LIMIT || 30) : (MATCH_CONFIG.KILL_LIMIT || 20);
     room.teamScores = { alpha: 0, bravo: 0 };
@@ -210,7 +213,9 @@ export class MatchLifecycleMethods {
       mapId: room.mapId,
       gameMode: room.gameMode || 'ffa',
       state: room.state,
-      timeRemaining: MATCH_CONFIG.MATCH_DURATION_SEC,
+      hostId: room.hostId,
+      matchDurationSec: durSec,
+      timeRemaining: durSec,
       killLimit: room.killLimit,
       teamScores: isTdm ? { ...room.teamScores } : undefined,
       pickups: room.pickups,
@@ -485,7 +490,7 @@ export class MatchLifecycleMethods {
         maxPlayers: MATCH_CONFIG.MAX_PLAYERS,
         state: room.state,
         timeRemaining: room.state === 'WAITING'
-          ? MATCH_CONFIG.MATCH_DURATION_SEC
+          ? sanitizeMatchDuration(room.matchDurationSec)
           : Math.max(0, Math.ceil((room.matchEndsAt - Date.now()) / 1000))
       });
     }

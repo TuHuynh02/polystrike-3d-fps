@@ -29,18 +29,27 @@ function cleanName(raw) {
   return String(raw ?? '').replace(/[<>&"'`]/g, '').trim().slice(0, 16);
 }
 
-/** URL on the LAN server that creates a private room with the player's name / map / mode. */
-export function buildLanCreateUrl(lanUrl, { name = '', mapId = '', gameMode = 'ffa' } = {}) {
+const VALID_DURATIONS = new Set([180, 300, 600, 900]);
+
+function cleanDurationSec(raw) {
+  const n = Number(raw);
+  return VALID_DURATIONS.has(n) ? n : null;
+}
+
+/** URL on the LAN server that creates a private room with the player's name / map / mode / optional duration. */
+export function buildLanCreateUrl(lanUrl, { name = '', mapId = '', gameMode = 'ffa', matchDurationSec = null } = {}) {
   const url = new URL('/', lanUrl);
   url.searchParams.set(CREATE_PARAM, 'private');
   const n = cleanName(name);
   if (n) url.searchParams.set('name', n);
   if (/^[a-z0-9_]{1,32}$/i.test(mapId)) url.searchParams.set('map', mapId);
   url.searchParams.set('mode', gameMode === 'tdm' ? 'tdm' : 'ffa');
+  const dur = cleanDurationSec(matchDurationSec);
+  if (dur) url.searchParams.set('duration', String(dur));
   return url.toString();
 }
 
-/** `?create=private&name=&map=&mode=` -> { name, mapId, gameMode } or null when the page was not opened for creating a room. */
+/** `?create=private&name=&map=&mode=&duration=` -> { name, mapId, gameMode, matchDurationSec? } or null. */
 export function parseCreateParams(search) {
   let params;
   try {
@@ -50,11 +59,14 @@ export function parseCreateParams(search) {
   }
   if (params.get(CREATE_PARAM) !== 'private') return null;
   const map = params.get('map') || '';
-  return {
+  const dur = cleanDurationSec(params.get('duration'));
+  const out = {
     name: cleanName(params.get('name')),
     mapId: /^[a-z0-9_]{1,32}$/i.test(map) ? map : '',
     gameMode: params.get('mode') === 'tdm' ? 'tdm' : 'ffa'
   };
+  if (dur) out.matchDurationSec = dur;
+  return out;
 }
 
 // ---- In-browser LAN rooms (a player's browser hosts the game, guests join through WebRTC) ----
@@ -78,17 +90,19 @@ function cleanCode(raw) {
   return String(raw ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
 }
 
-export function buildLanHostUrl(origin, { code, name = '', mapId = '', gameMode = 'ffa' } = {}) {
+export function buildLanHostUrl(origin, { code, name = '', mapId = '', gameMode = 'ffa', matchDurationSec = null } = {}) {
   const url = new URL('/', origin);
   url.searchParams.set(LAN_HOST_PARAM, cleanCode(code));
   const n = cleanName(name);
   if (n) url.searchParams.set('name', n);
   if (/^[a-z0-9_]{1,32}$/i.test(mapId)) url.searchParams.set('map', mapId);
   url.searchParams.set('mode', gameMode === 'tdm' ? 'tdm' : 'ffa');
+  const dur = cleanDurationSec(matchDurationSec);
+  if (dur) url.searchParams.set('duration', String(dur));
   return url.toString();
 }
 
-/** `?lanhost=CODE&name=&map=&mode=` -> { code, name, mapId, gameMode } or null. */
+/** `?lanhost=CODE&name=&map=&mode=&duration=` -> { code, name, mapId, gameMode, matchDurationSec? } or null. */
 export function parseLanHostParams(search) {
   let params;
   try {
@@ -99,12 +113,15 @@ export function parseLanHostParams(search) {
   const code = cleanCode(params.get(LAN_HOST_PARAM));
   if (code.length !== 6) return null;
   const map = params.get('map') || '';
-  return {
+  const dur = cleanDurationSec(params.get('duration'));
+  const out = {
     code,
     name: cleanName(params.get('name')),
     mapId: /^[a-z0-9_]{1,32}$/i.test(map) ? map : '',
     gameMode: params.get('mode') === 'tdm' ? 'tdm' : 'ffa'
   };
+  if (dur) out.matchDurationSec = dur;
+  return out;
 }
 
 /** `?room=CODE&lan=1` -> { code } or null. */

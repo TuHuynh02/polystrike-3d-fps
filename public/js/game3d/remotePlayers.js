@@ -72,6 +72,22 @@ export class RemotePlayersMethods {
     this.rebuildHitboxList();
   }
 
+  applyRemoteTeamSwitch(playerId, team, color) {
+    if (!playerId) return;
+    if (playerId === this.localId) {
+      this.setTeamState(this.gameMode, team || null);
+      return;
+    }
+    const rp = this.remotePlayers?.get(playerId);
+    if (!rp) return;
+    rp.team = team || null;
+    if (color !== undefined && color !== rp._soldierColorHex) {
+      rp.setOperatorColor?.(color);
+    }
+    const isTeammate = Boolean(this.gameMode === 'tdm' && this.localTeam && rp.team && rp.team === this.localTeam);
+    rp.setTeammateTag?.(isTeammate);
+  }
+
   createRemotePlayerMesh(playerData = {}, options = {}) {
     const isTeammate = options.isTeammate !== undefined
       ? Boolean(options.isTeammate)

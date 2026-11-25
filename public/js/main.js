@@ -165,6 +165,7 @@ import {
   applyRestoredUserPrefs,
   initLanServerRoom,
   initLobbyAndModalListeners,
+  syncPauseModalTacticalControls,
   toggleLoadoutModal
 } from './ui/lobbyAndModals.js';
 import { handleTeamLobbyState, initSocketEvents } from './ui/socketEvents.js';
@@ -439,6 +440,7 @@ const game = appState.game = new Game3D(canvasContainer, {
     if (!appState.game.inMatch) return;
     const isLoadoutOpen = loadoutModal && !loadoutModal.classList.contains('hidden');
     if (!locked && matchEndModal.classList.contains('hidden') && deathOverlay.classList.contains('hidden') && !isLoadoutOpen) {
+      syncPauseModalTacticalControls();
       pauseModal.classList.remove('hidden');
     } else if (locked) {
       pauseModal.classList.add('hidden');
@@ -447,6 +449,12 @@ const game = appState.game = new Game3D(canvasContainer, {
   },
   onLoadoutToggle: () => {
     toggleLoadoutModal();
+  },
+  onTeamSwitchShortcut: () => {
+    if (!appState.game?.inMatch || appState.currentRoomGameMode !== 'tdm') return;
+    if (!teamLobbyModal?.classList.contains('hidden')) return;
+    if (!matchEndModal?.classList.contains('hidden')) return;
+    appState.socket?.emit?.('switchTeam', {});
   },
   onThrowGrenade: (payload) => {
     handleThrowGrenadeRequest(payload);

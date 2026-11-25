@@ -27,9 +27,10 @@ export const BTN = Object.freeze({
   AIM: 16,
   ADS_HELD: 32,
   FIRE: 64, // the weapon fires on this step; the command then carries the shot sequence `ss`
-  SPEED_BOOST: 128 // active speed boost power-up multiplier (validated server-side)
+  SPEED_BOOST: 128, // active speed boost power-up multiplier (validated server-side)
+  TAGGED: 256 // server-authoritative bullet tagging movement slow
 });
-export const BTN_MASK = 255;
+export const BTN_MASK = 511;
 
 // ---- Shots inside the command stream (server-resolved, see shared/spread.js + RoomManager.processFireCommand) ----
 /** A shot is accepted when the SIM time since the previous accepted shot is at least this fraction of the fire interval. */
@@ -94,6 +95,7 @@ export function buildInputCommand(seq, f) {
   if (f.isAiming) btn |= BTN.AIM;
   if (f.isAdsHeld) btn |= BTN.ADS_HELD;
   if (f.speedBoost) btn |= BTN.SPEED_BOOST;
+  if (f.tagged) btn |= BTN.TAGGED;
   const fire = Boolean(f.fire) && Number.isSafeInteger(f.shotSeq) && f.shotSeq > 0 && f.shotSeq <= MAX_SHOT_SEQ;
   if (fire) btn |= BTN.FIRE;
   const cmd = {
@@ -154,6 +156,7 @@ export function commandToMovementInput(cmd, out = {}) {
   out.inputEnabled = true; // commands are only produced while the client accepts input (jump is gated by the client)
   out.isAiming = (btn & BTN.AIM) !== 0;
   out.isAdsHeld = (btn & BTN.ADS_HELD) !== 0;
+  out.tagged = (btn & BTN.TAGGED) !== 0;
   const baseMoveMult = WEAPONS[cmd.w]?.moveSpeedMult || 1;
   out.weaponMoveMult = (btn & BTN.SPEED_BOOST) !== 0
     ? baseMoveMult * (MATCH_CONFIG.SPEED_BOOST_MULT || 1.3)

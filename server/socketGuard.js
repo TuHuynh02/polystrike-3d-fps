@@ -15,6 +15,8 @@ export const RATE_LIMITS = Object.freeze({
   switchTeam: { rate: 2, burst: 4 },
   setTeamReady: { rate: 2, burst: 4 },
   startTeamMatch: { rate: 1, burst: 3 },
+  setMatchDuration: { rate: 1, burst: 3 },
+  addMatchTime: { rate: 1, burst: 4 },
   leaveRoom: { rate: 2, burst: 4 },
   pingCheck: { rate: 5, burst: 10 },
   default: { rate: 20, burst: 30 }

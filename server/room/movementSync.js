@@ -428,6 +428,7 @@ export class MovementSyncMethods {
       armor: Number.isFinite(player.armor) ? player.armor : 0,
       speedBoostMs: (player.alive && player.speedBoostUntil > now) ? Math.max(0, Math.round(player.speedBoostUntil - now)) : 0,
       damageBoostMs: (player.alive && player.damageBoostUntil > now) ? Math.max(0, Math.round(player.damageBoostUntil - now)) : 0,
+      taggedMs: (player.alive && player.taggedUntil > now) ? Math.max(0, Math.round(player.taggedUntil - now)) : 0,
       alive: Boolean(player.alive),
       weapon,
       ammo,
@@ -445,7 +446,7 @@ export class MovementSyncMethods {
     const ammo = player.ammoByWeapon?.[w] ?? player.ammo ?? 0;
     const res = player.reserveAmmoByWeapon?.[w] ?? player.reserveAmmo ?? 0;
     const rel = player.alive && player.reloadingUntil ? `${player.reloadWeapon || w}/${player.reloadingUntil | 0}` : '0';
-    return `${player.hp}:${player.armor || 0}:${player.speedBoostUntil || 0}:${player.damageBoostUntil || 0}:${player.alive ? 1 : 0}:${w}:${ammo}:${res}:${rel}:${player.grenades ?? 1}`;
+    return `${player.hp}:${player.armor || 0}:${player.speedBoostUntil || 0}:${player.damageBoostUntil || 0}:${player.taggedUntil || 0}:${player.alive ? 1 : 0}:${w}:${ammo}:${res}:${rel}:${player.grenades ?? 1}`;
   }
 
   /** Sends the owner-only `selfState` snapshot to `player.id` (never broadcast to the room). */
@@ -622,10 +623,12 @@ export class MovementSyncMethods {
     if (cmd.w && cmd.w !== player.weapon && this.isWeaponAllowed(player, cmd.w)) {
       this.switchPlayerWeapon(player, cmd.w);
     }
-    // Movement speed follows the weapon the server knows about, and BTN.SPEED_BOOST is only allowed when speedBoostUntil is active
+    // Movement speed follows the weapon the server knows about, and BTN.SPEED_BOOST / BTN.TAGGED are server-authoritative
     const hasSpeedBuff = Boolean(player.speedBoostUntil && player.speedBoostUntil > nowWall - 750);
     const wantsBoostBtn = (cmd.btn & BTN.SPEED_BOOST) !== 0;
-    const cleanBtn = (wantsBoostBtn && !hasSpeedBuff) ? (cmd.btn & ~BTN.SPEED_BOOST) : cmd.btn;
+    let cleanBtn = (wantsBoostBtn && !hasSpeedBuff) ? (cmd.btn & ~BTN.SPEED_BOOST) : cmd.btn;
+    const isServerTagged = Boolean(player.taggedUntil && player.taggedUntil > nowWall);
+    cleanBtn = isServerTagged ? (cleanBtn | BTN.TAGGED) : (cleanBtn & ~BTN.TAGGED);
     const stepCmd = (cmd.w === player.weapon && cleanBtn === cmd.btn)
       ? cmd
       : { ...cmd, w: player.weapon, btn: cleanBtn };

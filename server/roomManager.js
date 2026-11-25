@@ -30,9 +30,11 @@ import {
   createInitialAmmoMap,
   createInitialReserveAmmoMap,
   generateRoomCode,
+  sanitizeAddTimeSec,
   sanitizeGameMode,
   sanitizeLoadout,
   sanitizeMapId,
+  sanitizeMatchDuration,
   sanitizeName,
   sanitizeRoomCode,
   sanitizeTeam
@@ -160,10 +162,11 @@ export class RoomManager {
     }
   }
 
-  createRoom(code, isPublic = true, mapId = DEFAULT_MAP_ID, gameMode = 'ffa') {
+  createRoom(code, isPublic = true, mapId = DEFAULT_MAP_ID, gameMode = 'ffa', matchDurationSec = MATCH_CONFIG.MATCH_DURATION_SEC) {
     const roomCode = code || generateRoomCode(this.rooms);
     const cleanMapId = sanitizeMapId(mapId);
     const cleanGameMode = sanitizeGameMode(gameMode);
+    const cleanDurationSec = sanitizeMatchDuration(matchDurationSec);
     const isTdm = cleanGameMode === 'tdm';
     const now = Date.now();
 
@@ -173,8 +176,9 @@ export class RoomManager {
       mapId: cleanMapId,
       gameMode: cleanGameMode,
       state: isTdm ? 'WAITING' : 'PLAYING', // 'WAITING' | 'PLAYING' | 'ENDED'
+      matchDurationSec: cleanDurationSec,
       matchStartedAt: now,
-      matchEndsAt: now + MATCH_CONFIG.MATCH_DURATION_SEC * 1000,
+      matchEndsAt: now + cleanDurationSec * 1000,
       nextMatchAt: 0,
       killLimit: isTdm ? (MATCH_CONFIG.TDM_KILL_LIMIT || 30) : (MATCH_CONFIG.KILL_LIMIT || 20),
       teamScores: { alpha: 0, bravo: 0 },
@@ -191,7 +195,7 @@ export class RoomManager {
     return room;
    }
 
-  findOrCreatePublicRoom(preferredMapId = null, gameMode = 'ffa') {
+  findOrCreatePublicRoom(preferredMapId = null, gameMode = 'ffa', matchDurationSec = null) {
     const cleanMapId = preferredMapId ? sanitizeMapId(preferredMapId) : null;
     const cleanGameMode = sanitizeGameMode(gameMode);
 
@@ -210,18 +214,18 @@ export class RoomManager {
     const defaultCode = (cleanGameMode === 'ffa' && !this.rooms.has('PUB001'))
       ? 'PUB001'
       : generateRoomCode(this.rooms);
-    return this.createRoom(defaultCode, true, cleanMapId || DEFAULT_MAP_ID, cleanGameMode);
+    return this.createRoom(defaultCode, true, cleanMapId || DEFAULT_MAP_ID, cleanGameMode, matchDurationSec ?? MATCH_CONFIG.MATCH_DURATION_SEC);
   }
 
-  getOrCreateRoomByCode(rawCode, isPublic = false, mapId = DEFAULT_MAP_ID, gameMode = 'ffa') {
+  getOrCreateRoomByCode(rawCode, isPublic = false, mapId = DEFAULT_MAP_ID, gameMode = 'ffa', matchDurationSec = null) {
     const code = sanitizeRoomCode(rawCode);
     if (code && this.rooms.has(code)) {
       return this.rooms.get(code);
     }
-    return this.createRoom(code || generateRoomCode(this.rooms), isPublic, mapId, gameMode);
+    return this.createRoom(code || generateRoomCode(this.rooms), isPublic, mapId, gameMode, matchDurationSec ?? MATCH_CONFIG.MATCH_DURATION_SEC);
   }
 
-  addHumanPlayer(socket, { name, roomCode, mode, weapon, loadout, mapId, gameMode, team } = {}) {
+  addHumanPlayer(socket, { name, roomCode, mode, weapon, loadout, mapId, gameMode, team, matchDurationSec } = {}) {
     installSmartVolatile(socket);
     const cleanName = sanitizeName(name);
     const requestedCode = sanitizeRoomCode(roomCode);
@@ -232,11 +236,11 @@ export class RoomManager {
 
     let room;
     if (requestedCode) {
-      room = this.getOrCreateRoomByCode(requestedCode, mode === 'public', cleanMapId, cleanGameMode);
+      room = this.getOrCreateRoomByCode(requestedCode, mode === 'public', cleanMapId, cleanGameMode, matchDurationSec);
     } else if (mode === 'private') {
-      room = this.createRoom(generateRoomCode(this.rooms), false, cleanMapId, cleanGameMode);
+      room = this.createRoom(generateRoomCode(this.rooms), false, cleanMapId, cleanGameMode, matchDurationSec ?? MATCH_CONFIG.MATCH_DURATION_SEC);
     } else {
-      room = this.findOrCreatePublicRoom(cleanMapId, cleanGameMode);
+      room = this.findOrCreatePublicRoom(cleanMapId, cleanGameMode, matchDurationSec);
     }
 
     // Check human capacity
@@ -257,6 +261,11 @@ export class RoomManager {
         room.killLimit = cleanGameMode === 'tdm' ? (MATCH_CONFIG.TDM_KILL_LIMIT || 30) : (MATCH_CONFIG.KILL_LIMIT || 20);
         room.teamScores = { alpha: 0, bravo: 0 };
         room.state = cleanGameMode === 'tdm' ? 'WAITING' : 'PLAYING';
+      }
+      if (matchDurationSec !== undefined) {
+        const cleanDur = sanitizeMatchDuration(matchDurationSec);
+        room.matchDurationSec = cleanDur;
+        room.matchEndsAt = Date.now() + cleanDur * 1000;
       }
     }
 
@@ -304,6 +313,8 @@ export class RoomManager {
       armor: 0,
       speedBoostUntil: 0,
       damageBoostUntil: 0,
+      taggedUntil: 0,
+      lastTeamSwitchAt: 0,
       multiKillCount: 0,
       lastKillAt: 0,
       alive: !isWaiting,

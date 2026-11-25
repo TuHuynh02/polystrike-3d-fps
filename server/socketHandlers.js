@@ -55,7 +55,7 @@ export function attachGameSocketHandlers({ socket, roomManager, lanSignaling }) 
       roomManager.startLatencyProbe(socket, player); // server-measured RTT for lag compensation (stopped in removePlayer)
 
       const timeRemaining = room.state === 'WAITING'
-        ? MATCH_CONFIG.MATCH_DURATION_SEC
+        ? (room.matchDurationSec || MATCH_CONFIG.MATCH_DURATION_SEC)
         : Math.max(0, Math.ceil((room.matchEndsAt - Date.now()) / 1000));
       const mapCfg = getMapConfig(room.mapId);
 
@@ -66,6 +66,7 @@ export function attachGameSocketHandlers({ socket, roomManager, lanSignaling }) 
         gameMode: room.gameMode || 'ffa',
         state: room.state,
         hostId: room.hostId,
+        matchDurationSec: room.matchDurationSec || MATCH_CONFIG.MATCH_DURATION_SEC,
         teamScores: room.teamScores || { alpha: 0, bravo: 0 },
         mapId: room.mapId,
         mapName: mapCfg.name,
@@ -253,6 +254,38 @@ export function attachGameSocketHandlers({ socket, roomManager, lanSignaling }) 
       });
     }
   }, { expectObject: false });
+
+  on('setMatchDuration', (payload) => {
+    if (!currentRoomCode) return;
+    const room = roomManager.rooms.get(currentRoomCode);
+    if (!room) return;
+    const player = room.players.get(socket.id);
+    if (!player) return;
+    const result = roomManager.handleSetMatchDuration(room, player, payload || {});
+    if (!result.ok) {
+      socket.emit('actionDenied', {
+        action: 'setMatchDuration',
+        reason: result.error,
+        message: result.message || result.error
+      });
+    }
+  });
+
+  on('addMatchTime', (payload) => {
+    if (!currentRoomCode) return;
+    const room = roomManager.rooms.get(currentRoomCode);
+    if (!room) return;
+    const player = room.players.get(socket.id);
+    if (!player) return;
+    const result = roomManager.handleAddMatchTime(room, player, payload || {});
+    if (!result.ok) {
+      socket.emit('actionDenied', {
+        action: 'addMatchTime',
+        reason: result.error,
+        message: result.message || result.error
+      });
+    }
+  });
 
   on('pingCheck', (clientSentAt, ack) => {
     if (typeof ack === 'function') {

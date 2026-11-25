@@ -253,6 +253,59 @@
   min-width: 132px;
 }
 
+.pause-tactical-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.pause-tactical-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-family: var(--font-label);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--bone);
+}
+
+.pause-tactical-sub {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--steel);
+}
+
+.pause-add-time-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.add-time-pill-btn {
+  min-height: 30px;
+  padding: 4px 8px;
+  background: rgba(14, 20, 28, 0.72);
+  border: 1px solid rgba(255, 179, 71, 0.38);
+  border-radius: 0;
+  color: var(--signal);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+
+.add-time-pill-btn:hover {
+  border-color: var(--signal);
+  background: rgba(255, 179, 71, 0.16);
+}
+
 /* 3. [B] ARMORY LOADOUT MODAL */
 .loadout-card {
   width: min(840px, 95vw);
@@ -646,6 +699,41 @@
   font-size: 0.72rem;
   color: var(--bone-dim);
   text-align: center;
+}
+
+.team-lobby-duration-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  margin-bottom: 10px;
+  background: rgba(18, 22, 26, 0.85);
+  border: 1px solid var(--line);
+}
+
+.team-lobby-duration-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-label);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--bone);
+}
+
+.team-lobby-duration-label small {
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  color: var(--steel);
+}
+
+.team-lobby-duration-bar .duration-select-grid {
+  width: min(300px, 55%);
 }
 
 .team-lobby-actions {

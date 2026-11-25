@@ -488,12 +488,21 @@ export class CombatSystemMethods {
     return { origin, dirs, hitPoint: firstEnd, hits, damage: damageMap };
   }
 
-  applyDamageWithArmor(target, rawDamage) {
+  applyDamageWithArmor(target, rawDamage, armorPen = 0.65) {
     const total = Math.max(0, Math.round(Number(rawDamage) || 0));
+    if (total === 0) {
+      return { total: 0, absorbed: 0, hpLoss: 0, armorBroken: false };
+    }
     const curArmor = Math.max(0, Number(target.armor) || 0);
-    const absorbed = Math.min(curArmor, total);
-    const hpLoss = total - absorbed;
-    target.armor = curArmor - absorbed;
+    if (curArmor <= 0) {
+      target.hp = Math.max(0, (Number(target.hp) || 0) - total);
+      return { total, absorbed: 0, hpLoss: total, armorBroken: false };
+    }
+    const rawPen = Number(armorPen);
+    const pen = Math.max(0, Math.min(1, Number.isFinite(rawPen) ? rawPen : 0.65));
+    const absorbed = Math.min(curArmor, Math.round(total * (1 - pen)));
+    const hpLoss = Math.max(0, total - absorbed);
+    target.armor = Math.max(0, curArmor - absorbed);
     target.hp = Math.max(0, (Number(target.hp) || 0) - hpLoss);
     const armorBroken = curArmor > 0 && target.armor === 0;
     return { total, absorbed, hpLoss, armorBroken };
@@ -513,12 +522,19 @@ export class CombatSystemMethods {
       });
     }
 
+    const weaponCfg = WEAPONS[weaponId];
     for (const [targetId, info] of damageMap.entries()) {
       const target = room.players.get(targetId);
       if (!target || !target.alive) continue;
       if (target.invulnerableUntil && now < target.invulnerableUntil) continue;
 
-      const dmgRes = this.applyDamageWithArmor(target, info.totalDamage);
+      const dmgRes = this.applyDamageWithArmor(target, info.totalDamage, weaponCfg?.armorPen ?? 0.65);
+      let taggedMs = 0;
+      if (!weaponCfg?.isMelee && info.totalDamage > 0 && target.hp > 0) {
+        const tagDuration = MATCH_CONFIG.TAGGING_DURATION_MS || 220;
+        target.taggedUntil = Math.max(target.taggedUntil || 0, now + tagDuration);
+        taggedMs = Math.max(0, Math.round(target.taggedUntil - now));
+      }
 
       this.io.to(room.code).emit('damageDealt', {
         targetId: target.id,
@@ -531,7 +547,8 @@ export class CombatSystemMethods {
         hp: target.hp,
         armor: target.armor || 0,
         isHeadshot: info.anyHeadshot,
-        isWallbang: Boolean(info.anyWallbang)
+        isWallbang: Boolean(info.anyWallbang),
+        taggedMs
       });
 
       if (target.hp <= 0) {
@@ -620,6 +637,7 @@ export class CombatSystemMethods {
     victim.armor = 0;
     victim.speedBoostUntil = 0;
     victim.damageBoostUntil = 0;
+    victim.taggedUntil = 0;
     victim.multiKillCount = 0;
     victim.lastKillAt = 0;
     victim.isAiming = false;

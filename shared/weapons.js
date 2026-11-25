@@ -17,12 +17,13 @@ export const WEAPONS = {
     category: 'AR',
     categoryLabel: 'ASSAULT RIFLE',
     name: 'AK-47',
-    role: 'AK-47 Chuẩn Tầm Trung/Xa • 2-Tap Headshot (51 DMG), 6 Viên Ngực, Độ Giật Chuẩn Valorant',
+    role: 'AK-47 Chuẩn CS2 • 1-Tap Headshot xuyên mũ (105 DMG), 4 Viên Ngực (34 DMG)',
     opticType: 'reddot',
     opticLabel: 'KOBRA RDS // 1.25X RED-DOT',
     zoomMult: 1.25,
-    damage: 17,
-    headshotMult: 3.0, // 51 headshot (2-Tap Headshot kill!)
+    damage: 34,
+    headshotMult: 4.0, // 136 unarmored HS, 105 armored HS (1-Tap Headshot kill!)
+    armorPen: 0.775,
     magSize: 30,
     reserveAmmo: 90,
     fireRateMs: 90,         // ~667 RPM hipfire
@@ -67,12 +68,13 @@ export const WEAPONS = {
     category: 'AR',
     categoryLabel: 'ASSAULT RIFLE',
     name: 'M4A1-S',
-    role: 'M4A1-S Giảm Thanh • Tốc bắn 800 RPM, Sấy Tầm Trung Chuẩn Valorant',
+    role: 'M4A1-S Giảm Thanh • 800 RPM chuẩn CS2, 87 HS xuyên giáp + 4 Viên Ngực',
     opticType: 'holo',
     opticLabel: 'EOTECH EXPS3 // 1.25X HOLO',
     zoomMult: 1.25,
-    damage: 15,
-    headshotMult: 2.7,  // 41 headshot
+    damage: 33,
+    headshotMult: 3.5,  // 116 unarmored HS, 87 armored dink + 1 body, 4-shot chest
+    armorPen: 0.75,
     magSize: 30,
     reserveAmmo: 90,
     fireRateMs: 75,     // 800 RPM hipfire
@@ -117,12 +119,13 @@ export const WEAPONS = {
     category: 'AR',
     categoryLabel: 'ASSAULT RIFLE',
     name: 'FN SCAR',
-    role: 'FN SCAR 7.62mm • Không sợ bắn xa, 2-Tap HS (53 DMG) & 5 Viên Ngực mọi cự ly',
+    role: 'FN SCAR 7.62mm • 1-Tap Headshot xuyên mũ tầm xa (118 DMG), 4 Viên Ngực',
     opticType: 'holo',
     opticLabel: 'EOTECH HWS // 1.25X HOLO',
     zoomMult: 1.25,
-    damage: 20,
-    headshotMult: 2.65, // 53 headshot (2-Tap Headshot even at long range!)
+    damage: 38,
+    headshotMult: 3.8, // 144 unarmored, 118 armored 1-Tap Headshot
+    armorPen: 0.82,
     magSize: 20,
     reserveAmmo: 60,
     fireRateMs: 118,    // ~508 RPM hipfire
@@ -167,12 +170,13 @@ export const WEAPONS = {
     category: 'SMG',
     categoryLabel: 'SMG',
     name: 'MP5A5',
-    role: 'Tiểu Liên MP5A5 CQB (<13m) • 1034 RPM mạnh áp sát, rớt sát thương nặng khi bắn xa',
+    role: 'Tiểu Liên MP5A5 CQB (<12m) • 1034 RPM cơ động áp sát, xuyên giáp thấp (0.62)',
     opticType: 'holo',
     opticLabel: 'UH-1 HOLO // 1.25X HOLO',
     zoomMult: 1.25,
-    damage: 11,
-    headshotMult: 1.85, // 20 headshot in CQB
+    damage: 24,
+    headshotMult: 3.2, // 77 unarmored HS, 48 armored HS in CQB
+    armorPen: 0.62,
     magSize: 32,
     reserveAmmo: 96,
     fireRateMs: 58,     // ~1034 RPM hipfire
@@ -217,12 +221,13 @@ export const WEAPONS = {
     category: 'SHOTGUN',
     categoryLabel: 'SHOTGUN',
     name: 'M870 MCS',
-    role: 'Remington M870 Pump Shotgun Cận Chiến (<9m) • 8 viên đạn chùm áp sát, yếu hẳn khi xa',
+    role: 'Remington M870 Pump Shotgun (<8m) • 1-Shot áp sát (18×8 DMG), yếu hẳn ngoài 12m',
     opticType: 'reddot',
     opticLabel: 'MICRO T-2 // 1.25X RED-DOT',
     zoomMult: 1.25,
-    damage: 9,
-    headshotMult: 1.55, // 14 per pellet headshot in CQB
+    damage: 18,
+    headshotMult: 1.8, // 32 per pellet headshot in CQB
+    armorPen: 0.65,
     magSize: 6,
     reserveAmmo: 24,
     fireRateMs: 590,
@@ -271,12 +276,13 @@ export const WEAPONS = {
     category: 'SNIPER',
     categoryLabel: 'SNIPER',
     name: 'AWM .338',
-    role: 'AWM .338 Chuẩn Chiến Thuật • 1-Shot Headshot (135 DMG), 2 Viên Ngực (54 DMG) mọi cự ly',
+    role: 'AWM .338 Chuẩn CS2 • 1-Shot Ngực/Đầu xuyên giáp (109+ DMG), Bắn Chân 85 DMG',
     opticType: 'sniper',
     opticLabel: 'S&B PM-II // 8.0X MIL-DOT',
     zoomMult: 3.09,
-    damage: 54,
-    headshotMult: 2.5, // 135 headshot (1-shot HS kill!), 54 torso (2-shot body kill!)
+    damage: 112,
+    headshotMult: 4.0, // 448 HS, 109 armored chest (1-shot torso!), ~85 leg
+    armorPen: 0.975,
     magSize: 5,
     reserveAmmo: 15,
     fireRateMs: 920,
@@ -322,12 +328,13 @@ export const WEAPONS = {
     category: 'LMG',
     categoryLabel: 'MACHINEGUN',
     name: 'RPK-74',
-    role: 'RPK-74 Hạng Nặng • Băng đạn trống 80 viên, nằm bắn chế áp tầm trung',
+    role: 'RPK-74 Hạng Nặng • Trống 80 viên chế áp & Tagging nặng (28 DMG · 0.78 Pen)',
     opticType: 'holo',
     opticLabel: 'M249 HWS // 1.25X HOLO',
     zoomMult: 1.25,
-    damage: 13,
-    headshotMult: 2.0, // 26 headshot
+    damage: 28,
+    headshotMult: 3.4, // 95 unarmored / 74 armored HS
+    armorPen: 0.78,
     magSize: 80,
     reserveAmmo: 160,
     fireRateMs: 80,     // 750 RPM hipfire
@@ -374,12 +381,13 @@ export const WEAPONS = {
     category: 'PISTOL',
     categoryLabel: 'SECONDARY',
     name: 'SIG P226',
-    role: 'SIG P226 Chiến Thuật • Bắn tap chuẩn xác, rớt sát thương ở tầm xa',
+    role: 'SIG P226 Chiến Thuật • 1-Tap không mũ (101 DMG), 2-Tap xuyên giáp',
     opticType: 'reddot',
     opticLabel: 'RMR MICRO // 1.25X RED-DOT',
     zoomMult: 1.25,
-    damage: 14,
-    headshotMult: 2.5, // 35 headshot at close range
+    damage: 28,
+    headshotMult: 3.6, // 101 unarmored / 59 armored HS
+    armorPen: 0.58,
     magSize: 12,
     reserveAmmo: 36,
     fireRateMs: 140,
@@ -424,12 +432,13 @@ export const WEAPONS = {
     category: 'PISTOL',
     categoryLabel: 'SECONDARY',
     name: 'M1911A1',
-    role: 'M1911A1 .45 ACP • Sát thương cao 2-Tap Headshot (64 DMG, <38m)',
+    role: 'M1911A1 Hạng Nặng • 1-Tap Headshot xuyên mũ (155 DMG), 2–3 Viên Thân',
     opticType: 'reddot',
     opticLabel: 'DELTA-PRO // 1.25X RED-DOT',
     zoomMult: 1.25,
-    damage: 26,
-    headshotMult: 2.45, // 64 headshot (2-Tap Headshot up to 38m!)
+    damage: 54,
+    headshotMult: 3.2, // 173 unarmored / 155 armored HS (1-Tap HS!)
+    armorPen: 0.90,
     magSize: 7,
     reserveAmmo: 28,
     fireRateMs: 250,
@@ -474,12 +483,13 @@ export const WEAPONS = {
     category: 'PISTOL',
     categoryLabel: 'SECONDARY',
     name: 'GSH-18',
-    role: 'GSH-18 Liên Thanh • Xả đạn 857 RPM cứu nguy áp sát (<10m)',
+    role: 'GSH-18 Liên Thanh • 857 RPM áp sát (<10m), kết liễu nhanh',
     opticType: 'reddot',
     opticLabel: 'ACRO P-2 // 1.25X RED-DOT',
     zoomMult: 1.25,
-    damage: 9,
-    headshotMult: 1.65, // 15 headshot at point-blank
+    damage: 17,
+    headshotMult: 2.6, // 44 unarmored / 23 armored HS
+    armorPen: 0.52,
     magSize: 18,
     reserveAmmo: 54,
     fireRateMs: 70,     // ~857 RPM hipfire
@@ -529,9 +539,10 @@ export const WEAPONS = {
     opticType: 'none',
     zoomMult: 1.0,
     name: 'KARAMBIT-X',
-    role: 'Dao Cận Chiến • Chém nhanh, chạy cực lẹ (+12% Tốc chạy)',
-    damage: 28,
-    headshotMult: 1.65, // 46 upper-strike / backstab
+    role: 'Dao Cận Chiến • Chém chí mạng 100 DMG, chạy cực lẹ (+12% Tốc chạy)',
+    damage: 50,
+    headshotMult: 2.0, // 100 upper-strike / backstab unarmored
+    armorPen: 0.85,
     magSize: 1,
     reserveAmmo: 0,
     fireRateMs: 310,

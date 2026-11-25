@@ -34,7 +34,7 @@ function preserveOnlineClient(netClient, signalSocket) {
  */
 export async function activateLanHostSession(
   netClient,
-  { code, name = '', mapId = '', gameMode = 'ffa', startHostFn = null, isCancelled = null } = {},
+  { code, name = '', mapId = '', gameMode = 'ffa', matchDurationSec = null, startHostFn = null, isCancelled = null } = {},
   opts = {}
 ) {
   const signalSocket = netClient?.signalSocket || netClient?.socket;
@@ -57,6 +57,7 @@ export async function activateLanHostSession(
     name,
     mapId,
     gameMode,
+    matchDurationSec,
     session,
     peerCount: session.peerCount,
     hasGuests: session.hasGuests,
@@ -153,7 +154,8 @@ export async function setupLanMode(netClient, search = window.location.search) {
         code,
         name: host.name,
         mapId: host.mapId,
-        gameMode: host.gameMode
+        gameMode: host.gameMode,
+        matchDurationSec: host.matchDurationSec
       });
     }
     return await activateLanGuestSession(netClient, { code });

@@ -77,6 +77,19 @@ export function sanitizeTeam(raw) {
   return null;
 }
 
+const VALID_DURATIONS = new Set(MATCH_CONFIG.VALID_MATCH_DURATIONS || [180, 300, 600, 900]);
+const VALID_ADD_TIMES = new Set(MATCH_CONFIG.VALID_ADD_TIME_SEC || [60, 180, 300]);
+
+export function sanitizeMatchDuration(raw, fallback = MATCH_CONFIG.MATCH_DURATION_SEC || 300) {
+  const n = Number(raw);
+  return VALID_DURATIONS.has(n) ? n : fallback;
+}
+
+export function sanitizeAddTimeSec(raw) {
+  const n = Number(raw);
+  return VALID_ADD_TIMES.has(n) ? n : null;
+}
+
 export function createInitialAmmoMap() {
   const map = {};
   for (const [id, cfg] of Object.entries(WEAPONS)) {

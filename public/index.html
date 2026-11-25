@@ -175,6 +175,19 @@
 
         <div class="rail-row">
           <div class="rail-row-head">
+            <span class="field-label">Thời lượng trận</span>
+            <span class="field-code">CHỦ PHÒNG</span>
+          </div>
+          <div class="duration-select-grid" id="lobby-duration-grid">
+            <button type="button" class="duration-pill-btn" data-duration="180">3P</button>
+            <button type="button" class="duration-pill-btn active" data-duration="300">5P</button>
+            <button type="button" class="duration-pill-btn" data-duration="600">10P</button>
+            <button type="button" class="duration-pill-btn" data-duration="900">15P</button>
+          </div>
+        </div>
+
+        <div class="rail-row">
+          <div class="rail-row-head">
             <span class="field-label">Khu vực chiến trường</span>
             <span class="field-code">06 CS:GO MAPS</span>
           </div>
@@ -784,6 +797,24 @@
         <p id="pause-quality-hint" class="quality-hint"></p>
       </div>
 
+      <div class="pause-tactical-row hidden" id="pause-team-switch-row">
+        <div class="pause-tactical-head">
+          <span>CHUYỂN ĐỘI TÁC CHIẾN</span>
+          <span class="pause-tactical-sub">PHÍM M · HỒI SINH NGAY</span>
+        </div>
+        <button type="button" id="btn-pause-switch-team" class="btn btn-secondary btn-block">ĐỔI PHE NGAY [M]</button>
+      </div>
+      <div class="pause-tactical-row hidden" id="pause-add-time-row">
+        <div class="pause-tactical-head">
+          <span>CỘNG THÊM GIỜ THI ĐẤU</span>
+          <span class="pause-tactical-sub">CHỦ PHÒNG</span>
+        </div>
+        <div class="pause-add-time-grid">
+          <button type="button" class="add-time-pill-btn" data-add-sec="60">+1 PHÚT</button>
+          <button type="button" class="add-time-pill-btn" data-add-sec="180">+3 PHÚT</button>
+          <button type="button" class="add-time-pill-btn" data-add-sec="300">+5 PHÚT</button>
+        </div>
+      </div>
       <div class="pause-actions">
         <button id="btn-resume" type="button" class="btn btn-primary btn-large">TIẾP TỤC CHIẾN ĐẤU</button>
         <button id="btn-leave-room" type="button" class="btn btn-danger">RỜI PHÒNG</button>
@@ -856,6 +887,19 @@
             <span class="team-count-badge" id="team-bravo-count">0/6</span>
           </div>
           <div id="team-bravo-roster" class="team-roster-list"></div>
+        </div>
+      </div>
+
+      <div class="team-lobby-duration-bar" id="team-lobby-duration-row">
+        <div class="team-lobby-duration-label">
+          <span>THỜI LƯỢNG TRẬN</span>
+          <small id="team-lobby-duration-hint">CHỈ CHỦ PHÒNG CHỈNH ĐƯỢC</small>
+        </div>
+        <div class="duration-select-grid">
+          <button type="button" class="duration-pill-btn" data-duration="180">3P</button>
+          <button type="button" class="duration-pill-btn active" data-duration="300">5P</button>
+          <button type="button" class="duration-pill-btn" data-duration="600">10P</button>
+          <button type="button" class="duration-pill-btn" data-duration="900">15P</button>
         </div>
       </div>
 

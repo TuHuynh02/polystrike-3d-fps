@@ -18,7 +18,7 @@
  * The ONLY geometric tolerance of a part box (metres, added to every half extent). Lag / interpolation error is
  * handled by rewinding the target (shared/lagCompensation.js), never by inflating the boxes.
  */
-export const PART_PADDING = 0.04;
+export const PART_PADDING = 0.03;
 
 /** Tolerance (metres, beyond PART_PADDING) used when mapping a claimed hit POINT to a part (shotgun pellets). */
 export const POINT_ZONE_TOLERANCE = 0.1;
@@ -39,7 +39,7 @@ export const ZONE = Object.freeze({ HEAD: 'head', BODY: 'body', LEG: 'leg' });
  * `torso` box, so a ray through an arm reports the torso (zone `body`).
  */
 export const HITBOX_PART_DEFS = Object.freeze([
-  Object.freeze({ id: 'head',    zone: 'head', bone: 'head',    size: Object.freeze([0.48, 0.54, 0.48]), offset: Object.freeze([0, 0.20, -0.01]) }),
+  Object.freeze({ id: 'head',    zone: 'head', bone: 'head',    size: Object.freeze([0.28, 0.32, 0.28]), offset: Object.freeze([0, 0.20, -0.01]) }),
   Object.freeze({ id: 'torso',   zone: 'body', bone: 'chest',   size: Object.freeze([0.80, 0.66, 0.52]), offset: Object.freeze([0, 0.31, -0.10]) }),
   Object.freeze({ id: 'pelvis',  zone: 'body', bone: 'pelvis',  size: Object.freeze([0.56, 0.26, 0.40]), offset: Object.freeze([0, 0, 0]) }),
   Object.freeze({ id: 'thigh_l', zone: 'leg',  bone: 'hip_l',   size: Object.freeze([0.30, 0.42, 0.30]), offset: Object.freeze([0, -0.19, 0]) }),

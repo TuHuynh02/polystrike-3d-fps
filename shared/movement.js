@@ -117,6 +117,7 @@ export function stepPlayerMovement(s, input, dt, mapCfg, nowMs) {
   if (wantsCrouch && s.prone) {
     s.prone = false;
   }
+  const isTagged = Boolean(input.tagged);
   const wantsSprintInput = Boolean(input.wantsSprint) &&
     (moveForward !== 0 || moveRight !== 0) &&
     !wantsCrouch &&
@@ -125,7 +126,7 @@ export function stepPlayerMovement(s, input, dt, mapCfg, nowMs) {
     isAiming = false;
     result.aimCancelled = true;
   }
-  const wantsSprint = wantsSprintInput && !isAiming;
+  const wantsSprint = wantsSprintInput && !isAiming && !isTagged;
 
   if (wantsSprint && s.prone) {
     s.prone = false;
@@ -154,7 +155,8 @@ export function stepPlayerMovement(s, input, dt, mapCfg, nowMs) {
           : s.isSprinting
             ? MATCH_CONFIG.SPRINT_SPEED
             : MATCH_CONFIG.WALK_SPEED;
-  const targetSpeed = baseTargetSpeed * (s.isSliding ? 1.0 : weaponMoveMult);
+  const tagMult = isTagged && !s.isSliding ? (MATCH_CONFIG.TAGGING_SPEED_MULT || 0.58) : 1.0;
+  const targetSpeed = baseTargetSpeed * (s.isSliding ? 1.0 : weaponMoveMult * tagMult);
 
   if (s.isSliding) {
     const slideFriction = MATCH_CONFIG.SLIDE_FRICTION || 2.25;

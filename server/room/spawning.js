@@ -370,6 +370,7 @@ export class SpawningMethods {
     player.isAiming = false;
     player.lean = 0;
     player.hp = MATCH_CONFIG.MAX_HP;
+    player.taggedUntil = 0;
     player.armor = 0;
     player.speedBoostUntil = 0;
     player.damageBoostUntil = 0;

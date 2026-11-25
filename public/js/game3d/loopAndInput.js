@@ -913,10 +913,16 @@ export class LoopAndInputMethods {
       const dy = -my * sens;
       this.yaw += dx;
       this.pitch = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, this.pitch + dy));
-      if (dy < 0 && this.accumulatedRecoilPitch > 0) {
-        this.accumulatedRecoilPitch = Math.max(0, this.accumulatedRecoilPitch + dy);
-      } else if (dy > 0 && this.accumulatedRecoilPitch > 0) {
-        this.accumulatedRecoilPitch = Math.max(0, this.accumulatedRecoilPitch - dy * 0.65);
+      if (dy < 0) {
+        let cancelRem = -dy;
+        if (this.pendingRecoilPitch > 0) {
+          const cutPending = Math.min(this.pendingRecoilPitch, cancelRem);
+          this.pendingRecoilPitch -= cutPending;
+          cancelRem -= cutPending;
+        }
+        if (cancelRem > 0 && this.accumulatedRecoilPitch > 0) {
+          this.accumulatedRecoilPitch = Math.max(0, this.accumulatedRecoilPitch - cancelRem);
+        }
       }
 
       this.swayX = Math.max(-0.045, Math.min(0.045, -mx * 0.00055));
@@ -1093,6 +1099,9 @@ export class LoopAndInputMethods {
       }
       else if (e.code === 'KeyB') {
         this.callbacks.onLoadoutToggle?.();
+      }
+      else if (e.code === 'KeyM' && this.gameMode === 'tdm') {
+        this.callbacks.onTeamSwitchShortcut?.();
       }
       else if (e.code === 'KeyG' && this.alive) {
         this.startGrenadeCooking();

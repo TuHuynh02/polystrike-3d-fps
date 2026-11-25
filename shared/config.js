@@ -4,7 +4,13 @@ export const MATCH_CONFIG = {
   MAX_PLAYERS: 12,
   KILL_LIMIT: 20,
   TDM_KILL_LIMIT: 30,
-  MATCH_DURATION_SEC: 300, // 5 minutes
+  MATCH_DURATION_SEC: 300, // 5 minutes default
+  VALID_MATCH_DURATIONS: [180, 300, 600, 900],
+  VALID_ADD_TIME_SEC: [60, 180, 300],
+  MAX_MATCH_REMAINING_SEC: 3600,
+  TEAM_SWITCH_COOLDOWN_MS: 2000,
+  TAGGING_DURATION_MS: 220,
+  TAGGING_SPEED_MULT: 0.58,
   RESPAWN_DELAY_MS: 3000,  // 3 seconds
   SPAWN_PROTECTION_MS: 1500, // 1.5 seconds of invincibility after spawn/respawn (ends early when the player fires/throws)
   LATENCY_PROBE_INTERVAL_MS: 2000, // Server -> client RTT probe period (server-measured latency for lag compensation)

@@ -82,6 +82,7 @@ export class PhysicsAndNetcodeMethods {
     this.alive = true;
     this.armor = 0;
     this.speedBoostUntil = 0;
+    this.taggedUntil = 0;
     this.damageBoostUntil = 0;
     this.lastShotAt = -1000;
     this.reloadingUntil = 0;
@@ -275,6 +276,7 @@ export class PhysicsAndNetcodeMethods {
     f.isAdsHeld = this.isRightMouseDown;
     f.weapon = this.currentWeapon;
     f.speedBoost = Boolean(this.speedBoostUntil && now < this.speedBoostUntil);
+    f.tagged = Boolean(this.taggedUntil && now < this.taggedUntil);
 
     const mapCfg = this.getMovementMapCfg();
 
@@ -531,6 +533,14 @@ export class PhysicsAndNetcodeMethods {
     return true;
   }
 
+  applyTagging(durationMs = MATCH_CONFIG.TAGGING_DURATION_MS || 220, localNowMs = undefined) {
+    if (!this.inMatch) return;
+    const ms = Number(durationMs);
+    if (!Number.isFinite(ms) || ms <= 0) return;
+    const now = typeof localNowMs === 'number' ? localNowMs : performance.now();
+    this.taggedUntil = Math.max(this.taggedUntil || 0, now + ms);
+  }
+
   /**
    * Reconciles owner-only authoritative combat state (`selfState`) from the server:
    * `{ seq?, lastShotSeq, hp, alive?, weapon, ammo, reserveAmmo, ammoByWeapon, reserveAmmoByWeapon, reloading, grenades }`.
@@ -609,6 +619,9 @@ export class PhysicsAndNetcodeMethods {
     }
     if (typeof state.damageBoostMs === 'number' && Number.isFinite(state.damageBoostMs)) {
       this.damageBoostUntil = state.damageBoostMs > 0 ? now + state.damageBoostMs : 0;
+    }
+    if (typeof state.taggedMs === 'number' && Number.isFinite(state.taggedMs)) {
+      this.taggedUntil = state.taggedMs > 0 ? now + state.taggedMs : 0;
     }
     if (typeof state.alive === 'boolean') {
       this.alive = state.alive;
@@ -714,6 +727,7 @@ export class PhysicsAndNetcodeMethods {
       armor: this.armor,
       speedBoostMs: this.speedBoostUntil > now ? Math.max(0, Math.round(this.speedBoostUntil - now)) : 0,
       damageBoostMs: this.damageBoostUntil > now ? Math.max(0, Math.round(this.damageBoostUntil - now)) : 0,
+      taggedMs: this.taggedUntil > now ? Math.max(0, Math.round(this.taggedUntil - now)) : 0,
       alive: this.alive,
       weapon: curWep,
       ammo: this.ammoByWeapon[curWep],

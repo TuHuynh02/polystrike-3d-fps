@@ -65,9 +65,11 @@ import {
   round1,
   round2,
   roundTo,
+  sanitizeAddTimeSec,
   sanitizeGameMode,
   sanitizeLoadout,
   sanitizeMapId,
+  sanitizeMatchDuration,
   sanitizeName,
   sanitizeRoomCode,
   sanitizeTeam
@@ -152,6 +154,7 @@ export class TeamLobbyMethods {
       mapId: room.mapId,
       mapName: mapCfg.name,
       hostId: room.hostId,
+      matchDurationSec: room.matchDurationSec || MATCH_CONFIG.MATCH_DURATION_SEC || 300,
       killLimit: room.killLimit || (room.gameMode === 'tdm' ? (MATCH_CONFIG.TDM_KILL_LIMIT || 30) : (MATCH_CONFIG.KILL_LIMIT || 20)),
       teamScores: room.teamScores || { alpha: 0, bravo: 0 },
       teamCounts: { alpha, bravo },
@@ -171,11 +174,11 @@ export class TeamLobbyMethods {
     if (!room || !player || room.gameMode !== 'tdm') {
       return { ok: false, error: 'invalid_mode', message: 'Chế độ chơi hiện tại không hỗ trợ đổi phe.' };
     }
-    if (room.state !== 'WAITING') {
+    if (room.state === 'ENDED') {
       return {
         ok: false,
-        error: 'match_in_progress',
-        message: 'Chỉ có thể đổi phe tại phòng chờ trước khi trận đấu bắt đầu!'
+        error: 'match_ended',
+        message: 'Trận đấu đã kết thúc, hãy chờ ván mới!'
       };
     }
     const targetTeam = sanitizeTeam(payload?.team) || (player.team === 'alpha' ? 'bravo' : 'alpha');
@@ -184,13 +187,26 @@ export class TeamLobbyMethods {
     }
 
     const counts = this.getTeamCounts(room);
-    const maxPerTeam = Math.ceil((MATCH_CONFIG.MAX_PLAYERS || 12) / 2);
+    const maxPerTeam = MATCH_CONFIG.MAX_PLAYERS || 12;
     if ((counts[targetTeam] || 0) >= maxPerTeam) {
       return {
         ok: false,
         error: 'team_full',
-        message: 'Phe này đã đầy (tối đa 6 người mỗi đội)!'
+        message: 'Phe này đã đầy!'
       };
+    }
+
+    const isPlaying = room.state === 'PLAYING';
+    const now = Date.now();
+    if (isPlaying) {
+      const cooldownMs = MATCH_CONFIG.TEAM_SWITCH_COOLDOWN_MS || 2000;
+      if (player.lastTeamSwitchAt && now - player.lastTeamSwitchAt < cooldownMs) {
+        return {
+          ok: false,
+          error: 'cooldown',
+          message: 'Vui lòng chờ 2 giây trước khi đổi phe tiếp!'
+        };
+      }
     }
 
     player.team = targetTeam;
@@ -200,14 +216,30 @@ export class TeamLobbyMethods {
       player._staticMeta.team = targetTeam;
     }
 
-    player.ready = false;
-    const sp = this.pickSafeSpawnPoint(room, player.id, targetTeam);
-    player.x = sp.x;
-    player.y = sp.y || 0;
-    player.z = sp.z;
-    player.yaw = sp.yaw || 0;
-    this.resetPlayerMovement(player, Date.now());
-    this.broadcastTeamLobby(room);
+    if (room.state === 'WAITING') {
+      player.ready = false;
+      const sp = this.pickSafeSpawnPoint(room, player.id, targetTeam);
+      player.x = sp.x;
+      player.y = sp.y || 0;
+      player.z = sp.z;
+      player.yaw = sp.yaw || 0;
+      this.resetPlayerMovement(player, now);
+      this.broadcastTeamLobby(room);
+    } else if (isPlaying) {
+      player.lastTeamSwitchAt = now;
+      player._coldSentCount = 0;
+      this.respawnPlayer(room, player);
+      const countsAfter = this.getTeamCounts(room);
+      this.io.to(room.code).emit('teamSwitched', {
+        playerId: player.id,
+        name: player.name,
+        team: targetTeam,
+        color: player.color,
+        alpha: countsAfter.alpha,
+        bravo: countsAfter.bravo,
+        teamCounts: countsAfter
+      });
+    }
 
     return { ok: true, team: player.team };
   }
@@ -258,6 +290,68 @@ export class TeamLobbyMethods {
     if (!this.isRoomHost(room, player.id)) return { ok: false, error: 'not_host' };
     this.changeRoomMap(room, payload?.mapId);
     return { ok: true };
+  }
+
+  /** Host-only: change match duration preset while room is in WAITING lobby. */
+  handleSetMatchDuration(room, player, payload = {}) {
+    if (!room || !player) return { ok: false, error: 'invalid' };
+    if (!this.isRoomHost(room, player.id)) {
+      return { ok: false, error: 'not_host', message: 'Chỉ chủ phòng mới được chỉnh thời gian trận!' };
+    }
+    if (room.state !== 'WAITING') {
+      return {
+        ok: false,
+        error: 'match_in_progress',
+        message: 'Chỉ chỉnh thời lượng trước khi bắt đầu; trong trận hãy dùng nút +Phút!'
+      };
+    }
+    const raw = Number(payload?.durationSec);
+    const valid = MATCH_CONFIG.VALID_MATCH_DURATIONS || [180, 300, 600, 900];
+    if (!Number.isFinite(raw) || !valid.includes(raw)) {
+      return { ok: false, error: 'invalid_duration', message: 'Thời lượng trận không hợp lệ.' };
+    }
+    room.matchDurationSec = raw;
+    room.matchEndsAt = Date.now() + raw * 1000;
+    if (room.gameMode === 'tdm') {
+      this.broadcastTeamLobby(room);
+    }
+    this.io.to(room.code).emit('matchTimeUpdated', {
+      matchDurationSec: raw,
+      timeRemaining: raw,
+      addedSec: 0,
+      hostId: room.hostId
+    });
+    return { ok: true, matchDurationSec: raw };
+  }
+
+  /** Host-only: add +1, +3, or +5 minutes during an active PLAYING match (capped at 60 min remaining). */
+  handleAddMatchTime(room, player, payload = {}) {
+    if (!room || !player) return { ok: false, error: 'invalid' };
+    if (!this.isRoomHost(room, player.id)) {
+      return { ok: false, error: 'not_host', message: 'Chỉ chủ phòng mới được cộng thêm giờ!' };
+    }
+    if (room.state !== 'PLAYING') {
+      return { ok: false, error: 'not_playing', message: 'Chỉ có thể cộng giờ khi trận đấu đang diễn ra!' };
+    }
+    const addSec = sanitizeAddTimeSec(payload?.addSec);
+    if (!addSec) {
+      return { ok: false, error: 'invalid_add_time', message: 'Mức cộng giờ chỉ chấp nhận +1, +3 hoặc +5 phút.' };
+    }
+    const now = Date.now();
+    const maxRemainingMs = (MATCH_CONFIG.MAX_MATCH_REMAINING_SEC || 3600) * 1000;
+    const maxEndsAt = now + maxRemainingMs;
+    const baseEndsAt = Math.max(now, room.matchEndsAt || now);
+    room.matchEndsAt = Math.min(maxEndsAt, baseEndsAt + addSec * 1000);
+    const timeRemaining = Math.max(0, Math.ceil((room.matchEndsAt - now) / 1000));
+
+    this.io.to(room.code).emit('matchTimeUpdated', {
+      matchDurationSec: room.matchDurationSec || MATCH_CONFIG.MATCH_DURATION_SEC,
+      timeRemaining,
+      addedSec: addSec,
+      hostId: room.hostId,
+      addedBy: player.name
+    });
+    return { ok: true, timeRemaining, addedSec: addSec };
   }
 
   /**

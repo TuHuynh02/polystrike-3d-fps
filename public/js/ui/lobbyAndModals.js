@@ -151,6 +151,12 @@ import {
   teamBravoRoster,
   teamLobbyStatus,
   btnSwitchTeam,
+  lobbyDurationGrid,
+  pauseTeamSwitchRow,
+  btnPauseSwitchTeam,
+  pauseAddTimeRow,
+  teamLobbyDurationRow,
+  teamLobbyDurationHint,
   btnTeamReady,
   btnStartTeamMatch,
   btnLeaveTeamLobby,
@@ -632,7 +638,8 @@ export function requestJoinRoom({ mode = 'public', roomCode = '' }) {
     name,
     roomCode,
     mode,
-    gameMode: appState.selectedGameMode,
+  gameMode: appState.selectedGameMode,
+  matchDurationSec: appState.selectedMatchDurationSec,
     color: appState.selectedOperatorColor,
     weapon: appState.selectedStartingWeapon,
     loadout: appState.selectedLoadout,
@@ -687,6 +694,7 @@ export async function startLanHostInPlace({
   name = getLobbyPlayerName(),
   mapId = appState.selectedMapId,
   gameMode = appState.selectedGameMode,
+  matchDurationSec = appState.selectedMatchDurationSec,
   startHostFn
 } = {}) {
   const cleanCode = String(code || generateLanRoomCode()).trim().toUpperCase();
@@ -706,7 +714,7 @@ export async function startLanHostInPlace({
   try {
     const lan = await activateLanHostSession(
       appState.netClient,
-      { code: cleanCode, name, mapId, gameMode, startHostFn, isCancelled }
+      { code: cleanCode, name, mapId, gameMode, matchDurationSec, startHostFn, isCancelled }
     );
     if (appState._lanPendingHostCode === cleanCode) {
       appState._lanPendingHostCode = '';
@@ -942,8 +950,11 @@ export function renderTeamWaitingLobby(lobbyData = {}) {
     appState.game.setTeamState?.(appState.currentRoomGameMode, appState.currentLocalTeam);
   }
 
-  if (teamAlphaCount) teamAlphaCount.textContent = `${ alphaList.length }/6`;
-  if (teamBravoCount) teamBravoCount.textContent = `${ bravoList.length }/6`;
+  const rawMatchDur = Number(lobbyData.matchDurationSec || appState.currentRoomDurationSec || appState.selectedMatchDurationSec || 300);
+  appState.currentRoomDurationSec = rawMatchDur;
+
+  if (teamAlphaCount) teamAlphaCount.textContent = `${ alphaList.length }/12`;
+  if (teamBravoCount) teamBravoCount.textContent = `${ bravoList.length }/12`;
 
   const renderRosterColumn = (list) => {
     if (list.length === 0) {
@@ -983,6 +994,17 @@ export function renderTeamWaitingLobby(lobbyData = {}) {
   if (btnStartTeamMatch) {
     btnStartTeamMatch.classList.toggle('hidden', !isHost);
     btnStartTeamMatch.disabled = !canStart;
+  }
+
+  if (teamLobbyDurationRow) {
+    teamLobbyDurationRow.querySelectorAll('.duration-pill-btn').forEach((btn) => {
+      const sec = Number(btn.dataset.duration);
+      btn.classList.toggle('active', sec === rawMatchDur);
+      btn.disabled = !isHost;
+    });
+  }
+  if (teamLobbyDurationHint) {
+    teamLobbyDurationHint.textContent = isHost ? 'CHỦ PHÒNG CHỌN THỜI GIAN' : 'CHỈ CHỦ PHÒNG CHỈNH ĐƯỢC';
   }
 
   if (teamLobbyStatus) {
@@ -1041,6 +1063,31 @@ export async function fetchActiveRooms() {
   } catch {
     activeRoomsList.innerHTML = `<div class="rooms-empty">Không thể tải danh sách phòng.</div>`;
   }
+}
+
+export function syncPauseModalTacticalControls() {
+  const isTdm = appState.currentRoomGameMode === 'tdm';
+  const isPlaying = appState.currentRoomState === 'PLAYING';
+  const isHost = Boolean(appState.currentRoomHostId && appState.game?.localId && appState.currentRoomHostId === appState.game.localId);
+
+  if (pauseTeamSwitchRow) {
+    pauseTeamSwitchRow.classList.toggle('hidden', !isTdm || appState.currentRoomState === 'ENDED');
+  }
+  if (btnPauseSwitchTeam) {
+    const nextTeamLabel = appState.currentLocalTeam === 'bravo' ? 'ALPHA' : 'BRAVO';
+    btnPauseSwitchTeam.textContent = `ĐỔI SANG ĐỘI ${nextTeamLabel} [M]`;
+  }
+  if (pauseAddTimeRow) {
+    pauseAddTimeRow.classList.toggle('hidden', !(isHost && isPlaying));
+  }
+}
+
+export function syncLobbyDurationSelectionUi(durationSec) {
+  const clean = [180, 300, 600, 900].includes(Number(durationSec)) ? Number(durationSec) : 300;
+  appState.selectedMatchDurationSec = clean;
+  lobbyDurationGrid?.querySelectorAll('.duration-pill-btn').forEach((btn) => {
+    btn.classList.toggle('active', Number(btn.dataset.duration) === clean);
+  });
 }
 
 export function initLobbyAndModalListeners() {
@@ -1334,7 +1381,8 @@ btnCreatePrivate.addEventListener('click', () => {
       code: generateLanRoomCode(),
       name: getLobbyPlayerName(),
       mapId: appState.selectedMapId,
-      gameMode: appState.selectedGameMode
+      gameMode: appState.selectedGameMode,
+      matchDurationSec: appState.selectedMatchDurationSec
     });
     return;
   }
@@ -1343,7 +1391,8 @@ btnCreatePrivate.addEventListener('click', () => {
     window.location.href = buildLanCreateUrl(lanServerUrl, {
       name: getLobbyPlayerName(),
       mapId: appState.selectedMapId,
-      gameMode: appState.selectedGameMode
+      gameMode: appState.selectedGameMode,
+      matchDurationSec: appState.selectedMatchDurationSec
     });
     return;
   }
@@ -1375,6 +1424,40 @@ btnResume.addEventListener('click', () => {
   pauseModal.classList.add('hidden');
   if (loadoutModal) loadoutModal.classList.add('hidden');
   appState.game.requestPointerLock();
+});
+
+lobbyDurationGrid?.addEventListener('click', (e) => {
+  const btn = e.target?.closest?.('.duration-pill-btn');
+  if (!btn) return;
+  const dur = Number(btn.dataset.duration);
+  if ([180, 300, 600, 900].includes(dur)) {
+    syncLobbyDurationSelectionUi(dur);
+  }
+});
+
+teamLobbyDurationRow?.addEventListener('click', (e) => {
+  const btn = e.target?.closest?.('.duration-pill-btn');
+  if (!btn || btn.disabled) return;
+  const dur = Number(btn.dataset.duration);
+  if ([180, 300, 600, 900].includes(dur)) {
+    appState.socket?.emit?.('setMatchDuration', { durationSec: dur });
+  }
+});
+
+btnPauseSwitchTeam?.addEventListener('click', () => {
+  if (appState.currentRoomGameMode !== 'tdm') return;
+  appState.socket?.emit?.('switchTeam', {});
+  pauseModal.classList.add('hidden');
+  appState.game?.requestPointerLock?.();
+});
+
+pauseAddTimeRow?.addEventListener('click', (e) => {
+  const btn = e.target?.closest?.('.add-time-pill-btn');
+  if (!btn) return;
+  const addSec = Number(btn.dataset.addSec);
+  if ([60, 180, 300].includes(addSec)) {
+    appState.socket?.emit?.('addMatchTime', { addSec });
+  }
 });
 
 btnLeaveRoom.addEventListener('click', () => leaveActiveRoom({ emitLeave: true }));
@@ -1598,7 +1681,7 @@ export function initLanServerRoom() {
   });
   refreshLanServerUrl();
 
-  const applyLobbySelections = ({ name, mapId, gameMode }) => {
+  const applyLobbySelections = ({ name, mapId, gameMode, matchDurationSec, duration }) => {
     if (name) playerNameInput.value = name;
     if (mapId) {
       const resolvedMapId = getMapConfig(mapId)?.id;
@@ -1611,6 +1694,10 @@ export function initLanServerRoom() {
     lobbyGameModeGrid?.querySelectorAll('.game-mode-option').forEach((el) => {
       el.classList.toggle('active', el.dataset.mode === appState.selectedGameMode);
     });
+    const nextDur = matchDurationSec || duration;
+    if (nextDur) {
+      syncLobbyDurationSelectionUi(nextDur);
+    }
   };
 
   // Landing on the LAN server from the public site (?create=private&name=&map=&mode=): create the private room right away.
