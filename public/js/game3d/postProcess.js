@@ -58,13 +58,16 @@ export class PostProcessPipeline {
     const bloomStrength = q?.bloomStrength ?? (tier === 'high' ? 0.28 : tier === 'medium' ? 0.18 : 0);
     const isSoftwareGl = isSoftwareWebGLRenderer(this.game?.renderer);
     const aoRaw = isSoftwareGl ? 0 : (q?.aoEnabled ?? (tier === 'high' ? 1 : 0));
-    const smaaRaw = isSoftwareGl ? 0 : (q?.smaaEnabled ?? (tier === 'high' || tier === 'medium' ? 1 : 0));
+    const multisampling = this._resolveMultisampling(this.game?.renderer, tier, isSoftwareGl);
+    // Avoid redundant 3-pass SMAA when WebGL2 hardware MSAA (>= 2x) already handles antialiasing
+    const smaaRaw = isSoftwareGl || multisampling >= 2 ? 0 : (q?.smaaEnabled ?? (tier === 'high' || tier === 'medium' ? 1 : 0));
     return {
       tier,
       enabled: Number(postFx) > 0,
       bloomStrength: Math.max(0, Number(bloomStrength) || 0),
       aoEnabled: Number(aoRaw) > 0,
       smaaEnabled: Number(smaaRaw) > 0,
+      multisampling,
       isSoftwareGl
     };
   }
@@ -72,7 +75,8 @@ export class PostProcessPipeline {
   _resolveMultisampling(renderer, tier, isSoftwareGl) {
     const isWebGL2 = Boolean(renderer?.capabilities?.isWebGL2);
     if (!isWebGL2 || isSoftwareGl) return 0;
-    const maxSamples = Math.min(4, renderer.capabilities?.maxSamples || 4);
+    const rawMaxSamples = Number(renderer.capabilities?.maxSamples);
+    const maxSamples = Math.min(4, Number.isFinite(rawMaxSamples) ? Math.max(0, rawMaxSamples) : 4);
     if (tier === 'high') return maxSamples;
     if (tier === 'medium') return Math.min(2, maxSamples);
     return 0;
@@ -158,7 +162,9 @@ export class PostProcessPipeline {
           aoPass.setQualityMode('Performance');
           aoPass.configuration.halfRes = true;
           aoPass.configuration.aoRadius = 1.25;
-          aoPass.configuration.intensity = 1.55;
+          aoPass.configuration.intensity = 1.35;
+          aoPass.configuration.denoiseSamples = 8;
+          aoPass.configuration.denoiseRadius = 8;
           aoPass.configuration.distanceFalloff = 0.85;
           aoPass.configuration.color.setHex(0x141a24);
           aoPass.configuration.gammaCorrection = false;
@@ -174,7 +180,8 @@ export class PostProcessPipeline {
           aoPass.enabled = Boolean(this.enabled && this.aoEnabled);
         }
 
-        smaaEffect = isSoftwareGl ? null : new SMAAEffect({ preset: SMAAPreset.MEDIUM });
+        const needSmaaPass = !isSoftwareGl && latestCfg.multisampling < 2;
+        smaaEffect = needSmaaPass ? new SMAAEffect({ preset: SMAAPreset.MEDIUM }) : null;
         bloomEffect = new BloomEffect({
           mipmapBlur: true,
           luminanceThreshold: 1.35,

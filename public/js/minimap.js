@@ -462,18 +462,19 @@ export class TacticalMinimap {
       ctx.closePath();
       ctx.fill();
 
-      // Player directional arrow / chevron with crisp cyan glow
-      ctx.shadowColor = 'rgba(56, 189, 248, 0.9)';
-      ctx.shadowBlur = 7;
-      ctx.fillStyle = '#38bdf8';
-      ctx.strokeStyle = '#f8fafc';
-      ctx.lineWidth = 1.3;
+      // Player directional arrow / chevron with crisp 2-pass cyan halo (avoids expensive 30Hz CPU shadowBlur)
       ctx.beginPath();
       ctx.moveTo(6.2, 0);
       ctx.lineTo(-4.4, -4.0);
       ctx.lineTo(-2.2, 0);
       ctx.lineTo(-4.4, 4.0);
       ctx.closePath();
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.28)';
+      ctx.lineWidth = 4.2;
+      ctx.stroke();
+      ctx.fillStyle = '#38bdf8';
+      ctx.strokeStyle = '#f8fafc';
+      ctx.lineWidth = 1.3;
       ctx.fill();
       ctx.stroke();
       ctx.restore();

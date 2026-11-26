@@ -87,7 +87,7 @@ export class Game3D {
     this.camera = new THREE.PerspectiveCamera(
       68,
       window.innerWidth / window.innerHeight,
-      0.04,
+      0.14,
       360
     );
     this.scene.add(this.camera);

@@ -349,11 +349,12 @@ export class LoopAndInputMethods {
 
     this.updateRemotePlayers(dt, now);
 
-    // Texel-snapped directional shadow camera following the player (in-match) or lobby focus (in-lobby)
+    // Texel-snapped directional shadow camera following the player (in-match) or static lobby anchor
+    let shadowAnchoredNow = false;
     if (this.renderer.shadowMap.enabled && this.dirLight) {
       const focusX = this.inMatch ? (this.position?.x || 0) : (this._lobbyLookTarget?.x || 0);
       const focusZ = this.inMatch ? (this.position?.z || 0) : (this._lobbyLookTarget?.z || 0);
-      this.updateDirectionalShadowAnchor?.(focusX, focusZ);
+      shadowAnchoredNow = Boolean(this.updateDirectionalShadowAnchor?.(focusX, focusZ, { now }));
     }
 
     // Saltline High-Tier Throttled Dynamic Shadows (30Hz exclusively on Cao / high; 0Hz static/off on Thấp & Vừa)
@@ -365,7 +366,10 @@ export class LoopAndInputMethods {
           break;
         }
       }
-      if (hasVisibleCasters) {
+      if (shadowAnchoredNow) {
+        this._lastDynamicShadowAt = now;
+        this._hadDynamicShadowCasters = hasVisibleCasters;
+      } else if (hasVisibleCasters) {
         const shadowIntervalMs = 1000 / this.quality.dynamicShadowHz;
         if (now - (this._lastDynamicShadowAt ?? -1000) >= shadowIntervalMs || now < (this._lastDynamicShadowAt ?? -1000)) {
           this._lastDynamicShadowAt = now;
@@ -710,8 +714,8 @@ export class LoopAndInputMethods {
       }
 
       if (this.inMatch && this.viewmodelRig?.visible && this.vmCamera) {
-        this.scene.updateMatrixWorld();
         this.camera.updateMatrixWorld();
+        this.viewmodelRig.updateMatrixWorld(true);
 
         const activeVm =
           this.viewmodelWeapons?.[this.currentWeapon] ||

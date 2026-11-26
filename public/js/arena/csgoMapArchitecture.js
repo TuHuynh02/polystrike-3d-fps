@@ -409,20 +409,21 @@ function buildMirageArchitecture(ctx) {
       const upperY = topY + upperH * 0.5;
       const inward = alongX ? (cz > 0 ? -1 : 1) : cx > 0 ? -1 : 1;
       const dadoH = 1.12;
+      const wallSpanZ = alongX ? cd : Math.max(2, cd - 2.02);
 
-      pushArchBox(mainMat, 'wall', cx, cy, cz, cw, ch, cd);
-      pushArchBox(mats.ochreParapetMat, 'wall', cx, upperY, cz, cw, upperH, cd);
+      pushArchBox(mainMat, 'wall', cx, cy, cz, cw, ch, wallSpanZ);
+      pushArchBox(mats.ochreParapetMat, 'wall', cx, upperY, cz, cw, upperH, wallSpanZ);
 
       if (alongX) {
-        pushArchBox(mats.stoneDadoMat, 'dado', cx, dadoH * 0.5, cz + inward * 0.56, cw - 1.6, dadoH, 0.14);
-        pushArchBox(mats.sandstoneMat, 'platform', cx, dadoH + 0.04, cz + inward * 0.58, cw - 1.5, 0.08, 0.18);
-        pushArchBox(mats.sandstoneMat, 'platform', cx, 4.5, cz + inward * 0.56, cw - 1.4, 0.24, 0.14);
+        pushArchBox(mats.stoneDadoMat, 'dado', cx, dadoH * 0.5, cz + inward * 0.575, cw - 1.6, dadoH, 0.13);
+        pushArchBox(mats.sandstoneMat, 'platform', cx, dadoH + 0.045, cz + inward * 0.595, cw - 1.5, 0.075, 0.17);
+        pushArchBox(mats.sandstoneMat, 'platform', cx, 4.5, cz + inward * 0.575, cw - 1.4, 0.24, 0.13);
         pushArchBox(mats.sandstoneMat, 'platform', cx, topY + upperH + 0.14, cz, cw + 0.30, 0.28, cd + 0.34);
       } else {
-        pushArchBox(mats.stoneDadoMat, 'dado', cx + inward * 0.56, dadoH * 0.5, cz, 0.14, dadoH, cd - 1.6);
-        pushArchBox(mats.sandstoneMat, 'platform', cx + inward * 0.58, dadoH + 0.04, cz, 0.18, 0.08, cd - 1.5);
-        pushArchBox(mats.sandstoneMat, 'platform', cx + inward * 0.56, 4.5, cz, 0.14, 0.24, cd - 1.4);
-        pushArchBox(mats.sandstoneMat, 'platform', cx, topY + upperH + 0.14, cz, cw + 0.34, 0.28, cd + 0.30);
+        pushArchBox(mats.stoneDadoMat, 'dado', cx + inward * 0.575, dadoH * 0.5, cz, 0.13, dadoH, cd - 1.6);
+        pushArchBox(mats.sandstoneMat, 'platform', cx + inward * 0.595, dadoH + 0.045, cz, 0.17, 0.075, cd - 1.5);
+        pushArchBox(mats.sandstoneMat, 'platform', cx + inward * 0.575, 4.5, cz, 0.13, 0.24, cd - 1.4);
+        pushArchBox(mats.sandstoneMat, 'platform', cx, topY + upperH + 0.14, cz, cw + 0.34, 0.28, Math.max(2, cd - 1.70));
       }
 
       const wallSpan = alongX ? cw : cd;
@@ -454,7 +455,8 @@ function buildMirageArchitecture(ctx) {
 
     // Mid Window elevated cheek walls (`botY >= 2.0` on Snipers' Nest)
     if (botY >= 2.0) {
-      pushArchBox(mainMat, 'wall', cx, cy, cz, cw, ch, cd);
+      const cheekH = Math.max(0.2, ch - 0.16);
+      pushArchBox(mainMat, 'wall', cx, cy - 0.08, cz, cw, cheekH, cd);
       pushArchBox(mats.sandstoneMat, 'platform', cx, topY - 0.08, cz, cw + 0.08, 0.16, cd + 0.14);
       return;
     }
@@ -513,11 +515,11 @@ function buildMirageArchitecture(ctx) {
     const botY = cy - halfH;
     const deckThick = 0.26;
     const dadoH = Math.min(1.08, Math.max(0.50, ch * 0.46));
-    const bodyH = Math.max(0.22, ch - deckThick - dadoH);
+    const bodyH = Math.max(0.22, ch - deckThick - dadoH - 0.07);
 
     pushArchBox(mats.stoneDadoMat, 'dado', cx, botY + dadoH * 0.5, cz, cw + 0.08, dadoH, cd + 0.08);
     pushArchBox(mats.sandstoneMat, 'platform', cx, botY + dadoH + 0.035, cz, cw + 0.14, 0.07, cd + 0.14);
-    pushArchBox(mats.stuccoMat, 'wall', cx, botY + dadoH + bodyH * 0.5, cz, cw - 0.10, bodyH, cd - 0.10);
+    pushArchBox(mats.stuccoMat, 'wall', cx, botY + dadoH + 0.07 + bodyH * 0.5, cz, cw - 0.10, bodyH, cd - 0.10);
     pushArchBox(mainMat, 'platform', cx, topY - deckThick * 0.5, cz, cw, deckThick, cd);
 
     // Molded Palace sandstone cornice lip (trimmed at corners to prevent z-fighting)
@@ -532,10 +534,10 @@ function buildMirageArchitecture(ctx) {
       }
     }
     if (highDetail) {
-      const panelY = botY + dadoH + bodyH * 0.5;
+      const panelY = botY + dadoH + 0.07 + bodyH * 0.5;
       for (const side of [-1, 1]) {
-        addDecorBox(cx, panelY, cz + side * (halfD - 0.03), Math.max(1.6, cw - 2.2), Math.max(0.28, bodyH * 0.62), 0.06, mats.recessDarkMat, false);
-        addDecorBox(cx + side * (halfW - 0.03), panelY, cz, 0.06, Math.max(0.28, bodyH * 0.62), Math.max(1.6, cd - 2.2), mats.recessDarkMat, false);
+        addDecorBox(cx, panelY, cz + side * (halfD - 0.04), Math.max(1.6, cw - 2.2), Math.max(0.28, bodyH * 0.62), 0.04, mats.recessDarkMat, false);
+        addDecorBox(cx + side * (halfW - 0.04), panelY, cz, 0.04, Math.max(0.28, bodyH * 0.62), Math.max(1.6, cd - 2.2), mats.recessDarkMat, false);
       }
     }
   };
@@ -891,22 +893,23 @@ function buildInfernoArchitecture(ctx) {
       const upperY = topY + upperH * 0.5;
       const inward = alongX ? (cz > 0 ? -1 : 1) : cx > 0 ? -1 : 1;
       const dadoH = 1.12;
+      const wallSpanZ = alongX ? cd : Math.max(2, cd - 2.02);
 
-      pushArchBox(mainMat, 'wall', cx, cy, cz, cw, ch, cd);
-      pushArchBox(mats.tuscanPeachMat, 'wall', cx, upperY, cz, cw, upperH, cd);
+      pushArchBox(mainMat, 'wall', cx, cy, cz, cw, ch, wallSpanZ);
+      pushArchBox(mats.tuscanPeachMat, 'wall', cx, upperY, cz, cw, upperH, wallSpanZ);
 
       // Cobblestone curb border + Tuscan stone/brick dado + stringcourse + overhanging terracotta roof eaves
       // Trim lengths inside corner towers (±(halfSize - 0.5)) so perpendicular perimeter trims never coplanarly overlap
       if (alongX) {
-        pushArchBox(mats.stoneDadoMat, 'dado', cx, dadoH * 0.5, cz + inward * 0.56, cw - 3.2, dadoH, 0.14);
-        pushArchBox(mats.cobbleCurbMat, 'step', cx, 0.08, cz + inward * 0.78, cw - 3.4, 0.16, 0.52);
-        pushArchBox(mats.limestoneMat, 'platform', cx, dadoH + 0.04, cz + inward * 0.58, cw - 3.1, 0.08, 0.18);
-        pushArchBox(mats.limestoneMat, 'platform', cx, 4.45, cz + inward * 0.56, cw - 3.0, 0.22, 0.16);
+        pushArchBox(mats.stoneDadoMat, 'dado', cx, dadoH * 0.5, cz + inward * 0.575, cw - 3.2, dadoH, 0.13);
+        pushArchBox(mats.cobbleCurbMat, 'step', cx, 0.08, cz + inward * 0.82, cw - 3.4, 0.16, 0.34);
+        pushArchBox(mats.limestoneMat, 'platform', cx, dadoH + 0.045, cz + inward * 0.595, cw - 3.1, 0.075, 0.17);
+        pushArchBox(mats.limestoneMat, 'platform', cx, 4.45, cz + inward * 0.575, cw - 3.0, 0.22, 0.13);
       } else {
-        pushArchBox(mats.stoneDadoMat, 'dado', cx + inward * 0.56, dadoH * 0.5, cz, 0.14, dadoH, cd - 3.2);
-        pushArchBox(mats.cobbleCurbMat, 'step', cx + inward * 0.78, 0.08, cz, 0.52, 0.16, cd - 3.4);
-        pushArchBox(mats.limestoneMat, 'platform', cx + inward * 0.58, dadoH + 0.04, cz, 0.18, 0.08, cd - 3.1);
-        pushArchBox(mats.limestoneMat, 'platform', cx + inward * 0.56, 4.45, cz, 0.16, 0.22, cd - 3.0);
+        pushArchBox(mats.stoneDadoMat, 'dado', cx + inward * 0.575, dadoH * 0.5, cz, 0.13, dadoH, cd - 3.2);
+        pushArchBox(mats.cobbleCurbMat, 'step', cx + inward * 0.82, 0.08, cz, 0.34, 0.16, cd - 3.4);
+        pushArchBox(mats.limestoneMat, 'platform', cx + inward * 0.595, dadoH + 0.045, cz, 0.17, 0.075, cd - 3.1);
+        pushArchBox(mats.limestoneMat, 'platform', cx + inward * 0.575, 4.45, cz, 0.13, 0.22, cd - 3.0);
       }
 
       addTerracottaRoofEave(cx, topY + upperH, cz, (alongX ? cw : cd) - 3.0, alongX ? cd : cw, alongX);
@@ -1443,21 +1446,22 @@ function buildNukeArchitecture(ctx) {
       const upperY = topY + upperH * 0.5;
       const inward = alongX ? (cz > 0 ? -1 : 1) : cx > 0 ? -1 : 1;
       const plinthH = 1.35;
+      const wallSpanZ = alongX ? cd : Math.max(2, cd - 2.02);
 
       // Heavy concrete factory lower blast wall + galvanized corrugated steel cladding upper bays
-      pushArchBox(mainMat, 'wall', cx, cy, cz, cw, ch, cd);
-      pushArchBox(mats.galvanizedCladdingMat, 'container', cx, upperY, cz, cw, upperH, cd);
+      pushArchBox(mainMat, 'wall', cx, cy, cz, cw, ch, wallSpanZ);
+      pushArchBox(mats.galvanizedCladdingMat, 'container', cx, upperY, cz, cw, upperH, wallSpanZ);
 
       if (alongX) {
-        pushArchBox(mats.concreteWallMat, 'wall', cx, plinthH * 0.5, cz + inward * 0.56, cw - 1.4, plinthH, 0.16);
+        pushArchBox(mats.concreteWallMat, 'wall', cx, plinthH * 0.5, cz + inward * 0.58, cw - 1.4, plinthH, 0.14);
         addHazardStripeBand(cx, plinthH + 0.12, cz + inward * 0.62, Math.min(cw - 4, 48), 0.22, 0.08, true);
         addDecorBox(cx, topY, cz + inward * 0.58, cw - 1.0, 0.26, 0.24, mats.reactorAccentBlueMat, true);
-        addDecorBox(cx, topY + upperH - 0.16, cz, cw + 0.26, 0.34, cd + 0.38, darkSteelMat, true);
+        addDecorBox(cx, topY + upperH + 0.17, cz, cw + 0.26, 0.34, cd + 0.38, darkSteelMat, true);
       } else {
-        pushArchBox(mats.concreteWallMat, 'wall', cx + inward * 0.56, plinthH * 0.5, cz, 0.16, plinthH, cd - 1.4);
+        pushArchBox(mats.concreteWallMat, 'wall', cx + inward * 0.58, plinthH * 0.5, cz, 0.14, plinthH, cd - 1.4);
         addHazardStripeBand(cx + inward * 0.62, plinthH + 0.12, cz, Math.min(cd - 4, 48), 0.22, 0.08, false);
         addDecorBox(cx + inward * 0.58, topY, cz, 0.24, 0.26, cd - 1.0, mats.reactorAccentBlueMat, true);
-        addDecorBox(cx, topY + upperH - 0.16, cz, cw + 0.38, 0.34, cd + 0.26, darkSteelMat, true);
+        addDecorBox(cx, topY + upperH + 0.17, cz, cw + 0.38, 0.34, Math.max(2, cd - 1.66), darkSteelMat, true);
       }
 
       const wallSpan = alongX ? cw : cd;
@@ -1599,7 +1603,7 @@ function buildNukeArchitecture(ctx) {
 
     const joistY = topY - deckThick - 0.14;
     for (let ix = 0; ix < xCoords.length; ix++) addDecorBox(xCoords[ix], joistY, cz, 0.18, 0.26, cd - 0.32, gunmetalFrameMat, false);
-    for (let iz = 0; iz < zCoords.length; iz++) addDecorBox(cx, joistY, zCoords[iz], cw - 0.32, 0.26, 0.18, gunmetalFrameMat, false);
+    for (let iz = 0; iz < zCoords.length; iz++) addDecorBox(cx, joistY - 0.025, zCoords[iz], cw - 0.32, 0.21, 0.18, gunmetalFrameMat, false);
 
     for (let ix = 0; ix < xCoords.length; ix++) {
       for (let iz = 0; iz < zCoords.length; iz++) {
@@ -1618,8 +1622,8 @@ function buildNukeArchitecture(ctx) {
       const colCy = botY + 0.18 + colH * 0.5;
       for (const xEdge of [xCoords[0], xCoords[xCoords.length - 1]]) {
         const bz = (zCoords[0] + zCoords[1]) * 0.5;
-        addDecorBox(xEdge, colCy, bz, 0.08, 0.08, braceLen, gunmetalFrameMat, false, braceAng, 0, 0);
-        addDecorBox(xEdge, colCy, bz, 0.08, 0.08, braceLen, gunmetalFrameMat, false, -braceAng, 0, 0);
+        addDecorBox(xEdge - 0.045, colCy, bz, 0.075, 0.08, braceLen, gunmetalFrameMat, false, braceAng, 0, 0);
+        addDecorBox(xEdge + 0.045, colCy, bz, 0.075, 0.08, braceLen, gunmetalFrameMat, false, -braceAng, 0, 0);
       }
     }
 
@@ -1792,11 +1796,16 @@ function buildIceworldArchitecture(ctx) {
       const upperH = highDetail ? 3.2 : 2.2;
       const upperY = topY + upperH * 0.5;
       const inward = alongX ? (cz > 0 ? -1 : 1) : cx > 0 ? -1 : 1;
+      const wallSpanZ = alongX ? cd : Math.max(2, cd - 2.02);
 
-      pushArchBox(mainMat, 'wall', cx, cy, cz, cw, ch, cd);
-      pushArchBox(mats.frostDadoMat, 'dado', cx, upperY, cz, cw, upperH, cd);
-      // Chamfered white snow cornice cap crowning perimeter wall
-      pushArchFrustum(mats.snowCapMat, 'platform', cx, topY + upperH + 0.22, cz, cw + 0.34, 0.44, cd + 0.34, cw - 0.10, cd - 0.10);
+      pushArchBox(mainMat, 'wall', cx, cy, cz, cw, ch, wallSpanZ);
+      pushArchBox(mats.frostDadoMat, 'dado', cx, upperY, cz, cw, upperH, wallSpanZ);
+      // Chamfered white snow cornice cap crowning perimeter wall (E/W trimmed cleanly at corners)
+      if (alongX) {
+        pushArchFrustum(mats.snowCapMat, 'platform', cx, topY + upperH + 0.22, cz, cw + 0.34, 0.44, cd + 0.34, cw - 0.10, cd - 0.10);
+      } else {
+        pushArchFrustum(mats.snowCapMat, 'platform', cx, topY + upperH + 0.22, cz, cw + 0.34, 0.44, Math.max(2, cd - 1.68), cw - 0.10, Math.max(2, cd - 2.10));
+      }
 
       const wallSpan = alongX ? cw : cd;
       const step = highDetail ? 8.0 : 16.0;
@@ -1814,17 +1823,17 @@ function buildIceworldArchitecture(ctx) {
     if (cw >= 5.0 && cd >= 5.0 && ch >= 3.5) {
       const plinthH = 0.52;
       const snowCapH = 0.40;
-      const coreH = Math.max(1.0, ch - plinthH - snowCapH);
+      const coreH = Math.max(1.0, ch - plinthH - snowCapH - 0.14);
 
       // Toned frosted glacier-concrete base plinth
       pushArchFrustum(mats.frostDadoMat, 'dado', cx, botY + plinthH * 0.5, cz, cw + 0.20, plinthH, cd + 0.20, cw + 0.02, cd + 0.02);
-      // Unified weathered glacier-concrete monolith shaft (zero harsh horizontal stripes)
+      // Unified weathered glacier-concrete monolith shaft ending cleanly beneath relief seam (zero +Y@4 overlap)
       pushArchBox(mainMat, 'wall', cx, botY + plinthH + coreH * 0.5, cz, cw, coreH, cd);
       // Subtle pale ice-stone relief cornice seam closely harmonized with wall albedo (`0xc4d6e4`)
       pushArchFrustum(mats.glacierReliefMat, 'wall', cx, topY - snowCapH - 0.07, cz, cw + 0.03, 0.14, cd + 0.03, cw + 0.10, cd + 0.10);
-      // Soft two-tier beveled snowdrift cap crowning monolith
-      pushArchFrustum(mats.snowCapMat, 'platform', cx, topY - snowCapH * 0.5 + 0.04, cz, cw + 0.22, snowCapH + 0.08, cd + 0.22, cw - 0.96, cd - 0.96);
-      pushArchFrustum(mats.snowCapMat, 'platform', cx, topY + 0.11, cz, cw - 0.92, 0.14, cd - 0.92, cw - 2.4, cd - 2.4);
+      // Soft two-tier beveled snowdrift cap crowning monolith starting +5mm above relief seam
+      pushArchFrustum(mats.snowCapMat, 'platform', cx, topY - snowCapH * 0.5 + 0.045, cz, cw + 0.22, snowCapH + 0.07, cd + 0.22, cw - 0.96, cd - 0.96);
+      pushArchFrustum(mats.snowCapMat, 'platform', cx, topY + 0.15, cz, cw - 0.92, 0.14, cd - 0.92, cw - 2.4, cd - 2.4);
 
       // Matte muted slate-steel (`0x5b6c7c`) corner tie brackets at plinth & cornice shoulders
       for (const sx of [-1, 1]) {
@@ -1852,8 +1861,8 @@ function buildIceworldArchitecture(ctx) {
     pushArchFrustum(mats.snowCapMat, 'platform', cx, topY - capH * 0.5 + 0.04, cz, cw + 0.14, capH + 0.08, cd + 0.14, cw * 0.86, cd * 0.86);
     const alongX = cw >= cd;
     for (const s of [-1, 1]) {
-      if (alongX) addDecorBox(cx + s * (cw * 0.5 - 0.04), cy, cz, 0.10, ch - 0.08, cd + 0.06, mats.alpineBracketMat, true);
-      else addDecorBox(cx, cy, cz + s * (cd * 0.5 - 0.04), cw + 0.06, ch - 0.08, 0.10, mats.alpineBracketMat, true);
+      if (alongX) addDecorBox(cx + s * (cw * 0.5 - 0.04), cy - 0.08, cz, 0.10, Math.max(0.2, ch - 0.24), cd + 0.06, mats.alpineBracketMat, true);
+      else addDecorBox(cx, cy - 0.08, cz + s * (cd * 0.5 - 0.04), cw + 0.06, Math.max(0.2, ch - 0.24), 0.10, mats.alpineBracketMat, true);
     }
   };
 
@@ -1933,7 +1942,7 @@ function buildIceworldArchitecture(ctx) {
     const treadH = Math.min(0.12, ch * 0.45);
     pushArchBox(mats.frostDadoMat, 'dado', cx, cy - treadH * 0.5, cz, cw - 0.04, Math.max(0.05, ch - treadH), cd - 0.04);
     pushArchBox(mainMat, 'step', cx, topY - treadH * 0.5, cz, cw, treadH, cd);
-    addDecorBox(cx, topY - 0.02, cz, cw + 0.04, 0.04, cd + 0.04, mats.alpineStepTrimMat, false);
+    addDecorBox(cx, topY - 0.032, cz, cw + 0.04, 0.04, cd + 0.04, mats.alpineStepTrimMat, false);
   };
 
   const buildAccents = () => {
@@ -1973,7 +1982,14 @@ function createAimMapMaterials(game, plan, highDetail) {
     roughness: 0.91,
     metalness: 0.02
   });
-  const rangeSteelMat = new THREE.MeshStandardMaterial({ color: 0x2c343e, roughness: 0.44, metalness: 0.64 });
+  const rangeSteelMat = new THREE.MeshStandardMaterial({
+    color: 0x2c343e,
+    roughness: 0.44,
+    metalness: 0.64,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1
+  });
   const crateIronBracketMat = new THREE.MeshStandardMaterial({ color: 0x282420, roughness: 0.58, metalness: 0.56 });
   const cedarBeamMat = new THREE.MeshStandardMaterial({ color: 0x5c4028, roughness: 0.86, metalness: 0.03 });
   const rangeRedlineMat = new THREE.MeshStandardMaterial({ color: 0xa8322a, roughness: 0.62, metalness: 0.08 });
@@ -2020,10 +2036,11 @@ function buildAimMapArchitecture(ctx) {
       const upperH = highDetail ? 3.0 : 2.0;
       const upperY = topY + upperH * 0.5;
       const inward = alongX ? (cz > 0 ? -1 : 1) : cx > 0 ? -1 : 1;
+      const wallSpanZ = alongX ? cd : Math.max(2, cd - 2.02);
 
       // Weathered concrete base + red-brick upper training yard perimeter wall + precast stone coping cap (flush-butted at corners)
-      pushArchBox(mats.concreteDadoMat, 'dado', cx, cy, cz, cw, ch, cd);
-      pushArchBox(mats.redBrickMat, 'wall', cx, upperY, cz, cw, upperH, cd);
+      pushArchBox(mats.concreteDadoMat, 'dado', cx, cy, cz, cw, ch, wallSpanZ);
+      pushArchBox(mats.redBrickMat, 'wall', cx, upperY, cz, cw, upperH, wallSpanZ);
       pushArchFrustum(
         mats.limestoneCopingMat,
         'pillar',
@@ -2068,8 +2085,8 @@ function buildAimMapArchitecture(ctx) {
     if (highDetail && ch >= 2.5) {
       const alongX = cw >= cd;
       for (const s of [-1, 1]) {
-        if (alongX) addDecorBox(cx + s * (cw * 0.5 - 0.05), cy, cz, 0.12, ch - 0.18, cd + 0.06, mats.rangeSteelMat, true);
-        else addDecorBox(cx, cy, cz + s * (cd * 0.5 - 0.05), cw + 0.06, ch - 0.18, 0.12, mats.rangeSteelMat, true);
+        if (alongX) addDecorBox(cx + s * (cw * 0.5 - 0.02), cy, cz, 0.12, ch - 0.18, cd + 0.06, mats.rangeSteelMat, true);
+        else addDecorBox(cx, cy, cz + s * (cd * 0.5 - 0.02), cw + 0.06, ch - 0.18, 0.12, mats.rangeSteelMat, true);
       }
     }
   };

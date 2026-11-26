@@ -1245,7 +1245,7 @@ describe('Saltline Round 2: harbor water, wall weathering, merged decals, 3D bac
         }
       });
 
-      assert.equal(outlineCount, 13, `${expected} builds all 13 bone-scope outline hulls`);
+      assert.equal(outlineCount, 11, `${expected} builds all 11 bone-scope outline hulls (hand outlines pruned cleanly)`);
       assert.equal(hasFabricVerts, true, `${expected} encodes matte ripstop fabric PBR vertices`);
       assert.equal(hasArmorVerts, true, `${expected} encodes composite armor/leather PBR vertices`);
       assert.equal(hasMetalVerts, true, `${expected} encodes brushed gunmetal/titanium PBR vertices`);
@@ -2147,6 +2147,428 @@ describe('Realism Overhaul: 11 weapon names/GLBs, 18 Poly Haven GLB props, smoot
     game.disposeMapResources();
   });
 });
+
+describe('FPS Smoothness & Zero-Visual-Loss Optimizations (SPEC-fps-smoothness-perf)', () => {
+  it('AC-01: freezes Lobby shadow anchor, applies 3.5m Medium deadzone, and throttles High dynamicShadowHz', async () => {
+    const medGame = await createTestGame3D({ qualityChoice: 'medium' });
+    medGame.loadMap('de_dust2');
+    medGame.inMatch = false;
+    medGame.dirLight.shadow.needsUpdate = false;
+    let anchorUploads = 0;
+    for (let i = 0; i < 60; i++) {
+      if (medGame.updateDirectionalShadowAnchor(Math.sin(i * 0.1) * 18, Math.cos(i * 0.1) * 18, { now: 1000 + i * 16 })) {
+        anchorUploads += 1;
+      }
+    }
+    assert.equal(anchorUploads, 0, 'Lobby orbit must trigger 0 shadow frustum uploads after initial anchor');
+
+    medGame.inMatch = true;
+    medGame.updateDirectionalShadowAnchor(0, 0, { force: true, now: 3000 });
+    anchorUploads = 0;
+    if (medGame.updateDirectionalShadowAnchor(1.5, 1.5, { now: 3500 })) anchorUploads += 1;
+    assert.equal(anchorUploads, 0, 'Medium walking < 3.5m must not re-anchor shadow frustum');
+    if (medGame.updateDirectionalShadowAnchor(4.0, 0, { now: 4000 })) anchorUploads += 1;
+    assert.equal(anchorUploads, 1, 'Medium walking >= 3.5m must re-anchor shadow frustum');
+
+    // [BLOCK-01]: Exiting match to Lobby without loadMap() must restore Lobby extent and re-anchor once at Lobby focus
+    medGame.inMatch = false;
+    assert.equal(medGame.updateDirectionalShadowAnchor(0, 0, { now: 4500 }), true,
+      'Transitioning inMatch: true -> false must force Lobby shadow re-anchor');
+    assert.equal(medGame._shadowExtent, 30, 'Returning to Lobby must restore Medium Lobby shadow extent (30m)');
+    assert.equal(medGame.updateDirectionalShadowAnchor(12, -10, { now: 4600 }), false,
+      'Subsequent Lobby orbit frames must remain frozen after Lobby re-anchor');
+    medGame.disposeMapResources();
+
+    const highGame = await createTestGame3D({ qualityChoice: 'high' });
+    highGame.loadMap('de_dust2');
+    highGame.inMatch = true;
+    highGame.updateDirectionalShadowAnchor(0, 0, { force: true, now: 1000 });
+    let highAnchorUploads = 0;
+    for (let f = 1; f <= 60; f++) {
+      if (highGame.updateDirectionalShadowAnchor(f * 0.5, 0, { now: 1000 + f * (1000 / 120) })) {
+        highAnchorUploads += 1;
+      }
+    }
+    assert.ok(highAnchorUploads <= 16,
+      `High dynamicShadowHz should throttle updates over 0.5s (got ${highAnchorUploads})`);
+    highGame.disposeMapResources();
+  });
+
+  it('AC-02: PostProcessPipeline skips redundant SMAA when WebGL2 MSAA >= 2x and keeps SMAA fallback at 0x', async () => {
+    const { THREE } = await loadGame3D();
+    const { PostProcessPipeline } = await import('../public/js/game3d/postProcess.js');
+    const makeMockRenderer = ({ isWebGL2, maxSamples }) => ({
+      isWebGLRenderer: true,
+      capabilities: { isWebGL2, maxSamples },
+      getPixelRatio: () => 1,
+      setSize: () => {},
+      getSize: (v) => v.set(1280, 720),
+      getDrawingBufferSize: (v) => v.set(1280, 720),
+    });
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, 1280 / 720, 0.1, 1000);
+
+    const ppMsaa = new PostProcessPipeline({
+      renderer: makeMockRenderer({ isWebGL2: true, maxSamples: 4 }),
+      scene,
+      camera,
+      quality: QUALITY.high,
+      tier: 'high'
+    });
+    const cfgMsaa = ppMsaa._resolvePostConfig(QUALITY.high);
+    assert.ok(cfgMsaa.multisampling >= 2, `Expected multisampling >= 2 (got ${cfgMsaa.multisampling})`);
+    assert.equal(cfgMsaa.smaaEnabled, false, 'SMAA must be disabled when WebGL2 MSAA >= 2 is active');
+
+    const ppFallback = new PostProcessPipeline({
+      renderer: makeMockRenderer({ isWebGL2: true, maxSamples: 0 }),
+      scene,
+      camera,
+      quality: QUALITY.high,
+      tier: 'high'
+    });
+    const cfgFallback = ppFallback._resolvePostConfig(QUALITY.high);
+    assert.equal(cfgFallback.multisampling, 0, 'Expected multisampling === 0 when maxSamples === 0');
+    assert.equal(cfgFallback.smaaEnabled, true, 'SMAA must stay enabled when MSAA falls back to 0');
+
+    const ppWebGL1 = new PostProcessPipeline({
+      renderer: makeMockRenderer({ isWebGL2: false, maxSamples: 4 }),
+      scene,
+      camera,
+      quality: QUALITY.medium,
+      tier: 'medium'
+    });
+    const cfgWebGL1 = ppWebGL1._resolvePostConfig(QUALITY.medium);
+    assert.equal(cfgWebGL1.multisampling, 0);
+    assert.equal(cfgWebGL1.smaaEnabled, true);
+  });
+
+  it('AC-03: reduces draw calls across remote operators, 3P weapons, and shared pickups', async () => {
+    const { createRemotePlayerMesh } = await import('../public/js/humanoidRig.js');
+    const { createWeaponMesh } = await import('../public/js/weaponModels.js');
+    const { WEAPON_ORDER } = await import('../shared/constants.js');
+
+    const rig = createRemotePlayerMesh(false, { shadows: true });
+    let rigVisMeshes = 0;
+    let rigCasters = 0;
+    rig.root.traverse((obj) => {
+      if (obj.isMesh && obj.visible) rigVisMeshes += 1;
+      if (obj.isMesh && obj.castShadow) rigCasters += 1;
+    });
+    assert.ok(rigVisMeshes <= 32, `RemotePlayer visible meshes should be <= 32 (got ${rigVisMeshes})`);
+    assert.ok(rigCasters <= 11, `RemotePlayer shadow casters should be <= 11 with hand shadows disabled (got ${rigCasters})`);
+    assert.equal(rig.rightHand?.children?.every((c) => !c.isMesh || (!c.castShadow && c.userData?.noShadow)), true,
+      'rightHand meshes must stay non-shadow-casting with noShadow=true');
+    assert.equal(rig.leftHand?.children?.every((c) => !c.isMesh || (!c.castShadow && c.userData?.noShadow)), true,
+      'leftHand meshes must stay non-shadow-casting with noShadow=true');
+
+    const { getThirdPersonWeaponTemplate } = await import('../public/js/weapons/viewmodelRig.js');
+    const rifleTpl = getThirdPersonWeaponTemplate('rifle');
+    const metalBatch = rifleTpl.batches.find((b) => b.material?.userData?.matSlotKey === 'tp_weapon_metal');
+    assert.ok(metalBatch?.geometry, 'rifle 3P template provides merged tp_weapon_metal batch');
+    // [BLOCK-03]: Check tp_weapon_metal contains flipped back-face vertices (+Y and -Y normals on optic hood)
+    const metalNorms = metalBatch.geometry.attributes.normal;
+    let hasInvertedHoodTri = false;
+    for (let i = 0; i < metalNorms.count; i++) {
+      if (metalNorms.getX(i) < -0.9) {
+        hasInvertedHoodTri = true;
+        break;
+      }
+    }
+    assert.equal(hasInvertedHoodTri, true, 'Merged 3P metal batch preserves inward-facing optic hood normals');
+
+    for (const wId of WEAPON_ORDER) {
+      if (wId === 'knife') continue;
+      const built = createWeaponMesh(wId, false);
+      const root = built?.group || built;
+      let visCount = 0;
+      root.traverse((obj) => {
+        if (obj.isMesh && obj.visible && obj !== built?.flashMesh) visCount += 1;
+        if (obj.isMesh && obj.material?.transparent) {
+          assert.equal(obj.userData?.noShadow, true, `Transparent 3P glass on ${wId} must carry noShadow: true`);
+        }
+      });
+      assert.ok(visCount <= 4, `3P weapon ${wId} visible meshes should be <= 4 (got ${visCount})`);
+    }
+
+    const game = await createTestGame3D({ qualityChoice: 'medium' });
+    game.syncPickups([
+      { id: 'pk_med_1', type: 'medkit', x: 2, y: 0, z: 2, active: true },
+      { id: 'pk_ammo_1', type: 'ammo', x: 4, y: 0, z: 2, active: true },
+      { id: 'pk_health_1', type: 'health', x: 6, y: 0, z: 2, active: true },
+      { id: 'pk_arm_1', type: 'armor', x: 8, y: 0, z: 2, active: true },
+    ]);
+    assert.equal(game.pickupMeshes.size, 4);
+    for (const [id, pk] of game.pickupMeshes.entries()) {
+      let pkVis = 0;
+      let sharedGeoCount = 0;
+      pk.group.traverse((obj) => {
+        if (obj.isMesh && obj.visible) {
+          pkVis += 1;
+          if (obj.geometry?.userData?.shared) sharedGeoCount += 1;
+        }
+      });
+      assert.ok(pkVis <= 4, `Pickup ${id} visible meshes should be <= 4 (got ${pkVis})`);
+      assert.ok(sharedGeoCount >= 1, `Pickup ${id} should use shared geometries`);
+    }
+    // [WARN-02]: Alias pickup types ('medkit', 'ammo') reuse canonical 'health' geometry & holoRing material
+    const pkMedCase = game.pickupMeshes.get('pk_med_1').crossGroup.children[0];
+    const pkAmmoCase = game.pickupMeshes.get('pk_ammo_1').crossGroup.children[0];
+    const pkHealthCase = game.pickupMeshes.get('pk_health_1').crossGroup.children[0];
+    assert.strictEqual(pkMedCase.geometry, pkHealthCase.geometry, 'medkit reuses canonical health shared caseGeo');
+    assert.strictEqual(pkAmmoCase.geometry, pkHealthCase.geometry, 'ammo reuses canonical health shared caseGeo');
+    assert.strictEqual(
+      game.pickupMeshes.get('pk_med_1').holoRing.material,
+      game.pickupMeshes.get('pk_health_1').holoRing.material,
+      'medkit reuses canonical health shared holoRingMat'
+    );
+    game.clearPickups();
+    game.disposeMapResources();
+  });
+
+  it('AC-04 & AC-05: analytic world raycast skips worldMeshes, prewarm initializes decals, and minimap avoids shadowBlur', async () => {
+    const game = await createTestGame3D({ qualityChoice: 'medium' });
+    await game.prewarmShaders();
+    assert.equal(game._decalTexApplied, true, 'prewarmShaders must initialize bullet decal textures before first shot');
+
+    game.loadMap('de_dust2');
+    let worldRayCalls = 0;
+    const origIntersectObjects = game.raycaster.intersectObjects.bind(game.raycaster);
+    game.raycaster.intersectObjects = (objects, recursive, optionalTarget) => {
+      if (Array.isArray(objects) && objects.some((o) => game.worldMeshes.includes(o))) {
+        worldRayCalls += 1;
+      }
+      return origIntersectObjects(objects, recursive, optionalTarget);
+    };
+    const { buildInputCommand } = await import('../shared/netcode.js');
+    game.localId = 'me';
+    game.inMatch = true;
+    game.position.set(0, 0, 0);
+    game.moveState.x = 0;
+    game.moveState.y = 0;
+    game.moveState.z = 0;
+
+    // [WARN-04a]: Analytic world obstacle hit + outward unit normal on de_dust2 perimeter/wall
+    const dustObs = game.currentObstacles[0];
+    assert.ok(dustObs, 'de_dust2 provides currentObstacles for analytic raycast');
+    const ox = dustObs.x;
+    const oz = dustObs.z + (dustObs.d * 0.5) + 3.0;
+    const hitNormal = { x: 0, y: 0, z: 0 };
+    const dist = game._raycastWorldObstacles({ x: ox, y: Math.max(0.5, dustObs.y), z: oz }, { x: 0, y: 0, z: -1 }, 50, hitNormal);
+    assert.ok(dist !== null && Math.abs(dist - 3.0) < 0.05, `Expected analytic hit at 3.0m (got ${dist})`);
+    assert.equal(hitNormal.z, 1, `Expected +Z outward normal (got ${JSON.stringify(hitNormal)})`);
+
+    // [BLOCK-02]: updateRemotePlayers() updates camera matrixWorld before frustum culling
+    let camMatUpdated = 0;
+    const origCamUpdate = game.camera.updateMatrixWorld.bind(game.camera);
+    game.camera.updateMatrixWorld = (...args) => {
+      camMatUpdated += 1;
+      return origCamUpdate(...args);
+    };
+    game.camera.position.set(0, 1.62, 0);
+    game.camera.rotation.set(0, Math.PI, 0);
+    game.updateRemotePlayers(0.016, 2000);
+    assert.ok(camMatUpdated >= 1, 'updateRemotePlayers must call camera.updateMatrixWorld() before computing frustum');
+
+    // [WARN-04b]: Unoccluded enemy hit vs wall-occluded enemy miss vs barrel hit with 0 worldMeshes raycasts
+    let tracerEnemyHits = 0;
+    const origSpawnTracer = game.spawnTracerEffect.bind(game);
+    game.spawnTracerEffect = (start, end, color, isPlayerHit, normal, ss) => {
+      if (isPlayerHit) tracerEnemyHits += 1;
+      return origSpawnTracer(start, end, color, isPlayerHit, normal, ss);
+    };
+    // Clear open lane using controlled obstacle behind enemy
+    game.currentObstacles = [{ x: 0, y: 1.5, z: -12, w: 4, h: 3, d: 2 }];
+    game.syncPlayersState([
+      { id: 'enemy_open', name: 'Target', color: 0xef4444, x: 0, y: 0, z: -6, hp: 100, alive: true, weapon: 'rifle' }
+    ]);
+    const cmdOpen = buildInputCommand(1, { yaw: 0, pitch: 0, fire: true, shotSeq: 1, weapon: 'rifle' });
+    game.predictFireCommand(cmdOpen);
+    assert.equal(tracerEnemyHits, 1, 'predictFireCommand hits unoccluded enemy along aim ray');
+
+    // Place wall obstacle in front of enemy (z = -4 blocks enemy at z = -6)
+    tracerEnemyHits = 0;
+    game.currentObstacles = [{ x: 0, y: 1.5, z: -4, w: 4, h: 3, d: 1 }];
+    const cmdBlocked = buildInputCommand(2, { yaw: 0, pitch: 0, fire: true, shotSeq: 2, weapon: 'rifle' });
+    game.predictFireCommand(cmdBlocked);
+    assert.equal(tracerEnemyHits, 0, 'predictFireCommand occludes enemy behind analytic wall obstacle');
+
+    // Place active barrel in front of wall (z = -2.5) and verify barrel hit
+    let lastEndZ = null;
+    game.spawnTracerEffect = (start, end, color, isPlayerHit, normal, ss) => {
+      lastEndZ = end?.z;
+      return origSpawnTracer(start, end, color, isPlayerHit, normal, ss);
+    };
+    game.syncBarrels([{ id: 'b_ray_1', x: 0, y: 0, z: -2.5, hp: 60, active: true }]);
+    const cmdBarrel = buildInputCommand(3, { yaw: 0, pitch: -0.35, fire: true, shotSeq: 3, weapon: 'rifle' });
+    game.predictFireCommand(cmdBarrel);
+    assert.ok(typeof lastEndZ === 'number' && lastEndZ > -3.1 && lastEndZ < -1.8,
+      `predictFireCommand strikes active barrel before wall (endZ=${lastEndZ})`);
+
+    assert.equal(worldRayCalls, 0, 'predictFireCommand must not invoke Raycaster.intersectObjects against worldMeshes');
+    game.clearBarrels();
+    game.clearAllRemotePlayers();
+    game.disposeMapResources();
+
+    const { TacticalMinimap } = await import('../public/js/minimap.js');
+    const ctxCalls = { shadowBlurMax: 0 };
+    const fakeCtx = {
+      save() {},
+      restore() {},
+      clearRect() {},
+      fillRect() {},
+      strokeRect() {},
+      beginPath() {},
+      closePath() {},
+      moveTo() {},
+      lineTo() {},
+      arc() {},
+      fill() {},
+      stroke() {},
+      translate() {},
+      rotate() {},
+      setLineDash() {},
+      createRadialGradient: () => ({ addColorStop() {} }),
+      set shadowBlur(v) {
+        if (v > ctxCalls.shadowBlurMax) ctxCalls.shadowBlurMax = v;
+      },
+      get shadowBlur() { return 0; },
+    };
+    const fakeCanvas = { width: 220, height: 220, getContext: () => fakeCtx };
+    const minimap = new TacticalMinimap(fakeCanvas);
+    minimap.setMap(getMapConfig('de_dust2'));
+    minimap.update({ x: 0, z: 0, yaw: 0, players: [], pickups: [], localId: 'p1', now: 1000 });
+    assert.equal(ctxCalls.shadowBlurMax, 0, 'TacticalMinimap must not use expensive ctx.shadowBlur per frame');
+  });
+
+  it('eliminates depth-buffer precision loss and major coplanar Z-fighting across all 6 CS:GO maps', async () => {
+    const game = await createTestGame3D({ qualityChoice: 'high' });
+    assert.ok(game.camera.near >= 0.12 && game.camera.near <= 0.2,
+      `camera.near (${game.camera.near}) should be in [0.12, 0.2] to maximize 24-bit depth precision`);
+    assert.equal(game.camera.far, QUALITY.high.cameraFar, 'camera.far matches QUALITY preset');
+
+    const vA = new THREE.Vector3();
+    const vB = new THREE.Vector3();
+    const vC = new THREE.Vector3();
+    const e1 = new THREE.Vector3();
+    const e2 = new THREE.Vector3();
+    const n = new THREE.Vector3();
+    const instMat = new THREE.Matrix4();
+    const worldMat = new THREE.Matrix4();
+
+    for (const mapId of MAPS) {
+      game.loadMap(mapId);
+      game.scene.updateMatrixWorld(true);
+      const half = game.arenaHalfSize || 38;
+      const quads = [];
+
+      const collectQuads = (o, matWorld, label, mat) => {
+        const g = o.geometry;
+        const pos = g?.attributes?.position;
+        if (!pos) return;
+        const idx = g.index;
+        const triCount = idx ? idx.count / 3 : pos.count / 3;
+        const localSeen = new Set();
+        for (let t = 0; t < triCount; t++) {
+          const i0 = idx ? idx.getX(t * 3) : t * 3;
+          const i1 = idx ? idx.getX(t * 3 + 1) : t * 3 + 1;
+          const i2 = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+          vA.fromBufferAttribute(pos, i0).applyMatrix4(matWorld);
+          vB.fromBufferAttribute(pos, i1).applyMatrix4(matWorld);
+          vC.fromBufferAttribute(pos, i2).applyMatrix4(matWorld);
+          e1.subVectors(vB, vA);
+          e2.subVectors(vC, vA);
+          n.crossVectors(e1, e2);
+          const area2 = n.length();
+          if (area2 < 0.02) continue;
+          n.divideScalar(area2);
+          let axis = null;
+          if (Math.abs(n.x) > 0.995) axis = n.x > 0 ? '+X' : '-X';
+          else if (Math.abs(n.y) > 0.995) axis = n.y > 0 ? '+Y' : '-Y';
+          else if (Math.abs(n.z) > 0.995) axis = n.z > 0 ? '+Z' : '-Z';
+          if (!axis || axis === '-Y') continue;
+          const d = axis.endsWith('X') ? vA.x : axis.endsWith('Y') ? vA.y : vA.z;
+          let minU, maxU, minV, maxV;
+          if (axis.endsWith('X')) {
+            minU = Math.min(vA.y, vB.y, vC.y); maxU = Math.max(vA.y, vB.y, vC.y);
+            minV = Math.min(vA.z, vB.z, vC.z); maxV = Math.max(vA.z, vB.z, vC.z);
+          } else if (axis.endsWith('Y')) {
+            minU = Math.min(vA.x, vB.x, vC.x); maxU = Math.max(vA.x, vB.x, vC.x);
+            minV = Math.min(vA.z, vB.z, vC.z); maxV = Math.max(vA.z, vB.z, vC.z);
+          } else {
+            minU = Math.min(vA.x, vB.x, vC.x); maxU = Math.max(vA.x, vB.x, vC.x);
+            minV = Math.min(vA.y, vB.y, vC.y); maxV = Math.max(vA.y, vB.y, vC.y);
+          }
+          if (maxU - minU < 0.05 || maxV - minV < 0.05) continue;
+          const sig = `${axis}|${d.toFixed(3)}|${minU.toFixed(2)}|${maxU.toFixed(2)}|${minV.toFixed(2)}|${maxV.toFixed(2)}`;
+          if (localSeen.has(sig)) continue;
+          localSeen.add(sig);
+          quads.push({
+            label, axis, d, minU, maxU, minV, maxV,
+            po: mat?.polygonOffset ? (mat.polygonOffsetFactor || 0) : 0
+          });
+        }
+      };
+
+      let meshId = 0;
+      game.scene.traverse((o) => {
+        if (!o.isMesh || !o.visible) return;
+        if (o.name?.startsWith('csgoSkyline') || o.name === 'atmosphericSkyDome' || o.name === 'distantMountainRing') return;
+        let p = o;
+        while (p) {
+          if (p === game.viewmodelRig || p === game.lobbyShowcaseGroup || p.layers?.mask === 2) return;
+          p = p.parent;
+        }
+        const mat = Array.isArray(o.material) ? o.material[0] : o.material;
+        if (!mat || mat.transparent) return;
+        const label = `${o.name || (o.isInstancedMesh ? 'Inst' : 'Mesh')}_${meshId++}`;
+        if (o.isInstancedMesh) {
+          for (let k = 0; k < o.count; k++) {
+            o.getMatrixAt(k, instMat);
+            worldMat.multiplyMatrices(o.matrixWorld, instMat);
+            collectQuads(o, worldMat, label, mat);
+          }
+        } else {
+          collectQuads(o, o.matrixWorld, label, mat);
+        }
+      });
+
+      const buckets = new Map();
+      for (const q of quads) {
+        const k = `${q.axis}:${Math.round(q.d * 100)}`;
+        if (!buckets.has(k)) buckets.set(k, []);
+        buckets.get(k).push(q);
+      }
+
+      let perimeterCornerOverlaps = 0;
+      let majorCrossOverlaps = 0;
+      for (const list of buckets.values()) {
+        for (let i = 0; i < list.length; i++) {
+          const a = list[i];
+          for (let j = i + 1; j < list.length; j++) {
+            const b = list[j];
+            const diff = Math.abs(a.d - b.d);
+            if (diff > 0.005 || a.po !== b.po) continue;
+            const ou = Math.min(a.maxU, b.maxU) - Math.max(a.minU, b.minU);
+            const ov = Math.min(a.maxV, b.maxV) - Math.max(a.minV, b.minV);
+            if (ou <= 0.08 || ov <= 0.08) continue;
+            const isOuterFace = (a.axis.endsWith('X') || a.axis.endsWith('Z')) && Math.abs(Math.abs(a.d) - (half + 1.0)) < 0.15;
+            if (isOuterFace && a.label === b.label && ou > 0.5 && ov > 0.5) {
+              perimeterCornerOverlaps += 1;
+            }
+            if (a.label !== b.label && ou * ov >= 2.0) {
+              majorCrossOverlaps += 1;
+            }
+          }
+        }
+      }
+      assert.equal(perimeterCornerOverlaps, 0, `${mapId}: zero outer perimeter corner wall coplanar overlaps`);
+      assert.equal(majorCrossOverlaps, 0, `${mapId}: zero major (>=2m^2) cross-material coplanar overlaps`);
+    }
+    game.disposeMapResources();
+  });
+});
+
 
 
 

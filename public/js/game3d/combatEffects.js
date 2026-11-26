@@ -18,6 +18,7 @@ import {
   isPointInsideInflatedBoxes,
   isValidMoveAck,
   planShot,
+  rayIntersectsAABB,
   resetShotState,
   stepCommand,
   stepGrenade
@@ -1178,6 +1179,67 @@ export class CombatEffectsMethods {
     }
   }
 
+  _raycastWorldObstacles(origin, dir, maxDist, outNormal) {
+    const obsList = this.currentObstacles;
+    let bestT = maxDist;
+    let bestObs = null;
+    if (Array.isArray(obsList)) {
+      for (let i = 0; i < obsList.length; i++) {
+        const obs = obsList[i];
+        const t = rayIntersectsAABB(origin, dir, bestT, obs);
+        if (t !== null && t < bestT) {
+          bestT = t;
+          bestObs = obs;
+        }
+      }
+    }
+    let hitFloor = false;
+    if (dir.y < -1e-5 && origin.y > 0) {
+      const tFloor = -origin.y / dir.y;
+      if (tFloor > 0 && tFloor < bestT) {
+        const fx = origin.x + dir.x * tFloor;
+        const fz = origin.z + dir.z * tFloor;
+        const half = this.arenaHalfSize || MATCH_CONFIG.ARENA_HALF_SIZE || 60;
+        if (Math.abs(fx) <= half && Math.abs(fz) <= half) {
+          bestT = tFloor;
+          bestObs = null;
+          hitFloor = true;
+        }
+      }
+    }
+    if (hitFloor) {
+      outNormal.x = 0;
+      outNormal.y = 1;
+      outNormal.z = 0;
+      return bestT;
+    }
+    if (!bestObs) return null;
+
+    const hx = origin.x + dir.x * bestT;
+    const hy = origin.y + dir.y * bestT;
+    const hz = origin.z + dir.z * bestT;
+    const minX = bestObs.minX !== undefined ? bestObs.minX : bestObs.x - bestObs.w * 0.5;
+    const maxX = bestObs.maxX !== undefined ? bestObs.maxX : bestObs.x + bestObs.w * 0.5;
+    const minY = bestObs.minY !== undefined ? bestObs.minY : bestObs.y - bestObs.h * 0.5;
+    const maxY = bestObs.maxY !== undefined ? bestObs.maxY : bestObs.y + bestObs.h * 0.5;
+    const minZ = bestObs.minZ !== undefined ? bestObs.minZ : bestObs.z - bestObs.d * 0.5;
+    const maxZ = bestObs.maxZ !== undefined ? bestObs.maxZ : bestObs.z + bestObs.d * 0.5;
+    const dMinX = Math.abs(hx - minX);
+    const dMaxX = Math.abs(hx - maxX);
+    const dMinY = Math.abs(hy - minY);
+    const dMaxY = Math.abs(hy - maxY);
+    const dMinZ = Math.abs(hz - minZ);
+    const dMaxZ = Math.abs(hz - maxZ);
+    let minD = dMinX;
+    outNormal.x = -1; outNormal.y = 0; outNormal.z = 0;
+    if (dMaxX < minD) { minD = dMaxX; outNormal.x = 1; outNormal.y = 0; outNormal.z = 0; }
+    if (dMinY < minD) { minD = dMinY; outNormal.x = 0; outNormal.y = -1; outNormal.z = 0; }
+    if (dMaxY < minD) { minD = dMaxY; outNormal.x = 0; outNormal.y = 1; outNormal.z = 0; }
+    if (dMinZ < minD) { minD = dMinZ; outNormal.x = 0; outNormal.y = 0; outNormal.z = -1; }
+    if (dMaxZ < minD) { outNormal.x = 0; outNormal.y = 0; outNormal.z = 1; }
+    return bestT;
+  }
+
   /**
    * Local prediction of a fire command (called right after the command was simulated): advances the shared deterministic shot
    * state and ray-casts the SAME pellet rays the server will compute (same planShot, same seed / `ss` / pose / yaw / pitch)
@@ -1214,51 +1276,159 @@ export class CombatEffectsMethods {
     );
     this.lastShotPlan = { seq: cmd.seq, ss: cmd.ss, origin: plan.origin, dirs: plan.dirs, spreadAmount: plan.spreadAmount };
 
-    if (this.rayTargets.length === 0) {
-      this.rebuildHitboxList();
-    }
     const eyeOrigin = plan.origin;
-    const maxPlayerDistSq = (cfg.range + 2.5) * (cfg.range + 2.5);
-    for (const rp of this.remotePlayers.values()) {
-      if (rp.alive && rp.group) {
-        const dx = rp.group.position.x - eyeOrigin.x;
-        const dy = (rp.group.position.y + 0.9) - eyeOrigin.y;
-        const dz = rp.group.position.z - eyeOrigin.z;
-        if (dx * dx + dy * dy + dz * dz <= maxPlayerDistSq) {
-          rp.group.updateMatrixWorld(true);
+    const useAnalyticWorld = Array.isArray(this.currentObstacles) && this.currentObstacles.length > 0;
+    if (!useAnalyticWorld) {
+      if (this.rayTargets.length === 0) {
+        this.rebuildHitboxList();
+      }
+      const maxPlayerDistSq = (cfg.range + 2.5) * (cfg.range + 2.5);
+      for (const rp of this.remotePlayers.values()) {
+        if (rp.alive && rp.group) {
+          const dx = rp.group.position.x - eyeOrigin.x;
+          const dy = (rp.group.position.y + 0.9) - eyeOrigin.y;
+          const dz = rp.group.position.z - eyeOrigin.z;
+          if (dx * dx + dy * dy + dz * dz <= maxPlayerDistSq) {
+            rp.group.updateMatrixWorld(true);
+          }
         }
       }
+      for (let p = 0; p < plan.dirs.length; p++) {
+        const dir = plan.dirs[p];
+        this.raycaster.ray.origin.set(eyeOrigin.x, eyeOrigin.y, eyeOrigin.z);
+        this.raycaster.ray.direction.set(dir.x, dir.y, dir.z);
+        this.raycaster.near = 0;
+        this.raycaster.far = cfg.range;
+        const intersections = this.raycaster.intersectObjects(this.rayTargets, false);
+
+        let endPoint = {
+          x: eyeOrigin.x + dir.x * cfg.range,
+          y: eyeOrigin.y + dir.y * cfg.range,
+          z: eyeOrigin.z + dir.z * cfg.range
+        };
+        let isPlayerHit = false;
+        let hitNormal = null;
+
+        if (intersections.length > 0) {
+          const firstHit = intersections[0];
+          endPoint = { x: firstHit.point.x, y: firstHit.point.y, z: firstHit.point.z };
+          if (firstHit.face) {
+            const wn = (this._tmpHitNormal || (this._tmpHitNormal = new THREE.Vector3()))
+              .copy(firstHit.face.normal)
+              .transformDirection(firstHit.object.matrixWorld);
+            hitNormal = { x: wn.x, y: wn.y, z: wn.z };
+          }
+          isPlayerHit = Boolean(firstHit.object.userData?.playerId);
+        }
+
+        if (!isMelee || isPlayerHit) {
+          const barrelStart = {
+            x: eyeOrigin.x + dir.x * 0.55,
+            y: eyeOrigin.y - 0.13 + dir.y * 0.55,
+            z: eyeOrigin.z + dir.z * 0.55
+          };
+          this.spawnTracerEffect(barrelStart, endPoint, cfg.color, isPlayerHit, hitNormal, cmd.ss);
+        }
+      }
+      return plan;
     }
+
+    const candidates = this._candidateRayTargets || (this._candidateRayTargets = []);
+    const worldNormal = this._tmpWorldNormal || (this._tmpWorldNormal = { x: 0, y: 1, z: 0 });
+    const updatedRps = this._updatedCandidateRps || (this._updatedCandidateRps = new Set());
+    updatedRps.clear();
+
     for (let p = 0; p < plan.dirs.length; p++) {
       const dir = plan.dirs[p];
-      this.raycaster.ray.origin.set(eyeOrigin.x, eyeOrigin.y, eyeOrigin.z);
-      this.raycaster.ray.direction.set(dir.x, dir.y, dir.z);
-      this.raycaster.near = 0;
-      this.raycaster.far = cfg.range;
-      const intersections = this.raycaster.intersectObjects(this.rayTargets, false);
+      const worldDist = this._raycastWorldObstacles(eyeOrigin, dir, cfg.range, worldNormal);
+      const searchLimit = worldDist !== null ? worldDist : cfg.range;
 
-      let endPoint = {
-        x: eyeOrigin.x + dir.x * cfg.range,
-        y: eyeOrigin.y + dir.y * cfg.range,
-        z: eyeOrigin.z + dir.z * cfg.range
-      };
+      candidates.length = 0;
+      if (this.remotePlayers) {
+        for (const rp of this.remotePlayers.values()) {
+          if (!rp.alive || !rp.group) continue;
+          if (this.gameMode === 'tdm' && this.localTeam && rp.team && rp.team === this.localTeam) continue;
+          const dx = rp.group.position.x - eyeOrigin.x;
+          const dy = (rp.group.position.y + 0.95) - eyeOrigin.y;
+          const dz = rp.group.position.z - eyeOrigin.z;
+          const proj = dx * dir.x + dy * dir.y + dz * dir.z;
+          const clampedProj = proj < 0 ? 0 : (proj > searchLimit ? searchLimit : proj);
+          const px = dx - dir.x * clampedProj;
+          const py = dy - dir.y * clampedProj;
+          const pz = dz - dir.z * clampedProj;
+          if (px * px + py * py + pz * pz <= 3.24) {
+            if (!updatedRps.has(rp)) {
+              updatedRps.add(rp);
+              rp.group.updateMatrixWorld(true);
+            }
+            if (rp.hitboxParts && rp.hitboxParts.length > 0) {
+              for (let h = 0; h < rp.hitboxParts.length; h++) candidates.push(rp.hitboxParts[h]);
+            } else {
+              if (rp.headMesh) candidates.push(rp.headMesh);
+              if (rp.torsoMesh) candidates.push(rp.torsoMesh);
+              if (rp.leftLeg) candidates.push(rp.leftLeg);
+              if (rp.rightLeg) candidates.push(rp.rightLeg);
+            }
+          }
+        }
+      }
+      if (this.barrelMeshes) {
+        for (const b of this.barrelMeshes.values()) {
+          if (!b.active || !b.hitboxMesh) continue;
+          const dx = (b.group?.position?.x ?? b.x ?? 0) - eyeOrigin.x;
+          const dy = ((b.group?.position?.y ?? b.y ?? 0) + 0.65) - eyeOrigin.y;
+          const dz = (b.group?.position?.z ?? b.z ?? 0) - eyeOrigin.z;
+          const proj = dx * dir.x + dy * dir.y + dz * dir.z;
+          const clampedProj = proj < 0 ? 0 : (proj > searchLimit ? searchLimit : proj);
+          const px = dx - dir.x * clampedProj;
+          const py = dy - dir.y * clampedProj;
+          const pz = dz - dir.z * clampedProj;
+          if (px * px + py * py + pz * pz <= 1.44) {
+            if (!updatedRps.has(b)) {
+              updatedRps.add(b);
+              b.group?.updateMatrixWorld(true);
+            }
+            candidates.push(b.hitboxMesh);
+          }
+        }
+      }
+
+      let entityHit = null;
+      if (candidates.length > 0) {
+        this.raycaster.ray.origin.set(eyeOrigin.x, eyeOrigin.y, eyeOrigin.z);
+        this.raycaster.ray.direction.set(dir.x, dir.y, dir.z);
+        this.raycaster.near = 0;
+        this.raycaster.far = searchLimit;
+        const hits = this.raycaster.intersectObjects(candidates, false);
+        if (hits.length > 0) entityHit = hits[0];
+      }
+
+      let endPoint;
       let isPlayerHit = false;
       let hitNormal = null;
 
-      if (intersections.length > 0) {
-        const firstHit = intersections[0];
-        endPoint = {
-          x: firstHit.point.x,
-          y: firstHit.point.y,
-          z: firstHit.point.z
-        };
-        if (firstHit.face) {
+      if (entityHit && entityHit.distance <= searchLimit) {
+        endPoint = { x: entityHit.point.x, y: entityHit.point.y, z: entityHit.point.z };
+        if (entityHit.face) {
           const wn = (this._tmpHitNormal || (this._tmpHitNormal = new THREE.Vector3()))
-            .copy(firstHit.face.normal)
-            .transformDirection(firstHit.object.matrixWorld);
+            .copy(entityHit.face.normal)
+            .transformDirection(entityHit.object.matrixWorld);
           hitNormal = { x: wn.x, y: wn.y, z: wn.z };
         }
-        isPlayerHit = Boolean(firstHit.object.userData?.playerId);
+        isPlayerHit = Boolean(entityHit.object.userData?.playerId);
+      } else if (worldDist !== null) {
+        endPoint = {
+          x: eyeOrigin.x + dir.x * worldDist,
+          y: eyeOrigin.y + dir.y * worldDist,
+          z: eyeOrigin.z + dir.z * worldDist
+        };
+        hitNormal = { x: worldNormal.x, y: worldNormal.y, z: worldNormal.z };
+      } else {
+        endPoint = {
+          x: eyeOrigin.x + dir.x * cfg.range,
+          y: eyeOrigin.y + dir.y * cfg.range,
+          z: eyeOrigin.z + dir.z * cfg.range
+        };
       }
 
       if (!isMelee || isPlayerHit) {

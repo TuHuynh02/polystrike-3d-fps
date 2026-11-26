@@ -1044,8 +1044,11 @@ export function mergeTransformedGeometries(entries) {
     if (!pos) continue;
     if (entries[i].color || geo.attributes.color) hasColors = true;
     if (entries[i].surfaceParams || geo.attributes.aRigSurface) hasSurfaceParams = true;
-    totalVerts += pos.count;
-    totalIndices += geo.index ? geo.index.count : pos.count;
+    const ds = entries[i].doubleSided ? 2 : 1;
+    const baseIdxCount = geo.index ? geo.index.count : pos.count;
+    const backIdxCount = entries[i].doubleSided ? (baseIdxCount - (baseIdxCount % 3)) : 0;
+    totalVerts += pos.count * ds;
+    totalIndices += baseIdxCount + backIdxCount;
   }
 
   const positions = new Float32Array(totalVerts * 3);
@@ -1138,6 +1141,63 @@ export function mergeTransformedGeometries(entries) {
       idxOffset += vCount;
     }
 
+    if (entries[i].doubleSided) {
+      const backVertOffset = vertOffset + vCount;
+      for (let v = 0; v < vCount; v++) {
+        const frontPBase = (vertOffset + v) * 3;
+        const backPBase = (backVertOffset + v) * 3;
+        positions[backPBase] = positions[frontPBase];
+        positions[backPBase + 1] = positions[frontPBase + 1];
+        positions[backPBase + 2] = positions[frontPBase + 2];
+
+        const nyFront = normals[frontPBase + 1];
+        normals[backPBase] = -normals[frontPBase];
+        normals[backPBase + 1] = -nyFront;
+        normals[backPBase + 2] = -normals[frontPBase + 2];
+
+        const frontUBase = (vertOffset + v) * 2;
+        const backUBase = (backVertOffset + v) * 2;
+        uvs[backUBase] = uvs[frontUBase];
+        uvs[backUBase + 1] = uvs[frontUBase + 1];
+
+        if (surfaceParams) {
+          surfaceParams[backUBase] = surfaceParams[frontUBase];
+          surfaceParams[backUBase + 1] = surfaceParams[frontUBase + 1];
+        }
+
+        if (colors) {
+          const aoRatio = bakeAO
+            ? (0.82 + 0.18 * (-nyFront * 0.5 + 0.5)) / (0.82 + 0.18 * (nyFront * 0.5 + 0.5))
+            : 1.0;
+          colors[backPBase] = colors[frontPBase] * aoRatio;
+          colors[backPBase + 1] = colors[frontPBase + 1] * aoRatio;
+          colors[backPBase + 2] = colors[frontPBase + 2] * aoRatio;
+        }
+      }
+
+      if (geo.index) {
+        const idxArray = geo.index.array;
+        const iCount = geo.index.count;
+        const backIdxCount = iCount - (iCount % 3);
+        for (let k = 0; k < backIdxCount; k += 3) {
+          indices[idxOffset + k] = idxArray[k] + backVertOffset;
+          indices[idxOffset + k + 1] = idxArray[k + 2] + backVertOffset;
+          indices[idxOffset + k + 2] = idxArray[k + 1] + backVertOffset;
+        }
+        idxOffset += backIdxCount;
+      } else {
+        const backIdxCount = vCount - (vCount % 3);
+        for (let k = 0; k < backIdxCount; k += 3) {
+          indices[idxOffset + k] = backVertOffset + k;
+          indices[idxOffset + k + 1] = backVertOffset + k + 2;
+          indices[idxOffset + k + 2] = backVertOffset + k + 1;
+        }
+        idxOffset += backIdxCount;
+      }
+
+      vertOffset += vCount;
+    }
+
     vertOffset += vCount;
   }
 
@@ -1161,6 +1221,32 @@ export function mergeTransformedGeometries(entries) {
 export const TP_WEAPON_TEMPLATE_CACHE = new Map();
 let TP_FLASH_GEO = null;
 let TP_FLASH_MAT = null;
+let TP_WEAPON_METAL_MAT = null;
+let TP_WEAPON_MATTE_MAT = null;
+
+function getThirdPersonSharedMaterials() {
+  if (!TP_WEAPON_METAL_MAT) {
+    TP_WEAPON_METAL_MAT = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      metalness: 0.78,
+      roughness: 0.34,
+      vertexColors: true
+    });
+    TP_WEAPON_METAL_MAT.userData = { shared: true, matSlotKey: 'tp_weapon_metal' };
+    WEAPON_MAT_CACHE.set('tp_weapon_metal', TP_WEAPON_METAL_MAT);
+  }
+  if (!TP_WEAPON_MATTE_MAT) {
+    TP_WEAPON_MATTE_MAT = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      metalness: 0.12,
+      roughness: 0.76,
+      vertexColors: true
+    });
+    TP_WEAPON_MATTE_MAT.userData = { shared: true, matSlotKey: 'tp_weapon_matte' };
+    WEAPON_MAT_CACHE.set('tp_weapon_matte', TP_WEAPON_MATTE_MAT);
+  }
+  return { metalMat: TP_WEAPON_METAL_MAT, matteMat: TP_WEAPON_MATTE_MAT };
+}
 
 export function getThirdPersonWeaponTemplate(weaponId = 'rifle') {
   let tpl = TP_WEAPON_TEMPLATE_CACHE.get(weaponId);
@@ -1168,14 +1254,45 @@ export function getThirdPersonWeaponTemplate(weaponId = 'rifle') {
 
   const { group: rawGroup, muzzleZ } = buildDetailedWeaponModel(weaponId);
   rawGroup.updateMatrixWorld(true);
+  const { metalMat, matteMat } = getThirdPersonSharedMaterials();
 
   const byMat = new Map();
   rawGroup.traverse((child) => {
     if (child.isMesh && child.geometry && child.material) {
-      let list = byMat.get(child.material);
+      const mat = child.material;
+      // Skip micro decal/reticle quads invisible at 3P distance (rollmark alpha cutout & 1P red-dot reticles)
+      if (mat.isMeshStandardMaterial && mat.alphaTest > 0 && mat.map) return;
+      if (mat.isMeshBasicMaterial && mat.transparent) return;
+
+      const isOpaqueStandard = Boolean(
+        mat.isMeshStandardMaterial &&
+        !mat.transparent &&
+        (!mat.emissive || mat.emissive.getHex() === 0) &&
+        mat.color
+      );
+      const isOpaqueBasic = Boolean(mat.isMeshBasicMaterial && !mat.transparent && mat.color);
+
+      if (isOpaqueStandard || isOpaqueBasic) {
+        const targetMat = isOpaqueStandard && (mat.metalness ?? 0) >= 0.45 ? metalMat : matteMat;
+        let list = byMat.get(targetMat);
+        if (!list) {
+          list = [];
+          byMat.set(targetMat, list);
+        }
+        list.push({
+          geometry: child.geometry,
+          matrix: child.matrixWorld.clone(),
+          color: mat.color,
+          bakeAO: isOpaqueStandard,
+          doubleSided: mat.side === THREE.DoubleSide
+        });
+        return;
+      }
+
+      let list = byMat.get(mat);
       if (!list) {
         list = [];
-        byMat.set(child.material, list);
+        byMat.set(mat, list);
       }
       list.push({ geometry: child.geometry, matrix: child.matrixWorld.clone() });
     }
@@ -1214,6 +1331,9 @@ export function createWeaponMesh(weaponId, isFirstPerson = false) {
     const m = new THREE.Mesh(b.geometry, b.material);
     m.castShadow = false;
     m.frustumCulled = true;
+    if (b.material?.transparent) {
+      m.userData = { ...(m.userData || {}), noShadow: true };
+    }
     group.add(m);
   }
 

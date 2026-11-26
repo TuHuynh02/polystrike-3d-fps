@@ -1406,15 +1406,26 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
     batchBoneScope(headGroup, sKey('head'), new Set([headHitboxProxy]), headMesh, useEnemyOutline, initialOutlineMat),
     batchBoneScope(rightArm, sKey('arm_upper_r'), new Set([rightForearm]), rightBicep, useEnemyOutline, initialOutlineMat),
     batchBoneScope(rightForearm, sKey('arm_lower_r'), new Set([rightHand]), rightForearmMesh, useEnemyOutline, initialOutlineMat),
-    batchBoneScope(rightHand, sKey('hand_r'), new Set(), null, useEnemyOutline, initialOutlineMat),
+    batchBoneScope(rightHand, sKey('hand_r'), new Set(), null, false, initialOutlineMat),
     batchBoneScope(leftArm, sKey('arm_upper_l'), new Set([leftForearm]), leftBicep, useEnemyOutline, initialOutlineMat),
     batchBoneScope(leftForearm, sKey('arm_lower_l'), new Set([leftHand]), leftForearmMesh, useEnemyOutline, initialOutlineMat),
-    batchBoneScope(leftHand, sKey('hand_l'), new Set(), null, useEnemyOutline, initialOutlineMat),
+    batchBoneScope(leftHand, sKey('hand_l'), new Set(), null, false, initialOutlineMat),
     batchBoneScope(leftLeg, sKey('leg_l'), new Set([leftKneePivot, leftLegHitboxProxy]), leftLeg, useEnemyOutline, initialOutlineMat),
     batchBoneScope(rightLeg, sKey('leg_r'), new Set([rightKneePivot, rightLegHitboxProxy]), rightLeg, useEnemyOutline, initialOutlineMat),
     batchBoneScope(leftKneePivot, sKey('shin_l'), new Set([leftShinHitboxProxy]), leftLegData.shinMesh, useEnemyOutline, initialOutlineMat),
     batchBoneScope(rightKneePivot, sKey('shin_r'), new Set([rightShinHitboxProxy]), rightLegData.shinMesh, useEnemyOutline, initialOutlineMat)
   ].filter(Boolean);
+
+  const disableHandShadows = (handObj) => {
+    handObj?.traverse?.((obj) => {
+      if (obj.isMesh) {
+        obj.castShadow = false;
+        obj.userData = { ...(obj.userData || {}), noShadow: true };
+      }
+    });
+  };
+  disableHandShadows(rightHand);
+  disableHandShadows(leftHand);
 
   if (!isShowcase && options.scene) {
     options.scene.add(group);
@@ -1536,7 +1547,7 @@ export function createRemotePlayerMesh(playerData = {}, options = {}) {
           }
           const cast = Boolean(!rig._isShowcase && rig._castShadowApplied);
           created.traverse((o) => {
-            if (o.isMesh && !o.userData?.isOutline && !o.userData?.isHitbox) {
+            if (o.isMesh && !o.userData?.isOutline && !o.userData?.isHitbox && !o.userData?.noShadow && !o.userData?.isMuzzleFlash) {
               if (o.geometry && !o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
               o.frustumCulled = true;
               o.castShadow = cast;

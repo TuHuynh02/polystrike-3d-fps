@@ -376,7 +376,7 @@ export class RemotePlayersMethods {
             }
             if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
             o.frustumCulled = true;
-            if (!o.userData?.isOutline && !o.userData?.isHitbox) {
+            if (!o.userData?.isOutline && !o.userData?.isHitbox && !o.userData?.noShadow && !o.userData?.isMuzzleFlash) {
               o.castShadow = Boolean(rp._castShadowApplied);
             }
           }
@@ -433,6 +433,19 @@ export class RemotePlayersMethods {
     const camYaw = this.yaw || 0;
     const camFwdX = -Math.sin(camYaw);
     const camFwdZ = -Math.cos(camYaw);
+
+    let hasFrustum = false;
+    let camFrustum = null;
+    let tmpSphere = null;
+    if (this.inMatch && this.camera?.projectionMatrix && this.camera?.matrixWorldInverse) {
+      this.camera.updateMatrixWorld?.();
+      camFrustum = this._camFrustum || (this._camFrustum = new THREE.Frustum());
+      const projScreenMat = this._projScreenMat || (this._projScreenMat = new THREE.Matrix4());
+      tmpSphere = this._tmpCullSphere || (this._tmpCullSphere = new THREE.Sphere());
+      projScreenMat.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
+      camFrustum.setFromProjectionMatrix(projScreenMat);
+      hasFrustum = true;
+    }
 
     for (const [id, rp] of this.remotePlayers.entries()) {
       // A killed player stays drawn until the interpolated timeline reaches its death snapshot (no vanishing 100+ ms
@@ -503,8 +516,14 @@ export class RemotePlayersMethods {
         const dz = rp.group.position.z - camPos.z;
         const distSq = dx * dx + dz * dz;
         const proj = dx * camFwdX + dz * camFwdZ;
-        // Behind camera (> 6m and dot < -0.25): skip when stationary, or run every 4th frame when moving
-        if (distSq > 36 && proj < 0 && (proj * proj) > 0.0625 * distSq) {
+        let outOfView = distSq > 36 && proj < 0 && (proj * proj) > 0.0625 * distSq;
+        if (!outOfView && hasFrustum && distSq > 16) {
+          tmpSphere.center.set(rp.group.position.x, (rp.group.position.y || 0) + 0.95, rp.group.position.z);
+          tmpSphere.radius = 1.35;
+          outOfView = !camFrustum.intersectsSphere(tmpSphere);
+        }
+        // Outside camera view / behind camera: skip when stationary, or run every 4th frame when moving
+        if (outOfView) {
           shouldAnimate = isMoving && ((frameIdx + rp._cullSalt) & 3) === 0;
         } else if (distSq > 1444) {
           // Far away (> 38m): run at half animation rate (every 2nd frame)

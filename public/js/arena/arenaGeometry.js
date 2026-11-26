@@ -745,8 +745,8 @@ export function buildArena(game, mapCfg = game?.currentMapConfig || {}) {
           const ccx = cx + sx * (halfW - castW * 0.5 + 0.008);
           const ccz = cz + sz * (halfD - castW * 0.5 + 0.008);
           addDecorBox(ccx, ccy, ccz, castW, castH, castW, gunmetalFrameMat);
-          addDecorBox(ccx + sx * (castW * 0.5 + 0.004), ccy, ccz, 0.012, 0.075, 0.115, saltlineMats.rubberFenderMat);
-          addDecorBox(ccx, ccy, ccz + sz * (castW * 0.5 + 0.004), 0.115, 0.075, 0.012, saltlineMats.rubberFenderMat);
+          addDecorBox(ccx + sx * (castW * 0.5 + 0.012), ccy, ccz, 0.018, 0.075, 0.115, saltlineMats.rubberFenderMat);
+          addDecorBox(ccx, ccy, ccz + sz * (castW * 0.5 + 0.012), 0.115, 0.075, 0.018, saltlineMats.rubberFenderMat);
         }
       }
     }

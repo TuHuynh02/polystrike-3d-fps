@@ -181,7 +181,10 @@ export function createDustArchitectureMaterials(game, plan, highDetail = true, m
   const forgedIronMat = new THREE.MeshStandardMaterial({
     color: 0x24201c,
     roughness: 0.58,
-    metalness: 0.48
+    metalness: 0.48,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1
   });
   const tealShutterMat = new THREE.MeshStandardMaterial({
     color: 0x2d6a54,
@@ -201,7 +204,10 @@ export function createDustArchitectureMaterials(game, plan, highDetail = true, m
   const recessDarkMat = new THREE.MeshStandardMaterial({
     color: 0x16120e,
     roughness: 0.96,
-    metalness: 0.0
+    metalness: 0.0,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1
   });
   const sandDriftMat = new THREE.MeshStandardMaterial({
     color: 0xd4bc91,
@@ -645,22 +651,23 @@ export function buildDustMoroccanWall(ctx, obs, mainMat) {
     const upperY = topY + upperH * 0.5;
     const inward = alongX ? (cz > 0 ? -1 : 1) : cx > 0 ? -1 : 1;
     const dadoH = 1.15;
+    const wallSpanZ = alongX ? cd : Math.max(2, cd - 2.02);
 
-    pushArchBox(mainMat, 'wall', cx, cy, cz, cw, ch, cd);
-    pushArchBox(dustMats.stuccoMat, 'wall', cx, upperY, cz, cw, upperH, cd);
+    pushArchBox(mainMat, 'wall', cx, cy, cz, cw, ch, wallSpanZ);
+    pushArchBox(dustMats.stuccoMat, 'wall', cx, upperY, cz, cw, upperH, wallSpanZ);
 
     if (alongX) {
-      pushArchBox(dustMats.stoneDadoMat, 'dado', cx, dadoH * 0.5, cz + inward * 0.57, cw - 1.6, dadoH, 0.14);
-      pushArchBox(dustMats.sandstoneMat, 'platform', cx, dadoH + 0.04, cz + inward * 0.59, cw - 1.5, 0.08, 0.18);
-      pushArchBox(dustMats.concreteCurbMat, 'wall', cx, 0.075, cz + inward * 0.74, cw - 1.8, 0.15, 0.48);
-      pushArchBox(dustMats.sandstoneMat, 'platform', cx, 4.4, cz + inward * 0.56, cw - 1.4, 0.24, 0.14);
+      pushArchBox(dustMats.stoneDadoMat, 'dado', cx, dadoH * 0.5, cz + inward * 0.575, cw - 1.6, dadoH, 0.13);
+      pushArchBox(dustMats.sandstoneMat, 'platform', cx, dadoH + 0.045, cz + inward * 0.595, cw - 1.5, 0.075, 0.17);
+      pushArchBox(dustMats.concreteCurbMat, 'wall', cx, 0.075, cz + inward * 0.805, cw - 1.8, 0.15, 0.31);
+      pushArchBox(dustMats.sandstoneMat, 'platform', cx, 4.4, cz + inward * 0.575, cw - 1.4, 0.24, 0.13);
       pushArchBox(dustMats.sandstoneMat, 'platform', cx, topY + upperH + 0.14, cz, cw + 0.28, 0.28, cd + 0.32);
     } else {
-      pushArchBox(dustMats.stoneDadoMat, 'dado', cx + inward * 0.57, dadoH * 0.5, cz, 0.14, dadoH, cd - 1.6);
-      pushArchBox(dustMats.sandstoneMat, 'platform', cx + inward * 0.59, dadoH + 0.04, cz, 0.18, 0.08, cd - 1.5);
-      pushArchBox(dustMats.concreteCurbMat, 'wall', cx + inward * 0.74, 0.075, cz, 0.48, 0.15, cd - 1.8);
-      pushArchBox(dustMats.sandstoneMat, 'platform', cx + inward * 0.56, 4.4, cz, 0.14, 0.24, cd - 1.4);
-      pushArchBox(dustMats.sandstoneMat, 'platform', cx, topY + upperH + 0.14, cz, cw + 0.32, 0.28, cd + 0.28);
+      pushArchBox(dustMats.stoneDadoMat, 'dado', cx + inward * 0.575, dadoH * 0.5, cz, 0.13, dadoH, cd - 1.6);
+      pushArchBox(dustMats.sandstoneMat, 'platform', cx + inward * 0.595, dadoH + 0.045, cz, 0.17, 0.075, cd - 1.5);
+      pushArchBox(dustMats.concreteCurbMat, 'wall', cx + inward * 0.805, 0.075, cz, 0.31, 0.15, cd - 1.8);
+      pushArchBox(dustMats.sandstoneMat, 'platform', cx + inward * 0.575, 4.4, cz, 0.13, 0.24, cd - 1.4);
+      pushArchBox(dustMats.sandstoneMat, 'platform', cx, topY + upperH + 0.14, cz, cw + 0.32, 0.28, Math.max(2, cd - 1.72));
     }
 
     const wallSpan = alongX ? cw : cd;
@@ -707,16 +714,18 @@ export function buildDustMoroccanWall(ctx, obs, mainMat) {
   const alongX = cw >= cd;
   if (ch < 2.2) {
     const lowDadoH = Math.min(0.62, ch * 0.45);
+    const lowDadoBodyH = Math.max(0.15, lowDadoH - 0.125);
+    const lowMainH = Math.max(0.2, ch - lowDadoH - 0.16);
     pushArchBox(dustMats.concreteCurbMat, 'wall', cx, botY + 0.06, cz, cw + 0.18, 0.12, cd + 0.18);
-    pushArchBox(dustMats.stoneDadoMat, 'dado', cx, botY + lowDadoH * 0.5, cz, cw + 0.08, lowDadoH, cd + 0.08);
+    pushArchBox(dustMats.stoneDadoMat, 'dado', cx, botY + 0.125 + lowDadoBodyH * 0.5, cz, cw + 0.08, lowDadoBodyH, cd + 0.08);
     pushArchBox(
       mainMat,
       'wall',
       cx,
-      botY + lowDadoH + Math.max(0.2, ch - lowDadoH - 0.16) * 0.5,
+      botY + lowDadoH + lowMainH * 0.5,
       cz,
       cw,
-      Math.max(0.2, ch - lowDadoH - 0.16),
+      lowMainH,
       cd
     );
     pushArchFrustum(dustMats.sandstoneMat, 'platform', cx, topY - 0.08, cz, cw + 0.16, 0.16, cd + 0.16, cw + 0.04, cd + 0.04);
@@ -725,7 +734,8 @@ export function buildDustMoroccanWall(ctx, obs, mainMat) {
 
   const dadoH = Math.min(1.15, ch * 0.38);
   const copingH = 0.18;
-  const shaftH = Math.max(0.4, ch - dadoH - copingH);
+  const dadoBodyH = Math.max(0.2, dadoH - 0.13);
+  const shaftH = Math.max(0.3, ch - dadoH - 0.07 - copingH);
 
   // Special landmark: CS2 Mid Double Doors heavy timber + forged iron strap cladding
   const doorInfo = dustLandmarks?.midDoorMap?.get(obs);
@@ -741,22 +751,22 @@ export function buildDustMoroccanWall(ctx, obs, mainMat) {
       const doorX = cx + gapSign * (halfW - doorLen * 0.5);
       const stuccoX = cx - gapSign * (doorLen * 0.5);
       pushArchBox(dustMats.concreteCurbMat, 'wall', stuccoX, botY + 0.065, cz, stuccoLen + 0.04, 0.13, cd + 0.24);
-      pushArchBox(dustMats.stoneDadoMat, 'dado', stuccoX, botY + dadoH * 0.5, cz, stuccoLen + 0.04, dadoH, cd + 0.08);
+      pushArchBox(dustMats.stoneDadoMat, 'dado', stuccoX, botY + 0.13 + dadoBodyH * 0.5, cz, stuccoLen + 0.04, dadoBodyH, cd + 0.08);
       pushArchBox(dustMats.sandstoneMat, 'platform', stuccoX, botY + dadoH + 0.035, cz, stuccoLen + 0.06, 0.07, cd + 0.14);
-      pushArchBox(mainMat, 'wall', stuccoX, botY + dadoH + shaftH * 0.5, cz, stuccoLen, shaftH, cd);
-      pushArchBox(mainMat, 'wall', doorX, cy, cz, doorLen, ch - copingH, cd);
+      pushArchBox(mainMat, 'wall', stuccoX, botY + dadoH + 0.07 + shaftH * 0.5, cz, stuccoLen, shaftH, cd);
+      pushArchBox(mainMat, 'wall', doorX, cy - copingH * 0.5, cz, doorLen, ch - copingH, cd);
       pushArchFrustum(dustMats.sandstoneMat, 'platform', cx, topY - copingH * 0.5, cz, cw, copingH, cd + 0.22, cw, cd + 0.08);
 
       for (const faceZ of [-1, 1]) {
         const fz = cz + faceZ * (halfD + 0.022);
         pushVerticalPlankBox(ctx, dustMats.timberDoorMat, 'crate', doorX, doorCy, fz, doorLen, doorH, 0.045);
-        addDecorBox(doorX, topY - 0.12, fz + faceZ * 0.02, doorLen + 0.06, 0.14, 0.035, dustMats.forgedIronMat, true);
-        addDecorBox(doorX + gapSign * (doorLen * 0.5 - 0.07), doorCy, fz + faceZ * 0.02, 0.14, doorH, 0.04, dustMats.forgedIronMat, true);
-        addDecorBox(doorX - gapSign * (doorLen * 0.5 - 0.07), doorCy, fz + faceZ * 0.02, 0.14, doorH, 0.04, dustMats.forgedIronMat, true);
-        addDecorBox(doorX, doorCy, fz + faceZ * 0.024, doorLen * 0.82, 0.12, 0.025, dustMats.cedarBeamMat, true, 0, 0, gapSign * 0.65);
+        addDecorBox(doorX, topY - 0.12, fz + faceZ * 0.036, doorLen + 0.06, 0.14, 0.028, dustMats.forgedIronMat, true);
+        addDecorBox(doorX + gapSign * (doorLen * 0.5 - 0.07), doorCy, fz + faceZ * 0.038, 0.14, doorH, 0.030, dustMats.forgedIronMat, true);
+        addDecorBox(doorX - gapSign * (doorLen * 0.5 - 0.07), doorCy, fz + faceZ * 0.038, 0.14, doorH, 0.030, dustMats.forgedIronMat, true);
+        addDecorBox(doorX, doorCy, fz + faceZ * 0.042, doorLen * 0.82, 0.12, 0.024, dustMats.cedarBeamMat, true, 0, 0, gapSign * 0.65);
         for (const hy of [-0.90, 0.05, 1.00]) {
           if (Math.abs(hy) < doorH * 0.42) {
-            addDecorBox(doorX - gapSign * (doorLen * 0.11), doorCy + hy, fz + faceZ * 0.028, doorLen * 0.62, 0.085, 0.024, dustMats.forgedIronMat, true);
+            addDecorBox(doorX - gapSign * (doorLen * 0.11), doorCy + hy, fz + faceZ * 0.052, doorLen * 0.62, 0.085, 0.024, dustMats.forgedIronMat, true);
           }
         }
       }
@@ -770,21 +780,21 @@ export function buildDustMoroccanWall(ctx, obs, mainMat) {
       const doorZ = cz + gapSign * (halfD - doorLen * 0.5);
       const stuccoZ = cz - gapSign * (doorLen * 0.5);
       pushArchBox(dustMats.concreteCurbMat, 'wall', cx, botY + 0.065, stuccoZ, cw + 0.24, 0.13, stuccoLen + 0.04);
-      pushArchBox(dustMats.stoneDadoMat, 'dado', cx, botY + dadoH * 0.5, stuccoZ, cw + 0.08, dadoH, stuccoLen + 0.04);
+      pushArchBox(dustMats.stoneDadoMat, 'dado', cx, botY + 0.13 + dadoBodyH * 0.5, stuccoZ, cw + 0.08, dadoBodyH, stuccoLen + 0.04);
       pushArchBox(dustMats.sandstoneMat, 'platform', cx, botY + dadoH + 0.035, stuccoZ, cw + 0.14, 0.07, stuccoLen + 0.06);
-      pushArchBox(mainMat, 'wall', cx, botY + dadoH + shaftH * 0.5, stuccoZ, cw, shaftH, stuccoLen);
-      pushArchBox(mainMat, 'wall', cx, cy, doorZ, cw, ch - copingH, doorLen);
+      pushArchBox(mainMat, 'wall', cx, botY + dadoH + 0.07 + shaftH * 0.5, stuccoZ, cw, shaftH, stuccoLen);
+      pushArchBox(mainMat, 'wall', cx, cy - copingH * 0.5, doorZ, cw, ch - copingH, doorLen);
       pushArchFrustum(dustMats.sandstoneMat, 'platform', cx, topY - copingH * 0.5, cz, cw + 0.22, copingH, cd, cw + 0.08, cd);
 
       for (const faceX of [-1, 1]) {
         const fx = cx + faceX * (halfW + 0.022);
         pushVerticalPlankBox(ctx, dustMats.timberDoorMat, 'crate', fx, doorCy, doorZ, 0.045, doorH, doorLen);
-        addDecorBox(fx + faceX * 0.02, topY - 0.12, doorZ, 0.035, 0.14, doorLen + 0.06, dustMats.forgedIronMat, true);
-        addDecorBox(fx + faceX * 0.02, doorCy, doorZ + gapSign * (doorLen * 0.5 - 0.07), 0.04, doorH, 0.14, dustMats.forgedIronMat, true);
-        addDecorBox(fx + faceX * 0.02, doorCy, doorZ - gapSign * (doorLen * 0.5 - 0.07), 0.04, doorH, 0.14, dustMats.forgedIronMat, true);
+        addDecorBox(fx + faceX * 0.036, topY - 0.12, doorZ, 0.028, 0.14, doorLen + 0.06, dustMats.forgedIronMat, true);
+        addDecorBox(fx + faceX * 0.038, doorCy, doorZ + gapSign * (doorLen * 0.5 - 0.07), 0.030, doorH, 0.14, dustMats.forgedIronMat, true);
+        addDecorBox(fx + faceX * 0.038, doorCy, doorZ - gapSign * (doorLen * 0.5 - 0.07), 0.030, doorH, 0.14, dustMats.forgedIronMat, true);
         for (const hy of [-0.90, 0.05, 1.00]) {
           if (Math.abs(hy) < doorH * 0.42) {
-            addDecorBox(fx + faceX * 0.028, doorCy + hy, doorZ - gapSign * (doorLen * 0.11), 0.024, 0.085, doorLen * 0.62, dustMats.forgedIronMat, true);
+            addDecorBox(fx + faceX * 0.052, doorCy + hy, doorZ - gapSign * (doorLen * 0.11), 0.024, 0.085, doorLen * 0.62, dustMats.forgedIronMat, true);
           }
         }
       }
@@ -804,9 +814,9 @@ export function buildDustMoroccanWall(ctx, obs, mainMat) {
   const copingTopD = alongX ? cd + 0.08 : cd;
 
   pushArchBox(dustMats.concreteCurbMat, 'wall', cx, botY + 0.065, cz, curbW, 0.13, curbD);
-  pushArchBox(dustMats.stoneDadoMat, 'dado', cx, botY + dadoH * 0.5, cz, dadoW, dadoH, dadoD);
+  pushArchBox(dustMats.stoneDadoMat, 'dado', cx, botY + 0.13 + dadoBodyH * 0.5, cz, dadoW, dadoBodyH, dadoD);
   pushArchBox(dustMats.sandstoneMat, 'platform', cx, botY + dadoH + 0.035, cz, capW, 0.07, capD);
-  pushArchBox(mainMat, 'wall', cx, botY + dadoH + shaftH * 0.5, cz, cw, shaftH, cd);
+  pushArchBox(mainMat, 'wall', cx, botY + dadoH + 0.07 + shaftH * 0.5, cz, cw, shaftH, cd);
   pushArchFrustum(
     dustMats.sandstoneMat,
     'platform',
@@ -929,18 +939,19 @@ export function buildDustTerracePlatform(ctx, obs, mainMat) {
 
   const deckThick = 0.26;
   const dadoH = Math.min(1.12, Math.max(0.50, ch * 0.48));
-  const bodyH = Math.max(0.22, ch - deckThick - dadoH);
+  const dadoBodyH = Math.max(0.20, dadoH - 0.13);
+  const bodyH = Math.max(0.22, ch - deckThick - dadoH - 0.07);
 
   pushArchBox(dustMats.concreteCurbMat, 'wall', cx, botY + 0.065, cz, cw + 0.24, 0.13, cd + 0.24);
-  pushArchBox(dustMats.stoneDadoMat, 'dado', cx, botY + dadoH * 0.5, cz, cw + 0.08, dadoH, cd + 0.08);
+  pushArchBox(dustMats.stoneDadoMat, 'dado', cx, botY + 0.13 + dadoBodyH * 0.5, cz, cw + 0.08, dadoBodyH, cd + 0.08);
   pushArchBox(dustMats.sandstoneMat, 'platform', cx, botY + dadoH + 0.035, cz, cw + 0.12, 0.07, cd + 0.12);
-  pushArchBox(dustMats.stuccoMat, 'wall', cx, botY + dadoH + bodyH * 0.5, cz, cw - 0.10, bodyH, cd - 0.10);
+  pushArchBox(dustMats.stuccoMat, 'wall', cx, botY + dadoH + 0.07 + bodyH * 0.5, cz, cw - 0.10, bodyH, cd - 0.10);
   pushArchBox(mainMat, 'platform', cx, topY - deckThick * 0.5, cz, cw, deckThick, cd);
 
   addDecorBox(cx, topY - 0.13, cz - halfD, cw + 0.16, 0.22, 0.16, dustMats.sandstoneTrimMat, true);
   addDecorBox(cx, topY - 0.13, cz + halfD, cw + 0.16, 0.22, 0.16, dustMats.sandstoneTrimMat, true);
-  addDecorBox(cx - halfW, topY - 0.13, cz, 0.16, 0.22, cd + 0.16, dustMats.sandstoneTrimMat, true);
-  addDecorBox(cx + halfW, topY - 0.13, cz, 0.16, 0.22, cd + 0.16, dustMats.sandstoneTrimMat, true);
+  addDecorBox(cx - halfW, topY - 0.13, cz, 0.16, 0.22, Math.max(0.2, cd - 0.16), dustMats.sandstoneTrimMat, true);
+  addDecorBox(cx + halfW, topY - 0.13, cz, 0.16, 0.22, Math.max(0.2, cd - 0.16), dustMats.sandstoneTrimMat, true);
 
   for (const sx of [-1, 1]) {
     for (const sz of [-1, 1]) {
@@ -948,13 +959,13 @@ export function buildDustTerracePlatform(ctx, obs, mainMat) {
     }
   }
   if (highDetail) {
-    const panelY = botY + dadoH + bodyH * 0.5;
+    const panelY = botY + dadoH + 0.07 + bodyH * 0.5;
     for (const side of [-1, 1]) {
       if (cw >= 3.2) {
-        addDecorBox(cx, panelY, cz + side * (halfD - 0.03), Math.max(1.4, cw - 2.0), Math.max(0.28, bodyH * 0.62), 0.06, dustMats.recessDarkMat, false);
+        addDecorBox(cx, panelY, cz + side * (halfD - 0.04), Math.max(1.4, cw - 2.0), Math.max(0.28, bodyH * 0.62), 0.04, dustMats.recessDarkMat, false);
       }
       if (cd >= 3.2) {
-        addDecorBox(cx + side * (halfW - 0.03), panelY, cz, 0.06, Math.max(0.28, bodyH * 0.62), Math.max(1.4, cd - 2.0), dustMats.recessDarkMat, false);
+        addDecorBox(cx + side * (halfW - 0.04), panelY, cz, 0.04, Math.max(0.28, bodyH * 0.62), Math.max(1.4, cd - 2.0), dustMats.recessDarkMat, false);
       }
     }
   }
@@ -971,11 +982,11 @@ export function buildDustSandstoneStep(ctx, obs, mainMat) {
   pushArchBox(dustMats.stoneDadoMat, 'dado', cx, cy - treadH * 0.5, cz, cw - 0.05, riserH, cd - 0.05);
   pushArchBox(mainMat, 'step', cx, topY - treadH * 0.5, cz, cw, treadH, cd);
   if (cw >= cd) {
-    addDecorBox(cx, topY - 0.03, cz - cd * 0.5, cw + 0.05, 0.065, 0.09, dustMats.sandstoneTrimMat, true);
-    addDecorBox(cx, topY - 0.03, cz + cd * 0.5, cw + 0.05, 0.065, 0.09, dustMats.sandstoneTrimMat, true);
+    addDecorBox(cx, topY - 0.044, cz - cd * 0.5, cw + 0.05, 0.064, 0.09, dustMats.sandstoneTrimMat, true);
+    addDecorBox(cx, topY - 0.044, cz + cd * 0.5, cw + 0.05, 0.064, 0.09, dustMats.sandstoneTrimMat, true);
   } else {
-    addDecorBox(cx - cw * 0.5, topY - 0.03, cz, 0.09, 0.065, cd + 0.05, dustMats.sandstoneTrimMat, true);
-    addDecorBox(cx + cw * 0.5, topY - 0.03, cz, 0.09, 0.065, cd + 0.05, dustMats.sandstoneTrimMat, true);
+    addDecorBox(cx - cw * 0.5, topY - 0.044, cz, 0.09, 0.064, cd + 0.05, dustMats.sandstoneTrimMat, true);
+    addDecorBox(cx + cw * 0.5, topY - 0.044, cz, 0.09, 0.064, cd + 0.05, dustMats.sandstoneTrimMat, true);
   }
 }
 

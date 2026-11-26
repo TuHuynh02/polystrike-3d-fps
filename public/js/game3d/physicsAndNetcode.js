@@ -146,6 +146,9 @@ export class PhysicsAndNetcodeMethods {
     resetShotState(this.shotState);
     this.lastFireCmdTimeMs = -Infinity;
     if (Number.isInteger(data.spreadSeed)) this.setSpreadSeed(data.spreadSeed);
+    if (this.renderer?.shadowMap?.enabled && this.dirLight) {
+      this.updateDirectionalShadowAnchor?.(this.position.x, this.position.z, { force: true });
+    }
     this.meleeSwingUntil = 0;
     this.grenadeThrowUntil = 0;
     this.cancelGrenadeCooking();

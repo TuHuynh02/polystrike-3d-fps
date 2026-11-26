@@ -31,7 +31,7 @@ import {
   getMapEnvironmentIntensity
 } from '../arena/skyAtmosphere.js';
 import { installStablePCF, isSoftwareWebGLRenderer } from '../arena/shadowFilter.js';
-import { WEAPON_MAT_CACHE, createWeaponMesh, setWeaponAdsCulling } from '../weaponModels.js';
+import { WEAPON_MAT_CACHE, createWeaponMesh, mergeTransformedGeometries, setWeaponAdsCulling } from '../weaponModels.js';
 import {
   RIG_MAT_CACHE,
   createRemotePlayerMesh,
@@ -87,6 +87,126 @@ const CS2_GLB_PRELOAD_PATHS = [
   'models/fp/ak47.glb',
   'models/weapons/optics.glb'
 ];
+
+const PICKUP_LED_COLORS = {
+  armor: 0x4b7ba8,
+  speed: 0xb57c2e,
+  damage: 0x9c3a3a,
+  health: 0x3b8c58
+};
+
+let _PICKUP_SHARED_CACHE = null;
+function getPickupSharedAssets(pType = 'health') {
+  if (!_PICKUP_SHARED_CACHE) {
+    const plateGeo = new THREE.CylinderGeometry(0.60, 0.64, 0.04, 16);
+    plateGeo.userData = { shared: true };
+    const plateMat = new THREE.MeshStandardMaterial({
+      color: 0x2b3138,
+      metalness: 0.58,
+      roughness: 0.72
+    });
+    plateMat.userData = { shared: true };
+    const padGeo = new THREE.BoxGeometry(0.08, 0.012, 0.024);
+    padGeo.userData = { shared: true };
+    const holoRingGeo = new THREE.RingGeometry(0.535, 0.575, 24);
+    holoRingGeo.userData = { shared: true };
+    const caseMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      roughness: 0.74,
+      metalness: 0.16
+    });
+    caseMat.userData = { shared: true };
+    _PICKUP_SHARED_CACHE = {
+      plateGeo,
+      plateMat,
+      padGeo,
+      holoRingGeo,
+      caseMat,
+      holoRingMats: new Map(),
+      caseGeos: new Map()
+    };
+  }
+  const cache = _PICKUP_SHARED_CACHE;
+  const typeKey = pType === 'armor' || pType === 'speed' || pType === 'damage' ? pType : 'health';
+  const ledColor = PICKUP_LED_COLORS[typeKey] || PICKUP_LED_COLORS.health;
+  let holoRingMat = cache.holoRingMats.get(typeKey);
+  if (!holoRingMat) {
+    holoRingMat = new THREE.MeshStandardMaterial({
+      color: ledColor,
+      emissive: ledColor,
+      emissiveIntensity: 0.20,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.24,
+      roughness: 0.55,
+      metalness: 0.2,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2
+    });
+    holoRingMat.userData = { shared: true };
+    cache.holoRingMats.set(typeKey, holoRingMat);
+  }
+  let caseGeo = cache.caseGeos.get(typeKey);
+  if (!caseGeo) {
+    const entries = [];
+    const tempGeos = [];
+    const addPart = (w, h, d, hex, px, py, pz) => {
+      const geo = new THREE.BoxGeometry(w, h, d);
+      tempGeos.push(geo);
+      const matrix = new THREE.Matrix4().makeTranslation(px, py, pz);
+      entries.push({ geometry: geo, matrix, color: new THREE.Color(hex), bakeAO: true });
+    };
+    if (typeKey === 'armor') {
+      addPart(0.54, 0.22, 0.40, 0x2b3036, 0, 0.11, 0);
+      addPart(0.544, 0.04, 0.404, 0x333942, 0, 0.24, 0);
+      for (const rz of [-0.11, 0, 0.11]) {
+        addPart(0.46, 0.012, 0.036, 0x22262c, 0, 0.265, rz);
+      }
+      addPart(0.055, 0.085, 0.024, 0x6f7a86, -0.15, 0.145, 0.204);
+      addPart(0.055, 0.085, 0.024, 0x6f7a86, 0.15, 0.145, 0.204);
+      addPart(0.548, 0.026, 0.408, 0x466b8c, 0, 0.195, 0);
+    } else if (typeKey === 'speed' || typeKey === 'damage') {
+      const isSpeed = typeKey === 'speed';
+      const crateHex = isSpeed ? 0x4b5338 : 0x3e444a;
+      const stencilHex = isSpeed ? 0xb57c2e : 0x943434;
+      addPart(0.52, 0.26, 0.36, crateHex, 0, 0.13, 0);
+      addPart(0.042, 0.268, 0.368, 0x2b3138, -0.16, 0.13, 0);
+      addPart(0.042, 0.268, 0.368, 0x2b3138, 0.16, 0.13, 0);
+      addPart(0.05, 0.075, 0.022, 0x2b3138, -0.09, 0.15, 0.184);
+      addPart(0.05, 0.075, 0.022, 0x2b3138, 0.09, 0.15, 0.184);
+      addPart(0.18, 0.008, 0.11, stencilHex, 0, 0.263, 0);
+      addPart(0.20, 0.036, 0.364, stencilHex, 0, 0.14, 0);
+    } else {
+      addPart(0.52, 0.14, 0.36, 0x5b634a, 0, 0.07, 0);
+      addPart(0.524, 0.10, 0.364, 0xd8d2c5, 0, 0.19, 0);
+      addPart(0.055, 0.075, 0.024, 0x1f2428, -0.14, 0.14, 0.184);
+      addPart(0.055, 0.075, 0.024, 0x1f2428, 0.14, 0.14, 0.184);
+      addPart(0.18, 0.018, 0.026, 0x1f2428, 0, 0.264, 0.11);
+      addPart(0.024, 0.016, 0.024, 0x1f2428, -0.078, 0.247, 0.11);
+      addPart(0.024, 0.016, 0.024, 0x1f2428, 0.078, 0.247, 0.11);
+      addPart(0.046, 0.008, 0.15, 0x8e2424, 0, 0.244, -0.02);
+      addPart(0.052, 0.008, 0.046, 0x8e2424, -0.049, 0.244, -0.02);
+      addPart(0.052, 0.008, 0.046, 0x8e2424, 0.049, 0.244, -0.02);
+    }
+    caseGeo = mergeTransformedGeometries(entries);
+    caseGeo.userData = { ...(caseGeo.userData || {}), shared: true };
+    for (let t = 0; t < tempGeos.length; t++) tempGeos[t].dispose?.();
+    cache.caseGeos.set(typeKey, caseGeo);
+  }
+  return {
+    plateGeo: cache.plateGeo,
+    plateMat: cache.plateMat,
+    padGeo: cache.padGeo,
+    holoRingGeo: cache.holoRingGeo,
+    holoRingMat,
+    caseGeo,
+    caseMat: cache.caseMat,
+    ledColor
+  };
+}
 
 function getSharedBarrelHazardMaterial(gltf, srcMat) {
   if (!srcMat || typeof srcMat.clone !== 'function') return srcMat;
@@ -167,6 +287,9 @@ export class SceneWorldMethods {
     if (mapSize <= 0) return (this.arenaHalfSize || 60) + 4;
     const arenaCap = (this.arenaHalfSize || 38) + 2;
     if (this.inMatch) {
+      if ((q?.dynamicShadowHz || 0) <= 0) {
+        return Math.min(26, arenaCap);
+      }
       return Math.min(mapSize >= 2048 ? 22 : 20, arenaCap);
     }
     return Math.min(mapSize >= 2048 ? 34 : 30, arenaCap);
@@ -174,7 +297,8 @@ export class SceneWorldMethods {
 
   _configureDirectionalShadowFrustum(atmo) {
     if (!this.dirLight) return;
-    const sunPos = atmo?.sunPos || [78, 80, 62];
+    if (atmo) this._lastShadowAtmo = atmo;
+    const sunPos = atmo?.sunPos || this._lastShadowAtmo?.sunPos || [78, 80, 62];
     if (!this._shadowSunDir) {
       this._shadowSunDir = new THREE.Vector3();
       this._shadowLightQ = new THREE.Quaternion();
@@ -194,6 +318,10 @@ export class SceneWorldMethods {
     this._shadowDistance = 125;
     this._shadowLastTexelX = NaN;
     this._shadowLastTexelY = NaN;
+    this._shadowAnchorWorldX = NaN;
+    this._shadowAnchorWorldZ = NaN;
+    this._shadowAnchorInMatch = null;
+    this._lastShadowAnchorAt = -1000;
 
     const cam = this.dirLight.shadow.camera;
     cam.left = -extent;
@@ -219,16 +347,49 @@ export class SceneWorldMethods {
    * texel grid coordinate actually changes. Keeps light-space Z = 0 so static shadow depths never crawl.
    * Zero per-frame heap allocations.
    */
-  updateDirectionalShadowAnchor(focusX = 0, focusZ = 0, { force = false } = {}) {
+  updateDirectionalShadowAnchor(focusX = 0, focusZ = 0, { force = false, now = null } = {}) {
     if (!this.dirLight || !this.renderer?.shadowMap?.enabled) return false;
     const mapSize = this.dirLight.shadow.mapSize?.width || this.quality?.shadowMapSize || 0;
     if (mapSize <= 1) return false;
     if (!this._shadowLightQInv || !this._shadowSnapTarget || !this._shadowSunDir) return false;
 
+    const inMatchNow = Boolean(this.inMatch);
+    if (this._shadowAnchorInMatch !== null && this._shadowAnchorInMatch !== inMatchNow) {
+      this._configureDirectionalShadowFrustum(this._lastShadowAtmo);
+      force = true;
+    }
+
+    const fx = Number(focusX) || 0;
+    const fz = Number(focusZ) || 0;
+    const ts =
+      typeof now === 'number' && Number.isFinite(now)
+        ? now
+        : (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    const dynHz = this.quality?.dynamicShadowHz || 0;
+
+    if (!force) {
+      if (!inMatchNow && Number.isFinite(this._shadowAnchorWorldX)) {
+        return false;
+      }
+      if (inMatchNow && dynHz <= 0) {
+        if (
+          Number.isFinite(this._shadowAnchorWorldX) &&
+          Math.hypot(fx - this._shadowAnchorWorldX, fz - this._shadowAnchorWorldZ) < 3.5
+        ) {
+          return false;
+        }
+      } else if (inMatchNow && dynHz > 0) {
+        const minIntervalMs = 1000 / dynHz;
+        if (ts >= (this._lastShadowAnchorAt ?? -1000) && ts - (this._lastShadowAnchorAt ?? -1000) < minIntervalMs) {
+          return false;
+        }
+      }
+    }
+
     const extent = this._shadowExtent || this._getShadowExtent(this.quality);
     const texel = (extent * 2) / mapSize;
     const t = this._shadowSnapTarget;
-    t.set(Number(focusX) || 0, 0, Number(focusZ) || 0).applyQuaternion(this._shadowLightQInv);
+    t.set(fx, 0, fz).applyQuaternion(this._shadowLightQInv);
     const qx = Math.round(t.x / texel);
     const qy = Math.round(t.y / texel);
 
@@ -238,6 +399,13 @@ export class SceneWorldMethods {
 
     this._shadowLastTexelX = qx;
     this._shadowLastTexelY = qy;
+    this._shadowAnchorWorldX = fx;
+    this._shadowAnchorWorldZ = fz;
+    this._shadowAnchorInMatch = inMatchNow;
+    this._lastShadowAnchorAt = ts;
+    if (inMatchNow && dynHz > 0) {
+      this._lastDynamicShadowAt = ts;
+    }
 
     t.set(qx * texel, qy * texel, 0).applyQuaternion(this._shadowLightQ);
     this.dirLight.target.position.copy(t);
@@ -628,6 +796,9 @@ export class SceneWorldMethods {
 
     this.buildSkyAndAtmosphere(theme, this.arenaHalfSize);
     this.buildArena(mapCfg);
+    this._mapBuiltWithCrateProp = Boolean(
+      this.quality?.glbProps && isPropOverrideEnabled() && this.assets?.loadedModels?.has?.('crate-wide')
+    );
     if (this.floorMat && ARID_CSGO_MAPS.has(this.currentMapId)) {
       const effWet = this._effectiveWetFloorStrength(this.quality);
       if (this.floorMat.userData?.wetFloorStrength !== effWet) {
@@ -675,7 +846,7 @@ export class SceneWorldMethods {
       ...extraJobs
     ]);
     const havePropModel = allowGlbProps && this.assets.loadedModels.has('crate-wide');
-    if (havePropModel && !this.inMatch) this.loadMap(this.currentMapId);
+    if (havePropModel && !this.inMatch && !this._mapBuiltWithCrateProp) this.loadMap(this.currentMapId);
     else this.upgradeArenaMaterials();
     return failures;
   }
@@ -688,6 +859,7 @@ export class SceneWorldMethods {
    */
   async prewarmShaders(onProgress = null) {
     onProgress?.(0.15);
+    this._ensureBulletDecalMaterial?.();
     if (!this.renderer?.isWebGLRenderer) {
       onProgress?.(1);
       return true;
@@ -980,12 +1152,20 @@ export class SceneWorldMethods {
       }
     }
 
+    let postInitPromise = null;
+    if (this.postProcess?.enabled && !this.postProcess?.ready && !this.renderer?.__fakeGL && typeof this.postProcess?.init === 'function') {
+      postInitPromise = this.postProcess.init().catch(() => false);
+    }
+
     if (compilePromise) {
       try {
         await compilePromise;
       } catch {
         // Ignore async parallel shader poll issues on constrained WebGL drivers
       }
+    }
+    if (postInitPromise) {
+      await postInitPromise;
     }
 
     onProgress?.(1);
@@ -1162,56 +1342,28 @@ export class SceneWorldMethods {
       let item = this.pickupMeshes.get(p.id);
       if (!item) {
         const pType = p.type || 'health';
-        const ledColor =
-          pType === 'armor'
-            ? 0x4b7ba8
-            : pType === 'speed'
-              ? 0xb57c2e
-              : pType === 'damage'
-                ? 0x9c3a3a
-                : 0x3b8c58;
+        const shared = getPickupSharedAssets(pType);
+        const shadowsEnabled = (this.quality?.shadowMapSize || 0) > 0;
         const group = new THREE.Group();
         group.position.set(p.x, p.y, p.z);
 
-        const plateGeo = new THREE.CylinderGeometry(0.60, 0.64, 0.04, 16);
-        const plateMat = new THREE.MeshStandardMaterial({
-          color: 0x2b3138,
-          metalness: 0.58,
-          roughness: 0.72
-        });
-        const plateMesh = new THREE.Mesh(plateGeo, plateMat);
+        const plateMesh = new THREE.Mesh(shared.plateGeo, shared.plateMat);
         plateMesh.position.y = 0.02;
         plateMesh.receiveShadow = true;
         group.add(plateMesh);
 
-        const padGeo = new THREE.BoxGeometry(0.08, 0.012, 0.024);
         const padMat = new THREE.MeshStandardMaterial({
           color: 0x1e242b,
-          emissive: ledColor,
+          emissive: shared.ledColor,
           emissiveIntensity: 0.55,
           metalness: 0.35,
           roughness: 0.45
         });
-        const padMesh = new THREE.Mesh(padGeo, padMat);
+        const padMesh = new THREE.Mesh(shared.padGeo, padMat);
         padMesh.position.set(0, 0.041, 0.52);
         group.add(padMesh);
 
-        const holoRingGeo = new THREE.RingGeometry(0.535, 0.575, 24);
-        const holoRingMat = new THREE.MeshStandardMaterial({
-          color: ledColor,
-          emissive: ledColor,
-          emissiveIntensity: 0.20,
-          side: THREE.DoubleSide,
-          transparent: true,
-          opacity: 0.24,
-          roughness: 0.55,
-          metalness: 0.2,
-          depthWrite: false,
-          polygonOffset: true,
-          polygonOffsetFactor: -2,
-          polygonOffsetUnits: -2
-        });
-        const holoRing = new THREE.Mesh(holoRingGeo, holoRingMat);
+        const holoRing = new THREE.Mesh(shared.holoRingGeo, shared.holoRingMat);
         holoRing.rotation.x = -Math.PI / 2;
         holoRing.position.y = 0.042;
         group.add(holoRing);
@@ -1220,68 +1372,10 @@ export class SceneWorldMethods {
         crossGroup.position.y = 0.04;
         crossGroup.rotation.y = 0;
 
-        const addCasePart = (w, h, d, mat, px, py, pz) => {
-          const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-          mesh.position.set(px, py, pz);
-          mesh.castShadow = true;
-          mesh.receiveShadow = true;
-          crossGroup.add(mesh);
-          return mesh;
-        };
-
-        if (pType === 'armor') {
-          const bodyMat = new THREE.MeshStandardMaterial({ color: 0x2b3036, roughness: 0.82, metalness: 0.12 });
-          const lidMat = new THREE.MeshStandardMaterial({ color: 0x333942, roughness: 0.78, metalness: 0.14 });
-          const ridgeMat = new THREE.MeshStandardMaterial({ color: 0x22262c, roughness: 0.76, metalness: 0.16 });
-          const claspMat = new THREE.MeshStandardMaterial({ color: 0x6f7a86, roughness: 0.36, metalness: 0.78 });
-          const stripeMat = new THREE.MeshStandardMaterial({ color: 0x466b8c, roughness: 0.68, metalness: 0.10 });
-
-          addCasePart(0.54, 0.22, 0.40, bodyMat, 0, 0.11, 0);
-          addCasePart(0.544, 0.04, 0.404, lidMat, 0, 0.24, 0);
-          for (const rz of [-0.11, 0, 0.11]) {
-            addCasePart(0.46, 0.012, 0.036, ridgeMat, 0, 0.265, rz);
-          }
-          addCasePart(0.055, 0.085, 0.024, claspMat, -0.15, 0.145, 0.204);
-          addCasePart(0.055, 0.085, 0.024, claspMat, 0.15, 0.145, 0.204);
-          addCasePart(0.548, 0.026, 0.408, stripeMat, 0, 0.195, 0);
-        } else if (pType === 'speed' || pType === 'damage') {
-          const isSpeed = pType === 'speed';
-          const crateMat = new THREE.MeshStandardMaterial({
-            color: isSpeed ? 0x4b5338 : 0x3e444a,
-            roughness: 0.84,
-            metalness: 0.10
-          });
-          const strapMat = new THREE.MeshStandardMaterial({ color: 0x2b3138, roughness: 0.50, metalness: 0.68 });
-          const stencilMat = new THREE.MeshStandardMaterial({
-            color: isSpeed ? 0xb57c2e : 0x943434,
-            roughness: 0.74,
-            metalness: 0.06
-          });
-
-          addCasePart(0.52, 0.26, 0.36, crateMat, 0, 0.13, 0);
-          addCasePart(0.042, 0.268, 0.368, strapMat, -0.16, 0.13, 0);
-          addCasePart(0.042, 0.268, 0.368, strapMat, 0.16, 0.13, 0);
-          addCasePart(0.05, 0.075, 0.022, strapMat, -0.09, 0.15, 0.184);
-          addCasePart(0.05, 0.075, 0.022, strapMat, 0.09, 0.15, 0.184);
-          addCasePart(0.18, 0.008, 0.11, stencilMat, 0, 0.263, 0);
-          addCasePart(0.20, 0.036, 0.364, stencilMat, 0, 0.14, 0);
-        } else {
-          const tubMat = new THREE.MeshStandardMaterial({ color: 0x5b634a, roughness: 0.80, metalness: 0.06 });
-          const lidMat = new THREE.MeshStandardMaterial({ color: 0xd8d2c5, roughness: 0.74, metalness: 0.05 });
-          const latchMat = new THREE.MeshStandardMaterial({ color: 0x1f2428, roughness: 0.72, metalness: 0.15 });
-          const crossMat = new THREE.MeshStandardMaterial({ color: 0x8e2424, roughness: 0.68, metalness: 0.04 });
-
-          addCasePart(0.52, 0.14, 0.36, tubMat, 0, 0.07, 0);
-          addCasePart(0.524, 0.10, 0.364, lidMat, 0, 0.19, 0);
-          addCasePart(0.055, 0.075, 0.024, latchMat, -0.14, 0.14, 0.184);
-          addCasePart(0.055, 0.075, 0.024, latchMat, 0.14, 0.14, 0.184);
-          addCasePart(0.18, 0.018, 0.026, latchMat, 0, 0.264, 0.11);
-          addCasePart(0.024, 0.016, 0.024, latchMat, -0.078, 0.247, 0.11);
-          addCasePart(0.024, 0.016, 0.024, latchMat, 0.078, 0.247, 0.11);
-          addCasePart(0.046, 0.008, 0.15, crossMat, 0, 0.244, -0.02);
-          addCasePart(0.052, 0.008, 0.046, crossMat, -0.049, 0.244, -0.02);
-          addCasePart(0.052, 0.008, 0.046, crossMat, 0.049, 0.244, -0.02);
-        }
+        const caseMesh = new THREE.Mesh(shared.caseGeo, shared.caseMat);
+        caseMesh.castShadow = shadowsEnabled;
+        caseMesh.receiveShadow = true;
+        crossGroup.add(caseMesh);
 
         group.add(crossGroup);
 
@@ -1364,9 +1458,10 @@ export class SceneWorldMethods {
         crate.scale.setScalar(scale);
         crate.position.set(slot.x, groundOffsetY, slot.z);
         crate.rotation.y = slot.rotY;
+        const shadowsEnabled = (this.quality?.shadowMapSize || 0) > 0;
         crate.traverse((obj) => {
           if (!obj.isMesh) return;
-          obj.castShadow = true;
+          obj.castShadow = shadowsEnabled;
           obj.receiveShadow = true;
         });
         item.crossGroup.add(crate);
